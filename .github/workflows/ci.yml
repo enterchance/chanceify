@@ -1,0 +1,201 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  quality:
+    name: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: GUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libpulse-dev libxkbcommon-dev \
+            libwayland-dev libgl1-mesa-dev cmake libclang-dev ruby
+      # After the toolchain, so the cache key follows the pinned rustc. The
+      # key carries no job name, so each job sets its own generation. Only
+      # pushes to main save; a pull request restores and builds on top.
+      # Letting every branch save its own copy filled the repository's
+      # ten-gigabyte cache in a few days, and a full cache evicts the entry
+      # the next build wanted.
+      - uses: jdx/mr-boxington-action@v1
+        with:
+          cache-generation: quality-v1
+      - name: Formatting
+        run: cargo fmt --all --check
+      - name: Flatpak release metadata regression tests
+        run: python3 packaging/flatpak/test-metainfo.py
+      - name: Linux launcher packaging regressions
+        run: python3 packaging/test-launchers.py
+      - name: Release name migration regressions
+        run: python3 packaging/test-release-names.py
+      - name: Clippy (default features)
+        run: mbx clippy --locked --all-targets -- -D warnings
+      - name: Clippy (all features)
+        run: mbx clippy --locked --all-targets --all-features -- -D warnings
+      - name: Rustdoc
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: mbx doc --locked --all-features --no-deps
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    env:
+      CMAKE_GENERATOR: Ninja
+    # A cold mbx cache on Windows (projectM through cmake) needs about 30
+    # minutes before the action saves the cache; warm runs take far less.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: GUI build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libpulse-dev libxkbcommon-dev \
+            libwayland-dev libgl1-mesa-dev cmake libclang-dev
+      # libprojectM reads OpenGL through GLEW on Windows; projectm-sys builds
+      # against vcpkg's static-CRT triplet, matching .cargo/config.toml.
+      - name: GLEW for libprojectM
+        if: runner.os == 'Windows'
+        run: vcpkg install glew:x64-windows-static
+      # projectm-sys asks CMake for the Visual Studio generator, which the
+      # runner image no longer satisfies; Ninja inside the MSVC environment
+      # builds the same thing without caring which Visual Studio is on. The
+      # generator is job-level env, since a GITHUB_ENV write never reached
+      # the build script.
+      - name: MSVC environment for libprojectM
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+      - uses: jdx/mr-boxington-action@v1
+        with:
+          cache-generation: test-v1
+      # The demo feature carries the headless render test that lays out every
+      # page, panel, and dialog without a display.
+      - name: Tests (default features)
+        run: mbx test --locked --all-targets
+      - name: Tests (all features)
+        run: mbx test --locked --all-targets --all-features
+      - name: Native credential store (dummy grants)
+        if: runner.os == 'Windows' || runner.os == 'macOS'
+        timeout-minutes: 2
+        run: mbx test --locked --lib credentials::tests::native_store_round_trip -- --ignored --exact
+      - name: Documentation tests
+        run: mbx test --locked --all-features --doc
+      # A build can pass while importing Microsoft's C++ runtime, then fail on
+      # a clean user's machine. Inspect the executable CI actually produced.
+      - name: Standalone Windows runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          mbx build --locked
+          $imports = & dumpbin /dependents target\debug\spotifast.exe | Out-String
+          $runtime = $imports | Select-String -Pattern 'MSVCP[0-9_]*\.dll|VCRUNTIME[0-9_]*\.dll'
+          if ($runtime) { throw "Spotifast imports an MSVC runtime:`n$runtime" }
+
+      - name: Windows installer syntax and renamed inputs
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          & $iscc "/DVersion=$version" /DArch=x86_64 "/DBinary=$PWD\target\debug\spotifast.exe" "/DOutputDir=$env:RUNNER_TEMP\spotifast-installer-check" packaging\windows\spotifast.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: macOS bundle identity and helper startup
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mbx build --locked
+          version=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')
+          app="$RUNNER_TEMP/spotifast-bundle-check/Spotifast.app"
+          bash packaging/macos/bundle.sh target/debug/spotifast "$app" "$version"
+          executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
+          "$app/Contents/MacOS/$executable" --version
+          # A missing job must reach our error handler, not die during launch.
+          set +e
+          "$app/Contents/MacOS/$executable" --apply-update "$RUNNER_TEMP/spotifast-missing-job.json" 2> "$RUNNER_TEMP/spotifast-helper-check.log"
+          status=$?
+          set -e
+          test "$status" -eq 1
+          test -s "$RUNNER_TEMP/spotifast-helper-check.log"
+
+  nix:
+    name: Nix package
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: wimpysworld/nothing-but-nix@v9
+      - uses: cachix/install-nix-action@v31
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+      - name: Read the public Nix cache
+        if: vars.CACHIX_CACHE != ''
+        uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
+        with:
+          name: ${{ vars.CACHIX_CACHE }}
+          skipPush: true
+      - run: nix build .#default
+      # Only a successful main push publishes. PRs and manual branch builds
+      # can read the public cache, but never receive its upload credential.
+      - name: Publish the Nix package closure
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.CACHIX_CACHE != ''
+        shell: bash
+        env:
+          CACHIX_CACHE: ${{ vars.CACHIX_CACHE }}
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: |
+          if [ -z "$CACHIX_AUTH_TOKEN" ]; then
+            echo '::error::CACHIX_CACHE is configured but CACHIX_AUTH_TOKEN is missing.'
+            exit 1
+          fi
+          nix path-info --recursive ./result | cachix push "$CACHIX_CACHE"
+
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '4.0'
+          bundler-cache: true
+          working-directory: docs
+
+      - name: Build documentation site
+        working-directory: docs
+        env:
+          JEKYLL_ENV: production
+        run: |
+          bundle exec jekyll build --destination "$RUNNER_TEMP/spotifast-site"

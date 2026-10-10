@@ -1,0 +1,14 @@
+title: chanceify™
+description: a small, fast, private spotify player for windows. built with love by chance.
+baseurl: /chanceify
+
+# No stock theme: the look comes from _layouts/default.html and madlygeeked.github.io/style.css.
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+
+# Not for visitors:
+exclude:
+  - BUG_TEST_GUIDE.md

@@ -1,0 +1,298 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    env:
+      CMAKE_GENERATOR: Ninja
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Match the native packages' declared glibc 2.39 baseline.
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          # A native arm64 runner, so the GUI's system libraries need no
+          # cross-compilation sysroot.
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          # Cross-compiled from x64: the MSVC arm64 linker ships with the
+          # runner's Visual Studio. projectm-sys only knows how to build
+          # libprojectM for x64 there, so this build goes without MilkDrop.
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            features: --no-default-features
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      # The repository pins its toolchain; add the cross-target's standard
+      # library to the toolchain the pin actually resolves to.
+      - run: rustup target add ${{ matrix.target }}
+      - name: GUI build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libpulse-dev libxkbcommon-dev \
+            libwayland-dev libgl1-mesa-dev cmake libclang-dev
+      # libprojectM reads OpenGL through GLEW on Windows; projectm-sys builds
+      # against vcpkg's static-CRT triplet, matching .cargo/config.toml.
+      - name: GLEW for libprojectM
+        if: runner.os == 'Windows' && matrix.features == ''
+        run: vcpkg install glew:x64-windows-static
+      # projectm-sys asks CMake for the Visual Studio generator, which the
+      # runner image no longer satisfies; Ninja inside the MSVC environment
+      # builds the same thing without caring which Visual Studio is on. Both
+      # Windows jobs also use dumpbin below to inspect the finished binary.
+      - name: MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+      # No compiler cache: published binaries never build from outputs
+      # restored from an Actions cache.
+      - run: cargo build --release --target ${{ matrix.target }} ${{ matrix.features }}
+
+      # The zip and installer must run on a clean Windows machine without a
+      # separately installed Visual C++ redistributable.
+      - name: Verify standalone Windows runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binary = "target\${{ matrix.target }}\release\spotifast.exe"
+          $imports = & dumpbin /dependents $binary | Out-String
+          $runtime = $imports | Select-String -Pattern 'MSVCP[0-9_]*\.dll|VCRUNTIME[0-9_]*\.dll'
+          if ($runtime) { throw "Spotifast imports an MSVC runtime:`n$runtime" }
+
+      - name: Package
+        shell: bash
+        run: |
+          name="spotifast-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/spotifast.exe" "dist/$name/"
+          else
+            cp "target/${{ matrix.target }}/release/spotifast" "dist/$name/"
+          fi
+          cp README.md LICENSE "dist/$name/"
+          cp packaging/spotifast-portable.txt "dist/$name/"
+          if [ "$GITHUB_REF_NAME" = "v0.9.1" ]; then
+            cp packaging/fastpotify-portable.txt "dist/$name/"
+            if [ "${{ runner.os }}" = "Windows" ]; then
+              cp "dist/$name/spotifast.exe" "dist/$name/fastpotify.exe"
+            else
+              cp "dist/$name/spotifast" "dist/$name/fastpotify"
+            fi
+          fi
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            # Desktop integration for package builds and hand-installs.
+            cp --parents packaging/applications/spotifast.desktop packaging/icons/spotifast.svg "dist/$name/"
+            cp --parents contrib/omarchy/spotifast.json.tpl contrib/omarchy/spotifast-theme "dist/$name/"
+          fi
+          cd dist
+          roots=("$name")
+          # Final bridge for updaters shipped through 0.9.0: those clients
+          # hardcode the old archive directory and executable names.
+          if [ "$GITHUB_REF_NAME" = "v0.9.1" ]; then
+            legacy="fastpotify-${GITHUB_REF_NAME}-${{ matrix.target }}"
+            mkdir "$legacy"
+            if [ "${{ runner.os }}" = "Windows" ]; then
+              cp "$name/fastpotify.exe" "$legacy/fastpotify.exe"
+            else
+              cp "$name/fastpotify" "$legacy/fastpotify"
+            fi
+            roots+=("$legacy")
+          fi
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "$name.zip" "${roots[@]}"
+          else
+            tar czf "$name.tar.gz" "${roots[@]}"
+          fi
+
+      # Inno Setup ships with the runner image. PowerShell, because bash on
+      # Windows rewrites /D... arguments as paths.
+      - name: Installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart("v")
+          $arch = "${{ matrix.target }}".Split("-")[0]
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          & $iscc "/DVersion=$version" "/DArch=$arch" `
+            "/DBinary=$PWD\target\${{ matrix.target }}\release\spotifast.exe" `
+            "/DOutputDir=$PWD\dist" packaging\windows\spotifast.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*-setup.exe
+          if-no-files-found: error
+
+  macos:
+    name: macOS universal app
+    runs-on: macos-latest
+    env:
+      # Complete Apple credentials enable native-packages signing/notarization.
+      APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      # No compiler cache, as in the build job above.
+      - name: Build both architectures
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+
+      - name: Universal binary
+        run: |
+          mkdir -p universal
+          lipo -create \
+            target/aarch64-apple-darwin/release/spotifast \
+            target/x86_64-apple-darwin/release/spotifast \
+            -output universal/spotifast
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '4.0'
+      - name: Install native packaging
+        run: gem install native-packages --version 0.8.1 --no-document
+
+      - name: App bundle
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist/macos-input
+          bash packaging/macos/bundle.sh universal/spotifast dist/macos-input/Spotifast.app "$version"
+          cp README.md LICENSE dist/macos-input/
+
+      - name: Package, sign and notarize macOS app
+        run: |
+          native-packages build \
+            --version "${GITHUB_REF_NAME#v}" --target macos-universal --defer-recipes \
+            --output "$RUNNER_TEMP/macos-packages"
+          cp "$RUNNER_TEMP/macos-packages/packages/macos-universal/dmg/"*.dmg dist/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-universal
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  # The Linux build packaged as a Flatpak bundle: the same binary, in the
+  # sandbox packaging/flatpak describes, so nothing compiles twice. Flathub
+  # builds from source on its own machines, from the manifest beside it.
+  flatpak:
+    name: Flatpak bundle
+    needs: build
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-24.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: x86_64-unknown-linux-gnu
+          path: dist
+      - name: Unpack the Linux build
+        run: |
+          tar xzf dist/spotifast-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz -C packaging/flatpak "spotifast-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu"
+          mv packaging/flatpak/spotifast-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu packaging/flatpak/built
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: packaging/flatpak/rocks.spotifast.Spotifast.bundle.yml
+          bundle: spotifast-${{ github.ref_name }}-x86_64.flatpak
+          cache: false
+          upload-artifact: false
+      - uses: actions/upload-artifact@v7
+        with:
+          name: flatpak
+          path: "*.flatpak"
+          if-no-files-found: error
+
+  publish:
+    name: GitHub release
+    # The bundle is welcome but not required: a Flatpak failure must not
+    # hold the release.
+    needs: [build, macos, flatpak]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.macos.result == 'success' }}
+    runs-on: ubuntu-latest
+    # Publishing waits for the maintainer's approval, and only this job can
+    # read the release signing key (v* tags only).
+    environment: release-signing
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+      # Include the source package so source distributions can verify it
+      # against the same published checksums as the binaries.
+      - name: Source archive
+        run: |
+          curl --fail --location --retry 3 \
+            "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz" \
+            --output "dist/spotifast-${GITHUB_REF_NAME}-source.tar.gz"
+      - name: Public filenames, updater compatibility and checksums
+        run: python3 packaging/release-names.py dist "$GITHUB_REF_NAME"
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '4.0'
+      # Sign the manifest release-names.py wrote (checksums.txt.sig), then
+      # check the signature and every listed file against the committed key.
+      # Updaters that carry the key refuse releases without a valid one.
+      - name: Sign checksums
+        env:
+          SPOTIFAST_UPDATE_SIGNING_KEY: ${{ secrets.SPOTIFAST_UPDATE_SIGNING_KEY }}
+        run: |
+          gem install native-packages --version 0.8.1 --no-document
+          native-packages sign-checksums dist/checksums.txt \
+            --public-key assets/update-public-key.hex \
+            --key-env SPOTIFAST_UPDATE_SIGNING_KEY
+          native-packages verify-checksums dist/checksums.txt \
+            --public-key assets/update-public-key.hex
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          name: Spotifast ${{ github.ref_name }}
+          # Publish reviewed notes immediately, not a generated PR-only summary.
+          body_path: packaging/release-notes/${{ github.ref_name }}.md
+          generate_release_notes: false
+          # A tag with a suffix (v0.4.0-rc1) is a pre-release: it stays
+          # off "latest", so the app's update check never offers it.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
+  packaging:
+    # The optional Flatpak job may fail without blocking native packages.
+    if: ${{ !cancelled() && needs.publish.result == 'success' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+    needs: publish
+    uses: ./.github/workflows/packaging.yml
+    with:
+      version: ${{ github.ref_name }}
+    secrets: inherit

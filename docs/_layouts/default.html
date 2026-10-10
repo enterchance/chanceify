@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% if page.title and page.title != site.title %}{{ page.title }} · {% endif %}{{ site.title }}</title>
+<meta name="description" content="{{ site.description }}">
+<meta name="theme-color" content="#0a0914">
+<link rel="icon" type="image/png" href="https://madlygeeked.github.io/assets/favicon.png">
+<link rel="stylesheet" href="https://madlygeeked.github.io/style.css">
+<link rel="stylesheet" href="https://madlygeeked.github.io/docs.css">
+</head>
+<body class="hdr-left">
+<canvas id="flow" aria-hidden="true"></canvas>
+<div class="wrap">
+  <div class="top bar">
+    <a class="brand" data-brand-link href="https://madlygeeked.github.io/"><img data-brand-logo hidden alt=""><span class="brandname" data-brand-name>madgeeked</span></a>
+    <nav class="nav" aria-label="chanceify docs">
+      <a href="{{ '/' | relative_url }}"{% if page.url == '/' %} class="on"{% endif %}>home</a>
+      <a href="{{ '/features' | relative_url }}"{% if page.url contains 'features' %} class="on"{% endif %}>what it does</a>
+      <a href="{{ '/setup' | relative_url }}"{% if page.url contains 'setup' %} class="on"{% endif %}>setup</a>
+      <a href="{{ '/settings' | relative_url }}"{% if page.url contains 'settings' %} class="on"{% endif %}>settings</a>
+      <a href="{{ '/keys' | relative_url }}"{% if page.url contains 'keys' %} class="on"{% endif %}>keys</a>
+      <a href="{{ '/files' | relative_url }}"{% if page.url contains 'files' %} class="on"{% endif %}>files</a>
+      <a href="{{ '/faq' | relative_url }}"{% if page.url contains 'faq' %} class="on"{% endif %}>questions</a>
+    </nav>
+  </div>
+  <div class="spacer" style="height:clamp(12px,5vh,48px)"></div>
+  <main class="doc">
+    {% if page.hero %}
+    <div class="hero">
+      <img src="https://madlygeeked.github.io/assets/chanceify.png" alt="">
+      <div>
+        <h1>{{ site.title }}</h1>
+        {% if page.tagline %}<p class="tag">{{ page.tagline }}</p>{% endif %}
+        <div class="actions">
+          <a class="btn primary big" href="https://github.com/madlygeeked/chanceify/releases">download</a>
+          <a class="btn" href="https://github.com/madlygeeked/chanceify">source code</a>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+    {{ content }}
+  </main>
+  <p class="foot">
+    built with love by <a href="https://github.com/madlygeeked">chance</a>.
+    inspired by <a href="https://www.spotify.com">spotify</a>, <a href="https://github.com/crmne/spotifast">spotifast</a> and <a href="https://spicetify.app">spicetify</a>.
+    · <a href="https://github.com/madlygeeked/chanceify/blob/main/PRIVACY.md">privacy</a>
+    · <a href="https://github.com/madlygeeked/chanceify/blob/main/TERMS.md">terms</a>
+  </p>
+</div>
+<script src="https://madlygeeked.github.io/chrome.js" data-site="https://madlygeeked.github.io/"></script>
+</body>
+</html>

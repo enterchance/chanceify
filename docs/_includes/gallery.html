@@ -1,0 +1,20 @@
+{%- comment -%}
+  Usage: {% include gallery.html items=site.data.shots.panels %}
+  Pictures live in docs/shots/. Only pictures that exist are shown; nothing is shown if none exist.
+{%- endcomment -%}
+{%- assign shown = "" | split: "" -%}
+{%- for s in include.items -%}
+  {%- assign full = '/shots/' | append: s.file -%}
+  {%- assign hit = site.static_files | where: "path", full -%}
+  {%- if hit.size > 0 -%}{%- assign shown = shown | push: s -%}{%- endif -%}
+{%- endfor -%}
+{%- if shown.size > 0 -%}
+<ul class="shots">
+{% for s in shown %}
+  <li><figure>
+    <img src="{{ '/shots/' | append: s.file | relative_url }}" alt="{{ s.title }}" loading="lazy">
+    <figcaption><b>{{ s.title }}</b>{{ s.text }}</figcaption>
+  </figure></li>
+{% endfor %}
+</ul>
+{%- endif -%}

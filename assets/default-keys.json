@@ -1,0 +1,22 @@
+{
+  "chanceify_keys": 1,
+  "key_bindings": {
+    "art": "A",
+    "fullscreen": "F",
+    "normalview": "X",
+    "queuelyrics": "F35",
+    "sharediscord": "Shift+C",
+    "sidebar": "Q",
+    "tenth0": "0",
+    "tenth1": "1",
+    "tenth2": "2",
+    "tenth3": "3",
+    "tenth4": "4",
+    "tenth5": "5",
+    "tenth6": "6",
+    "tenth7": "7",
+    "tenth8": "8",
+    "tenth9": "9",
+    "visshapes": "V"
+  }
+}

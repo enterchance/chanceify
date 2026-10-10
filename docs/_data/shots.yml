@@ -1,0 +1,51 @@
+# one entry per screenshot. save the picture as docs/shots/<file> (png, about 1600 px wide, no private info).
+# a missing picture is hidden automatically, so you can add them one by one.
+
+panels:
+  - { file: home.png,            title: "home",                 text: "your library, recent music and stats." }
+  - { file: playlist-list.png,   title: "playlist, list view",  text: "columns you can switch on and off." }
+  - { file: playlist-grid.png,   title: "playlist, grid view",  text: "big covers with a number badge." }
+  - { file: now-playing.png,     title: "bottom bar",           text: "controls, song bar and volume. right-click to rearrange." }
+  - { file: queue.png,           title: "queue (e)",            text: "up next and recently played." }
+  - { file: lyrics-side.png,     title: "lyrics panel (w)",     text: "timestamps, click a line to jump." }
+  - { file: lyrics-full.png,     title: "full-screen lyrics (f)", text: "with an optional visualizer behind." }
+  - { file: vis-full.png,        title: "full-screen visualizer (d)", text: "bars, flow and swirl on the whole screen." }
+  - { file: vis-settings.png,    title: "visualizer settings (v)", text: "every slider." }
+  - { file: views-panel.png,     title: "views panel",          text: "right-click the round disc to switch parts of the screen on or off." }
+  - { file: stats.png,           title: "music stats",          text: "7 days, 30 days or all time." }
+  - { file: recap.png,           title: "recap picture",        text: "save it and share it." }
+  - { file: mini-player.png,     title: "mini player",          text: "its own small window." }
+  - { file: extra-window.png,    title: "extra visualizer window", text: "drag it to another monitor." }
+  - { file: keys.png,            title: "keyboard shortcuts (t)", text: "click a key, press a new one." }
+
+settings:
+  - { file: settings-audio.png,   title: "audio",          text: "output buffer, audio cache, network proxy." }
+  - { file: settings-themes.png,  title: "themes",         text: "16 themes, or your own colours. point at one to preview." }
+  - { file: settings-album.png,   title: "match the album cover", text: "colours follow the song." }
+  - { file: settings-window.png,  title: "see-through window", text: "slide to let the desktop show through." }
+  - { file: settings-lastfm.png,  title: "last.fm",        text: "scrobbling, love, missing pictures." }
+  - { file: settings-discord.png, title: "discord",        text: "rich presence, with a live preview." }
+  - { file: settings-keys.png,    title: "keys",           text: "rebind, export, import." }
+  - { file: settings-files.png,   title: "files and index", text: "where everything is saved." }
+  - { file: settings-export.png,  title: "export and import", text: "share your look with friends." }
+  - { file: settings-unavailable.png, title: "unavailable songs", text: "songs spotify removed from your playlists." }
+  - { file: vis-bars.png,         title: "visualizer: bars",  text: "count, height, gap." }
+  - { file: vis-flow.png,         title: "visualizer: flow",  text: "sheets, depth, speed, direction." }
+  - { file: vis-swirl.png,        title: "visualizer: swirl", text: "sliders and colours." }
+  - { file: bottom-bar-menu.png,  title: "bottom bar menu",   text: "layout, song bar styles, volume presets, equalizer." }
+
+themes:
+  - { file: theme-dark.png, title: "dark", text: "" }
+  - { file: theme-light.png, title: "light", text: "" }
+  - { file: theme-midnight.png, title: "deep space", text: "" }
+  - { file: theme-ocean.png, title: "ocean", text: "" }
+  - { file: theme-sunset.png, title: "sunset", text: "" }
+  - { file: theme-forest.png, title: "forest", text: "" }
+  - { file: theme-rose.png, title: "rose", text: "" }
+  - { file: theme-grape.png, title: "grape", text: "" }
+  - { file: theme-amoled.png, title: "amoled", text: "" }
+  - { file: theme-mocha.png, title: "mocha", text: "" }
+  - { file: theme-cream.png, title: "cream", text: "" }
+  - { file: theme-night.png, title: "night", text: "" }
+  - { file: theme-glass.png, title: "glass", text: "" }
+  - { file: theme-pink-milk.png, title: "pink milk", text: "" }
