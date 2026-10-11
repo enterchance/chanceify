@@ -5252,7 +5252,7 @@ mod tests {
             crate::ui::settings::show,
         );
         assert!(app.actions.iter().any(|action| matches!(action,
-            Action::OpenUrl(url) if url == "https://madlygeeked.github.io/chanceify/#make-a-theme")));
+            Action::OpenUrl(url) if url == "https://madlygeeked.github.io/chanceify/make-a-theme/")));
         app.backend.shutdown();
     }
 

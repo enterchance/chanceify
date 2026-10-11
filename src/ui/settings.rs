@@ -68,7 +68,7 @@ impl<'a> RowText<'a> {
 }
 
 /// The guide to writing a palette file for the themes folder.
-const THEMES_GUIDE_URL: &str = "https://madlygeeked.github.io/chanceify/#make-a-theme";
+const THEMES_GUIDE_URL: &str = "https://madlygeeked.github.io/chanceify/make-a-theme/";
 
 fn section_matches(needle: &str, title: &str, rows: &[RowText<'_>]) -> bool {
     let needle = needle.trim().to_lowercase();

@@ -43,7 +43,7 @@ dialog.lb img{display:block;max-width:96vw;max-height:94vh;width:auto;height:aut
 <h2>discord</h2>
 <div class="grid"><div class="soon"><span>coming soon</span>discord presence</div></div>
 <h2>wallpaper engine</h2>
-<div class="grid"><figure><a href="{{ '/gallery-images/wallpaper-engine.jpg' | relative_url }}" data-full><img src="{{ '/gallery-images/wallpaper-engine.jpg' | relative_url }}" alt="chanceify at 1080p on an ultrawide wallpaper" loading="lazy"></a><figcaption>chanceify at 1080p on an ultrawide wallpaper</figcaption></figure></div><p class="plug">chanceify as a live wallpaper. link coming soon.</p>
+<div class="grid"><figure><a href="{{ '/gallery-images/wallpaper-engine.jpg' | relative_url }}" data-full><img src="{{ '/gallery-images/wallpaper-engine.jpg' | relative_url }}" alt="chanceify at 1080p on an ultrawide wallpaper" loading="lazy"></a><figcaption>chanceify at 1080p on an ultrawide wallpaper</figcaption></figure></div><p class="plug">chanceify as a live wallpaper on <a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3791421783">steam workshop, ultrawide</a> and <a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3791429763">steam workshop, 1080p</a>.</p>
 
 <div class="feature"><b>want to be featured?</b> show off how yours looks. <a href="https://github.com/madlygeeked/chanceify/issues/new?template=get-featured.yml">submit your screenshot</a> (a free github account is needed). good ones go up here.</div>
 
