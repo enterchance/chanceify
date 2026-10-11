@@ -1,0 +1,36 @@
+name: Get featured
+description: Share a screenshot of your chanceify for the gallery.
+title: "Gallery: "
+labels: [gallery]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Show off how yours looks. Good ones go on the [gallery](https://madlygeeked.github.io/chanceify/gallery/).
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshot
+      description: Drag your picture in here. Crop to the chanceify window, and hide anything private (email, names you do not want shown).
+    validations:
+      required: true
+  - type: input
+    id: what
+    attributes:
+      label: What is it?
+      description: Theme, visualizer look, view, anything you want to say about it.
+      placeholder: "Rose Pine theme with the swirl on full screen"
+  - type: input
+    id: credit
+    attributes:
+      label: Credit name (optional)
+      description: How you want to be credited. Leave empty to be unnamed.
+  - type: checkboxes
+    id: ok
+    attributes:
+      label: Permission
+      options:
+        - label: It is fine to show this picture publicly on the chanceify gallery.
+          required: true
+        - label: There is nothing private in it.
+          required: true

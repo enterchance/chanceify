@@ -1524,7 +1524,7 @@ impl Default for Settings {
             my_view: None,
             views_disc: None,
             disc_dim: 0.2,
-            calm_look: 0,
+            calm_look: 1,
             float_controls: None,
             float_hide_bar: false,
             views_width: 316.0,

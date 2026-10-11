@@ -23,6 +23,7 @@ needs spotify premium.
 - **keybinds.** every key can be changed.
 - **discord.** shows what you're playing.
 - **right-click anything** to bring up settings.
+- **gallery.** [pictures of everything]({{ '/gallery/' | relative_url }}).
 
 {% assign anyshots = site.static_files | where_exp: "f", "f.path contains '/shots/'" %}
 {% if anyshots.size > 0 %}
