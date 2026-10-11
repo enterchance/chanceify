@@ -347,6 +347,41 @@ pub fn paint_cover(
     );
 }
 
+/// A cover for the playing song that never blinks to the placeholder: while
+/// the next song's picture loads, the last one that was drawn under `key`
+/// stays on screen, and the new one replaces it the moment it is ready.
+pub fn paint_sticky_cover(
+    ui: &Ui,
+    palette: &Palette,
+    key: &str,
+    url: Option<&str>,
+    rect: Rect,
+    radius: f32,
+    fallback: Icon,
+    art: &crate::images::ArtLoader,
+) {
+    let id = egui::Id::new(("sticky-cover", key));
+    let corner = CornerRadius::same(radius.min(127.0) as u8);
+    if let Some(url) = url {
+        art.touch(url);
+        let image = egui::Image::new(url).show_loading_spinner(false);
+        if let Ok(egui::load::TexturePoll::Ready { texture }) = image.load_for_size(ui.ctx(), rect.size()) {
+            art.release_bytes(url);
+            art.note_decoded(url, texture.size.x.round() as usize, texture.size.y.round() as usize);
+            ui.ctx().data_mut(|data| data.insert_temp(id, (texture.id, texture.size)));
+            paint_cover_texture(ui, texture, rect, corner, false);
+            return;
+        }
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+    }
+    let last: Option<(egui::TextureId, Vec2)> = ui.ctx().data(|data| data.get_temp(id));
+    if let Some((id, size)) = last {
+        paint_cover_texture(ui, egui::load::SizedTexture { id, size }, rect, corner, false);
+    } else {
+        paint_cover(ui, palette, None, rect, radius, fallback, None);
+    }
+}
+
 /// Paints the requested cover, keeping a softened thumbnail visible until it
 /// is ready.
 pub(super) fn paint_cover_with_thumbnail(
@@ -1790,13 +1825,13 @@ pub(crate) fn table_layout(
     compact: bool,
 ) -> Columns {
     let number = if compact { 0.0 } else { 44.0 };
-    let cover = if shown.cover {
-        if compact { 44.0 } else { 52.0 }
+    let cover = if shown.cover && !columns.hide_cover {
+        if compact { 44.0 } else { columns.cover_width() }
     } else {
         0.0
     };
     let heart = if compact { 0.0 } else { columns.buttons_width() };
-    let duration = if compact { 44.0 } else { 56.0 };
+    let duration = if compact { 44.0 } else { columns.length_width() };
     // The three dots are gone: right-click a song instead.
     let more = 0.0;
     use crate::model::SortColumn as Sc;
@@ -1974,7 +2009,7 @@ fn columns(
     } else if row.compact {
         44.0
     } else {
-        56.0
+        settings.length_width()
     } + if bare && !row.compact { 72.0 } else { 0.0 };
     let mut cols = table_layout(
         width + freed,
@@ -3172,6 +3207,9 @@ pub(crate) fn columns_menu(ui: &mut Ui, palette: &Palette, locale: crate::i18n::
                     ) {
                         widths.hide_duration = !widths.hide_duration;
                     }
+                    if checkbox_row(ui, palette, &gettext(locale, "COVER"), !widths.hide_cover) {
+                        widths.hide_cover = !widths.hide_cover;
+                    }
                     if checkbox_row(ui, palette, &gettext(locale, "ARTIST"), !widths.hide_artist) {
                         widths.hide_artist = !widths.hide_artist;
                     }
@@ -3476,15 +3514,30 @@ fn column_divider(
         // the names to its left, so a wider column is a smaller delta.
         let delta = ui.input(|input| input.pointer.delta()).x;
         if delta != 0.0 {
-            let width = columns.width(column) + if grows_right { delta } else { -delta };
+            let sign = if grows_right { delta } else { -delta };
             // A drag stops at the minimum rather than hiding the column.
             // Hiding is a menu choice: a column that vanishes mid-drag
             // takes its handle with it, and there is then no way to drag it
             // back — the divider used to get stuck there for good.
-            let width = width.max(crate::settings::TrackColumns::MIN);
-            columns.set(column, width);
+            let width = match column {
+                crate::model::SortColumn::AddedBy => {
+                    columns.cover_w = (columns.cover_width() + sign).clamp(36.0, 200.0);
+                    columns.cover_w
+                }
+                crate::model::SortColumn::Duration => {
+                    columns.length_w = (columns.length_width() + sign).clamp(44.0, 200.0);
+                    columns.length_w
+                }
+                _ => {
+                    let width = (columns.width(column) + sign).max(crate::settings::TrackColumns::MIN);
+                    columns.set(column, width);
+                    width
+                }
+            };
             // Shift held: every shown column takes the same width.
-            if ui.input(|input| input.modifiers.shift) {
+            if ui.input(|input| input.modifiers.shift)
+                && !matches!(column, crate::model::SortColumn::AddedBy | crate::model::SortColumn::Duration)
+            {
                 use crate::model::SortColumn;
                 for other in [
                     SortColumn::Album,
@@ -3501,7 +3554,11 @@ fn column_divider(
         }
     }
     if response.double_clicked() {
-        columns.set(column, crate::settings::TrackColumns::default_width(column));
+        match column {
+            crate::model::SortColumn::AddedBy => columns.cover_w = 0.0,
+            crate::model::SortColumn::Duration => columns.length_w = 0.0,
+            _ => columns.set(column, crate::settings::TrackColumns::default_width(column)),
+        }
     }
     if ui.is_rect_visible(grab) {
         // Drawn as a grab handle rather than a plain rule: a line on its
@@ -3580,6 +3637,7 @@ pub fn table_header(
     grid: bool,
 ) -> HeaderAction {
     use crate::model::{SortColumn, TableSort};
+    let show_cover = show_cover && !columns.hide_cover;
     let mut action = HeaderAction::default();
     let width = ui.available_width();
     let (rect, row) = ui.allocate_exact_size(vec2(width, 34.0), Sense::click());
@@ -3694,14 +3752,16 @@ pub fn table_header(
     let number_embedded = if show_number { columns.number_at.map(usize::from) } else { None };
     let length_embedded = if show_length { columns.length_at.map(usize::from) } else { None };
     let cover_embedded = if show_cover { columns.cover_at.map(usize::from) } else { None };
+    let cover_w = columns.cover_width();
+    let length_w = columns.length_width();
     let embedded_w = number_embedded.map_or(0.0, |_| 44.0)
-        + length_embedded.map_or(0.0, |_| 56.0)
-        + cover_embedded.map_or(0.0, |_| 52.0);
-    let right_fixed = columns.buttons_width() + if show_length && length_embedded.is_none() { 56.0 } else { 0.0 } + 8.0;
+        + length_embedded.map_or(0.0, |_| length_w)
+        + cover_embedded.map_or(0.0, |_| cover_w);
+    let right_fixed = columns.buttons_width() + if show_length && length_embedded.is_none() { length_w } else { 0.0 } + 8.0;
     // Unless it is locked to the left, the whole table sits in the middle:
     // the number, cover, song name and columns move together and grow out
     // from the centre as columns are added.
-    let prefix = if show_number && number_embedded.is_none() { 44.0 } else { 0.0 } + if show_cover { 52.0 } else { 0.0 };
+    let prefix = if show_number && number_embedded.is_none() { 44.0 } else { 0.0 } + if show_cover { cover_w } else { 0.0 };
     let shift = centred_shift(
         rect.right() - right_fixed - (rect.left() + 8.0 + prefix),
         laid.playlists + laid.album + laid.added + laid.release + laid.bpm + embedded_w,
@@ -3715,10 +3775,13 @@ pub fn table_header(
         heading(ui, x + 18.0, "#", SortColumn::Index, 44.0, None, natural.then_some(true), &mut anchors);
         x += 44.0;
     }
+    let mut cover_edge: Option<f32> = None;
     if show_cover && cover_embedded.is_none() {
         // The cover's handle: drag it to move the cover among the columns.
-        heading(ui, x + 14.0, "cover", SortColumn::AddedBy, 52.0, Some(Icon::Disc), None, &mut anchors);
-        x += 52.0;
+        heading(ui, x + 14.0, "cover", SortColumn::AddedBy, cover_w, Some(Icon::Disc), None, &mut anchors);
+        x += cover_w;
+        // Dragging the cover's right edge resizes it.
+        cover_edge = Some(x);
     }
     if columns.spread {
         spread_columns(&mut laid, rect.right() - right_fixed - x - embedded_w);
@@ -3731,23 +3794,34 @@ pub fn table_header(
         columns.order(),
         &laid,
         number_embedded.map(|at| (at, 44.0)),
-        length_embedded.map(|at| (at, 56.0)),
-        cover_embedded.map(|at| (at, 52.0)),
+        length_embedded.map(|at| (at, length_w)),
+        cover_embedded.map(|at| (at, cover_w)),
     );
     let title_at = slots.iter().position(|(c, _, _)| *c == SortColumn::Title);
     // (edge, column, whether dragging right makes the column wider)
     let mut edges: Vec<(f32, SortColumn, bool)> = Vec::new();
+    if let Some(at) = cover_edge {
+        edges.push((at, SortColumn::AddedBy, true));
+    }
+    if show_length && length_embedded.is_none() {
+        edges.push((rect.right() - shift - 8.0 - length_w, SortColumn::Duration, false));
+    }
     for (index, (column, at, room)) in slots.iter().enumerate() {
         if *column == SortColumn::Index {
             heading(ui, at + 18.0, "#", SortColumn::Index, *room, None, natural.then_some(true), &mut anchors);
             continue;
         }
-        if *column == SortColumn::Duration {
-            heading(ui, at + room - 21.0, "length", SortColumn::Duration, *room, Some(Icon::Clock), None, &mut anchors);
-            continue;
-        }
-        if *column == SortColumn::AddedBy {
-            heading(ui, at + 14.0, "cover", SortColumn::AddedBy, *room, Some(Icon::Disc), None, &mut anchors);
+        if *column == SortColumn::Duration || *column == SortColumn::AddedBy {
+            if *column == SortColumn::Duration {
+                heading(ui, at + room - 21.0, "length", SortColumn::Duration, *room, Some(Icon::Clock), None, &mut anchors);
+            } else {
+                heading(ui, at + 14.0, "cover", SortColumn::AddedBy, *room, Some(Icon::Disc), None, &mut anchors);
+            }
+            // Resized from the edge the title gives way at.
+            match title_at {
+                Some(title) if index < title => edges.push((at + room, *column, true)),
+                _ => edges.push((*at - 7.0, *column, false)),
+            }
             continue;
         }
         let label = match column {

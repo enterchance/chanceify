@@ -357,14 +357,15 @@ fn cover(app: &mut App, ui: &mut egui::Ui, rect: Rect, now: Option<&NowPlaying>)
     let palette = app.palette;
     let loader = app.backend.art().clone();
     let url = now.and_then(|now| now.art_url.as_deref().or(now.art_small.as_deref()));
-    widgets::paint_cover(
+    widgets::paint_sticky_cover(
         ui,
         &palette,
+        "mini-cover",
         url,
         rect,
         (rect.width() * 0.04).clamp(4.0, 14.0),
         Icon::Music,
-        Some(&loader),
+        &loader,
     );
 }
 

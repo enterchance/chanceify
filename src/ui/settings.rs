@@ -191,7 +191,7 @@ fn tab_of(title: &str) -> Option<u8> {
         Some(0)
     } else if has(&["playback", "equalizer"]) {
         Some(1)
-    } else if has(&["appearance"]) {
+    } else if has(&["appearance", "song lists"]) {
         Some(2)
     } else if has(&["storage", "unavailable"]) {
         Some(3)
@@ -1934,6 +1934,18 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                 });
                 missing_lists(ui, app, &palette);
             }
+        });
+    }
+
+    if needle.is_empty() || "song lists table columns album cover picture".contains(needle.as_str()) {
+        any_visible = true;
+        section(ui, &palette, "Song lists", |ui| {
+            let mut on = !app.settings.track_columns.hide_cover;
+            if widgets::switch_labeled(ui, &palette, "Show album covers in song lists", &mut on).changed() {
+                app.settings.track_columns.hide_cover = !on;
+                app.mark_settings_dirty();
+            }
+            note(ui, &palette, "Drag the lines between the headings to resize a column, including cover and length. Right-click a heading for the rest.");
         });
     }
 

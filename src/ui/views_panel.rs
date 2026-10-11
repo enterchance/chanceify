@@ -225,21 +225,31 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
     // In the full screen visualizer there is no bar, so the panel is here
     // too, fading away when the pointer is not near, like the views panel.
     let dim = if app.fullscreen_vis {
-        let last: Option<Rect> = ctx.data(|data| data.get_temp(Id::new("pop-out-last")));
+        let mut last: Option<Rect> = ctx.data(|data| data.get_temp(Id::new("pop-out-last")));
+        if let (Some(rect), Some(card)) = (last, ctx.data(|data| data.get_temp::<Rect>(Id::new("pop-out-card-last")))) {
+            last = Some(rect.union(card));
+        }
         let near = last.is_some_and(|rect| {
             ctx.input(|input| {
                 input.pointer.hover_pos().is_some_and(|p| rect.expand(30.0).contains(p))
                     || (input.pointer.any_down() && input.pointer.interact_pos().is_some_and(|p| rect.expand(40.0).contains(p)))
             })
         }) || last.is_none();
-        fade(ctx, near, "pop-out-seen")
+        // Resting, the buttons stay easy to see; the pointer on any part of
+        // the card or the controls brings it all to full.
+        fade_to(ctx, near, "pop-out-seen", 0.5)
     } else {
         1.0
     };
     let screen = ctx.content_rect();
     let width = super::lyrics::controls_width(app, width);
     let mut change: Option<Option<[f32; 3]>> = None;
-    let mut top_left = egui::pos2(x, y);
+    // Never off screen: if a view or window change would leave it outside,
+    // it sits against the bottom or right edge instead.
+    let mut top_left = egui::pos2(
+        x.clamp(screen.left(), (screen.right() - width).max(screen.left())),
+        y.clamp(screen.top(), (screen.bottom() - super::lyrics::controls_height(app)).max(screen.top())),
+    );
     // Until it has been moved, the lyrics page's controls hang under the
     // cover's resting place, so a bouncing or tilting cover never reaches them.
     if app.lyrics_fullscreen.is_some()
@@ -269,7 +279,7 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
             let mut card_drag = egui::Vec2::ZERO;
             let mut card_dragging = false;
             let lyrics_page = app.lyrics_fullscreen.is_some();
-            if (lyrics_page || !app.settings.art_expanded)
+            if (lyrics_page || app.fullscreen_vis || !app.settings.art_expanded)
                 && let Some(now) = app.now_playing()
             {
                 let side = if lyrics_page { 44.0 } else { (outer.width() * 0.26).clamp(64.0, 120.0) };
@@ -278,6 +288,8 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                 let cover = Rect::from_min_size(egui::pos2(outer.left() + pad, top), egui::vec2(side, side));
                 let card = Rect::from_min_max(cover.min - egui::vec2(pad, pad), egui::pos2(outer.right(), cover.bottom() + pad));
                 let palette = app.palette;
+                ui.ctx().data_mut(|data| data.insert_temp(Id::new("pop-out-card-last"), card));
+                let song = app.now_playing_item();
                 // The whole card is a handle, registered first so the cover,
                 // the name and the heart still take their own clicks.
                 let handle = ui.interact(card, Id::new("pop-out-card-grip"), egui::Sense::click_and_drag());
@@ -305,14 +317,15 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                     card.left() + 14.0
                 } else {
                     let loader = app.backend.art().clone();
-                    super::widgets::paint_cover(
+                    super::widgets::paint_sticky_cover(
                         ui,
                         &palette,
+                        "pop-out-card",
                         now.art_url.as_deref().or(now.art_small.as_deref()),
                         cover,
                         8.0,
                         Icon::Music,
-                        Some(&loader),
+                        &loader,
                     );
                     let cover_click = ui
                         .interact(cover, Id::new("pop-out-card-cover"), egui::Sense::click())
@@ -352,6 +365,9 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                     .on_hover_cursor(egui::CursorIcon::PointingHand);
                 if words_click.clicked() {
                     open_song(app);
+                }
+                if let Some(song) = &song {
+                    words_click.context_menu(|ui| super::widgets::item_menu(ui, app, song, None, None));
                 }
                 ui.painter().galley(egui::pos2(text_left, y), title, palette.text);
                 // The like heart, right after the song's name.
@@ -530,14 +546,15 @@ fn detached_controls(app: &mut App, ctx: &Context) {
                         egui::StrokeKind::Inside,
                     );
                     let loader = app.backend.art().clone();
-                    super::widgets::paint_cover(
+                    super::widgets::paint_sticky_cover(
                         ui,
                         &palette,
+                        "pop-out-card",
                         now.art_url.as_deref().or(now.art_small.as_deref()),
                         cover,
                         8.0,
                         Icon::Music,
-                        Some(&loader),
+                        &loader,
                     );
                     let text_left = cover.right() + 12.0;
                     let text_w = (width - pad - text_left - 28.0).max(40.0);
@@ -886,6 +903,11 @@ fn panel_dim(ctx: &Context, over: bool) -> f32 {
 /// The same fade for any panel: full while the pointer is near, nearly gone
 /// two seconds after it leaves. `key` keeps each panel's timer apart.
 fn fade(ctx: &Context, over: bool, key: &str) -> f32 {
+    fade_to(ctx, over, key, 0.05)
+}
+
+/// `fade`, but resting at `floor` instead of nearly gone.
+fn fade_to(ctx: &Context, over: bool, key: &str, floor: f32) -> f32 {
     let seen_id = Id::new(key);
     let now_t = ctx.input(|input| input.time);
     if over {
@@ -896,7 +918,7 @@ fn fade(ctx: &Context, over: bool, key: &str) -> f32 {
     if !away {
         ctx.request_repaint_after(std::time::Duration::from_millis(500));
     }
-    ctx.animate_value_with_time(seen_id.with("dim"), if away { 0.05 } else { 1.0 }, 0.4)
+    ctx.animate_value_with_time(seen_id.with("dim"), if away { floor } else { 1.0 }, 0.4)
 }
 
 /// A round-ended pill holding just an icon (the name is its tooltip), lit

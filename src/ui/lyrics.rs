@@ -763,12 +763,9 @@ fn background(app: &mut App, ui: &mut egui::Ui, rect: Rect) {
         // Shaped by the visualizer settings (Visualizer settings, below).
         // Bars and flow stay below the song and artist names, so they never
         // cover or cut them off; the swirl fills the whole page.
-        let mut area = rect;
-        if app.settings.vis_shapes_value() & crate::settings::Settings::SHAPE_SWIRL == 0 {
-            // Never higher than the bottom third of the screen.
-            let top = rect.height() * (2.0 / 3.0);
-            area = Rect::from_min_max(pos2(rect.left(), rect.top() + top), rect.max);
-        }
+        // Bars hug whichever edges are on (the visualizer's own choice); the
+        // flow is a low strip along the bottom. Both are capped in height.
+        let area = rect;
         let moving = super::player_bar::lyrics_backdrop(app, ui, area, now.as_ref(), 3);
         if moving {
             ui.ctx().request_repaint_after(std::time::Duration::from_micros(16_667));

@@ -785,7 +785,11 @@ fn visualizer(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying>
         crate::crash::stage("visualizer: flow");
         // Fullscreen, the flow lives under the cover: it starts 20 pixels
         // below the picture and is never taller than 300.
-        let flow_rect = if app.fullscreen_vis {
+        let flow_rect = if app.lyrics_fullscreen.is_some() {
+            // Behind the lyrics it is a low strip along the bottom.
+            let height = (rect.height() * 0.16).clamp(40.0, 150.0);
+            Rect::from_min_max(pos2(rect.left(), rect.bottom() - height), rect.max)
+        } else if app.fullscreen_vis {
             let below = fullscreen_cover(rect, app.settings.vis_title_layout.min(3)).bottom() + 20.0;
             let height = (rect.bottom() - below).clamp(40.0, 300.0);
             Rect::from_min_max(pos2(rect.left(), rect.bottom() - height), rect.max)
@@ -796,7 +800,7 @@ fn visualizer(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying>
     }
     if shapes & Settings::SHAPE_BARS != 0 {
         crate::crash::stage("visualizer: bars");
-        if app.fullscreen_vis {
+        if app.fullscreen_vis || app.lyrics_fullscreen.is_some() {
             moving |= fullscreen_edge_bars(app, ui, rect, now);
         } else {
             // Bars alone may rise off the visualizer onto the song-length
@@ -919,7 +923,13 @@ fn fullscreen_edge_bars(
     // Every edge's bars share one longest length: the room between the
     // window's left edge and the cover, less a margin, so no bar on any
     // side ever reaches the picture.
-    let reach = (fullscreen_cover(rect, app.settings.vis_title_layout.min(3)).left() - rect.left() - 16.0).max(10.0);
+    let reach = if app.lyrics_fullscreen.is_some() {
+        // Behind the lyrics the bars stay short, so they never climb onto
+        // the words.
+        (rect.width().min(rect.height()) * 0.14).clamp(30.0, 140.0)
+    } else {
+        (fullscreen_cover(rect, app.settings.vis_title_layout.min(3)).left() - rect.left() - 16.0).max(10.0)
+    };
     let boost = if app.settings.vis_shapes_value() == crate::settings::Settings::SHAPE_BARS {
         1.0
     } else {
@@ -3993,16 +4003,26 @@ fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying
     } else {
         app.music_bass_level()
     };
+    // Auto-gain: a quiet song or a low volume file moved the text far less
+    // than a loud one. The loudest recent hit sets the scale (it slowly
+    // forgets), so the text reacts to the shape of the music, not its level.
+    let bass = {
+        let id = egui::Id::new("title-bass-peak");
+        let before: f32 = ui.ctx().data(|data| data.get_temp(id)).unwrap_or(0.3);
+        let peak = bass.max(before * 0.998).max(0.12);
+        ui.ctx().data_mut(|data| data.insert_temp(id, peak));
+        (bass / peak * 0.85).clamp(0.0, 1.0)
+    };
     let bass = ui
         .ctx()
-        .animate_value_with_time(egui::Id::new("title-bass"), bass, 0.07);
+        .animate_value_with_time(egui::Id::new("title-bass"), bass, 0.05);
     let still = app.settings.vis_text_still;
     let sway = app.settings.vis_sway_preset();
     // On the beat only: the title moves with each hit and holds still between.
     let gate = sway_gate(app);
     let strength = app.settings.vis_sway_strength() * gate;
     // How hard the music is hitting right now, 0 to 1: what the sways follow.
-    let punch = ((bass - 0.05) / 0.35).clamp(0.0, 1.0);
+    let punch = ((bass - 0.08) / 0.5).clamp(0.0, 1.0).sqrt();
     // Shake moves the whole text together, never letter by letter.
     let shake = if still || sway.kind != 4 {
         vec2(0.0, 0.0)
@@ -4707,14 +4727,15 @@ pub(super) fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, 
     };
 
     if cover_shown {
-        super::widgets::paint_cover(
+        super::widgets::paint_sticky_cover(
             ui,
             &palette,
+            "bar-cover",
             now.art_small.as_deref().or(now.art_url.as_deref()),
             cover_rect,
             6.0,
             Icon::Music,
-            Some(app.backend.art()),
+            app.backend.art(),
         );
     } else {
         // The big art is showing in the sidebar, and the words sit on it

@@ -983,15 +983,7 @@ fn paint_expanded_art(app: &mut App, ui: &mut egui::Ui, rect: Rect) {
         }
         .as_shape(rect, egui::CornerRadius::same(8)),
     );
-    super::widgets::paint_cover(
-        ui,
-        &palette,
-        Some(&url),
-        rect,
-        8.0,
-        Icon::Music,
-        Some(app.backend.art()),
-    );
+    super::widgets::paint_sticky_cover(ui, &palette, "sidebar-art", Some(&url), rect, 8.0, Icon::Music, app.backend.art());
     super::player_bar::big_art_missing_mark(app, ui, rect, "sidebar");
     let art = ui.interact(rect, egui::Id::new("sidebar-art"), Sense::click());
     // The words ride on the art rather than sitting in the player bar, so

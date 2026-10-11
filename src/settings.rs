@@ -123,6 +123,12 @@ pub struct TrackColumns {
     /// The columns share the width of the list between them instead of
     /// keeping the widths they were dragged to.
     pub spread: bool,
+    /// The album cover column is switched off.
+    pub hide_cover: bool,
+    /// Width of the cover column and of the length column, as dragged;
+    /// zero is the standard width.
+    pub cover_w: f32,
+    pub length_w: f32,
 }
 
 impl Default for TrackColumns {
@@ -147,11 +153,24 @@ impl Default for TrackColumns {
             length_at: None,
             cover_at: None,
             spread: false,
+            hide_cover: false,
+            cover_w: 0.0,
+            length_w: 0.0,
         }
     }
 }
 
 impl TrackColumns {
+    /// How wide the cover column is (36 to 200).
+    pub fn cover_width(&self) -> f32 {
+        if self.cover_w.is_finite() && self.cover_w > 0.0 { self.cover_w.clamp(36.0, 200.0) } else { 52.0 }
+    }
+
+    /// How wide the length column is (44 to 200).
+    pub fn length_width(&self) -> f32 {
+        if self.length_w.is_finite() && self.length_w > 0.0 { self.length_w.clamp(44.0, 200.0) } else { 56.0 }
+    }
+
     /// Title first, then the others in the order they have always had.
     pub const DEFAULT_ORDER: [u8; 6] = [0, 1, 2, 3, 4, 5];
 
