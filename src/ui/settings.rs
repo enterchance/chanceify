@@ -1246,14 +1246,6 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                 .replace("{folder}", &app.dirs.art_cache_dir().display().to_string()),
         ),
         RowText::new(
-            audio_cache.clone(),
-            // Translators: {folder} is the path of a cache folder.
-            gettext(locale, "Stored in {folder}").replace(
-                "{folder}",
-                &app.dirs.audio_cache_dir().display().to_string(),
-            ),
-        ),
-        RowText::new(
             gettext(locale, "Play history"),
             gettext(
                 locale,
@@ -1261,13 +1253,6 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                 "Tracks played here are stored in {file}. This file is never uploaded.",
             )
             .replace("{file}", &app.dirs.history_file().display().to_string()),
-        ),
-        RowText::new(
-            gettext(locale, "Sign-in"),
-            gettext(
-                locale,
-                "Sign-ins are saved in the system credential store when available.",
-            ),
         ),
     ];
     if section_matches(&needle, &storage, &storage_rows) {
@@ -1286,8 +1271,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     app.actions.push(Action::ClearArtCache);
                 }
             });
-            filtered_row(ui, &palette, &needle, &storage, &storage_rows[1], |_| {});
-            filtered_row(ui, &palette, &needle, &storage, &storage_rows[2], |ui| {
+            filtered_row(ui, &palette, &needle, &storage, &storage_rows[1], |ui| {
                 if theme::soft_button(
                     ui,
                     &palette,
@@ -1300,7 +1284,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     app.actions.push(Action::ClearPlayHistory);
                 }
             });
-            filtered_row(ui, &palette, &needle, &storage, &storage_rows[3], |_| {});
+            note(ui, &palette, "Everything chanceify saves lives in the chanceify folder beside the program. Nothing is uploaded.");
         });
     }
 

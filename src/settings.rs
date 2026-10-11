@@ -1883,13 +1883,13 @@ impl Settings {
         "player_bar_vis_flow_speed", "player_bar_vis_gap", "player_bar_vis_hex",
         "player_bar_vis_rise", "player_bar_vis_scale", "queue_compact", "queue_show_artist",
         "queue_show_cover", "queue_show_icons", "queue_show_length", "queue_show_numbers", "queue_show_time",
-        "queue_width", "float_controls", "float_big", "float_lyrics", "float_hide_bar", "calm_blur", "recents_show_artist", "recents_show_cover", "recents_show_icons", "recents_show_numbers", "vis_title_layout", "jump_shake", "mini_queue", "mini_volume", "mini_vis", "queue_click", "vis_reverse", "missing_mark_big", "row_order", "seek_anchor", "seek_custom_width", "seek_time_joined", "seek_time_mode",
+        "queue_width", "float_hide_bar", "calm_blur", "recents_show_artist", "recents_show_cover", "recents_show_icons", "recents_show_numbers", "vis_title_layout", "jump_shake", "mini_queue", "mini_volume", "mini_vis", "queue_click", "vis_reverse", "missing_mark_big", "row_order", "seek_anchor", "seek_custom_width", "seek_time_joined", "seek_time_mode",
         "seek_width", "show_shortcut_hints", "sidebar_compact", "sidebar_grid", "sidebar_order",
         "sidebar_width", "swirl_art_scroll", "swirl_art_single", "swirl_art_edge", "swirl_colours_fixed", "swirl_drift", "swirl_peaks",
         "swirl_scale", "swirl_tune", "swirl_warp", "swirl_waves", "theme", "theme_from_cover", "custom_bg", "custom_accent",
         "track_columns", "tracklist_compact", "vis", "vis_bar_sides", "vis_shapes",
         "vis_shapes_last", "vis_shapes_set", "volume_presets", "zoom",
-        "volume_custom_width", "vis_no_gradient", "vis_lyrics", "vis_text_still", "vis_sway", "vis_sway_amount", "vis_sway_react", "sway_sens", "vis_text_no_outline", "vis_text_back", "vis_back_alpha", "vis_back_round", "vis_back_pad", "vis_back_block", "vis_live_preview", "vis_font_random", "vis_text_font", "vis_text_no_artist", "vis_lyrics_no_back", "vis_bars_stay", "lyrics_vis", "lyrics_vis_dark", "lyrics_vis_mode", "window_opacity", "anchor_controls", "anchor_volume", "nudge_controls", "nudge_volume", "nudge_seek", "bar_stacked", "bar_layout", "bar_free", "bar_free_pos", "bar_free_seek", "lyrics_ctl_off", "vis_bars_opacity", "vis_flow_opacity", "swirl_react_mode", "vis_jump_react", "vis_jump_on",
+        "volume_custom_width", "vis_no_gradient", "vis_lyrics", "vis_text_still", "vis_sway", "vis_sway_amount", "vis_sway_react", "sway_sens", "vis_text_no_outline", "vis_text_back", "vis_back_alpha", "vis_back_round", "vis_back_pad", "vis_back_block", "vis_live_preview", "vis_font_random", "vis_text_font", "vis_text_no_artist", "vis_lyrics_no_back", "vis_bars_stay", "lyrics_vis", "lyrics_vis_dark", "lyrics_vis_mode", "window_opacity", "anchor_controls", "anchor_volume", "bar_stacked", "bar_layout", "bar_free", "lyrics_ctl_off", "vis_bars_opacity", "vis_flow_opacity", "swirl_react_mode", "vis_jump_react", "vis_jump_on", "float_idle",
     ];
 
     /// The shareable part of the settings, as the text of a file.
