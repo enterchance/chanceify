@@ -147,23 +147,11 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
     };
     let lyrics = match &app.lyrics {
         Loadable::NotLoaded | Loadable::Loading => {
-            widgets::loading_row(ui, &palette, app.locale);
+            // Nothing until the words arrive.
             return;
         }
-        Loadable::Failed(error) => {
-            let message = gettext(
-                app.locale,
-                // Translators: Keep {error} unchanged. It is the original failure detail.
-                "Couldn't fetch the lyrics: {error}",
-            )
-            .replace("{error}", error);
-            ui.add_space(8.0);
-            theme::text(ui, message, theme::regular(13.0), palette.secondary);
-            ui.add_space(8.0);
-            if theme::pill_button(ui, &palette, &gettext(app.locale, "Try again"), false).clicked()
-            {
-                app.request_lyrics();
-            }
+        Loadable::Failed(_) => {
+            // Either the words show up or they do not.
             return;
         }
         Loadable::Loaded(None) => {
@@ -171,13 +159,6 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
             return;
         }
         Loadable::Loaded(Some(lyrics)) if lyrics.instrumental => {
-            widgets::empty_state(
-                ui,
-                &palette,
-                Icon::Music,
-                &gettext(app.locale, "Instrumental"),
-                &gettext(app.locale, "No timed lyrics for this track."),
-            );
             return;
         }
         Loadable::Loaded(Some(lyrics)) => lyrics.clone(),
@@ -517,58 +498,6 @@ fn with_cover(app: &mut App, ui: &mut egui::Ui, rect: Rect, top: f32) {
             vec2(side, side + 90.0),
         );
         big_cover(app, ui, column, Align::Center);
-        // Why there are no words, quietly, under the song, or that they
-        // are still being fetched.
-        let (heading, detail) = match &app.lyrics {
-            Loadable::Loaded(Some(_)) => (
-                gettext(app.locale, "Instrumental"),
-                gettext(app.locale, "No timed lyrics for this track."),
-            ),
-            Loadable::Loaded(None) => (String::new().into(), Default::default()),
-            Loadable::Failed(error) => (
-                gettext(
-                    app.locale,
-                    // Translators: Keep {error} unchanged. It is the original failure detail.
-                    "Couldn't fetch the lyrics: {error}",
-                )
-                .replace("{error}", error)
-                .into(),
-                Default::default(),
-            ),
-            Loadable::NotLoaded | Loadable::Loading => {
-                (gettext(app.locale, "Loading…"), Default::default())
-            }
-        };
-        let heading = ui.painter().text(
-            pos2(column.center().x, column.bottom() + 94.0),
-            egui::Align2::CENTER_TOP,
-            heading,
-            theme::semibold(13.0),
-            Color32::from_gray(200),
-        );
-        if matches!(app.lyrics, Loadable::Failed(_)) {
-            let retry = Rect::from_center_size(
-                pos2(column.center().x, heading.bottom() + 24.0),
-                vec2(column.width(), 32.0),
-            );
-            let mut retry_ui = ui.new_child(
-                UiBuilder::new()
-                    .max_rect(retry)
-                    .layout(Layout::top_down(Align::Center)),
-            );
-            let label = gettext(app.locale, "Try again");
-            if theme::pill_button(&mut retry_ui, &theme::Palette::dark(), &label, false).clicked() {
-                app.actions.push(Action::RetryLyrics);
-            }
-            return;
-        }
-        ui.painter().text(
-            pos2(column.center().x, heading.bottom() + 4.0),
-            egui::Align2::CENTER_TOP,
-            detail,
-            theme::regular(13.0),
-            Color32::from_gray(170),
-        );
     }
 }
 
@@ -970,23 +899,11 @@ fn fullscreen_contents(app: &mut App, ui: &mut egui::Ui) {
     };
     let lyrics = match &app.lyrics {
         Loadable::NotLoaded | Loadable::Loading => {
-            widgets::loading_row(ui, &palette, app.locale);
+            // Nothing until the words arrive.
             return;
         }
-        Loadable::Failed(error) => {
-            let message = gettext(
-                app.locale,
-                // Translators: Keep {error} unchanged. It is the original failure detail.
-                "Couldn't fetch the lyrics: {error}",
-            )
-            .replace("{error}", error);
-            ui.add_space(8.0);
-            theme::text(ui, message, theme::regular(13.0), palette.text);
-            ui.add_space(8.0);
-            if theme::pill_button(ui, &palette, &gettext(app.locale, "Try again"), false).clicked()
-            {
-                app.actions.push(Action::RetryLyrics);
-            }
+        Loadable::Failed(_) => {
+            // Either the words show up or they do not.
             return;
         }
         Loadable::Loaded(None) => {
@@ -994,13 +911,6 @@ fn fullscreen_contents(app: &mut App, ui: &mut egui::Ui) {
             return;
         }
         Loadable::Loaded(Some(lyrics)) if lyrics.instrumental => {
-            widgets::empty_state(
-                ui,
-                &palette,
-                Icon::Music,
-                &gettext(app.locale, "Instrumental"),
-                &gettext(app.locale, "No timed lyrics for this track."),
-            );
             return;
         }
         Loadable::Loaded(Some(lyrics)) => lyrics.clone(),
