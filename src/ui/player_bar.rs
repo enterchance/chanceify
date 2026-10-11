@@ -3858,10 +3858,10 @@ fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying
     }
     // With the controls up, the song's name lives on their card (above the
     // controls), so it is not written a second time under the art. The extra
-    // visualizer window has no controls, so it keeps its words.
+    // visualizer window has its own controls card too.
     let in_extra: bool = ui.ctx().data(|data| data.get_temp(egui::Id::new("in-extra-window"))).unwrap_or(false);
+    let _ = in_extra;
     if app.fullscreen_vis
-        && !in_extra
         && app.float_slot(super::views_panel::default_float(ui.ctx())).is_some()
     {
         return;

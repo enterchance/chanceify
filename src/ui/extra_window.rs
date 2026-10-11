@@ -174,6 +174,16 @@ pub fn show(app: &mut App, ctx: &Context) {
         app.extra_vis_panel = app.vis_panel;
         app.vis_panel = saved_panel;
         app.fullscreen_vis = saved_full;
+        // The controls, with the song's little cover and name above them, as in
+        // the main window's full screen visualizer. They stay in this window.
+        {
+            let detached = app.settings.float_detached;
+            app.settings.float_detached = false;
+            app.fullscreen_vis = true;
+            super::views_panel::floating_controls(app, &ctx);
+            app.fullscreen_vis = saved_full;
+            app.settings.float_detached = detached;
+        }
         // Three small buttons: settings, visualizer or lyrics, and close.
         let (pointer, pressed) = ctx.input(|input| (input.pointer.hover_pos(), input.pointer.primary_pressed()));
         let near = pointer.is_some_and(|p| rect.contains(p) && p.y < rect.top() + 70.0);
