@@ -12705,6 +12705,12 @@ impl App {
         self.refresh_frame_now();
         self.sync_song_scene();
         self.sync_discord();
+        // With Discord on and a song playing, a frame is drawn at least every
+        // two seconds even when nothing on screen moves (a minimised or
+        // covered window), so a new song reaches Discord within moments.
+        if self.settings.discord_presence && self.now_playing().is_some_and(|now| now.playing) {
+            ctx.request_repaint_after(std::time::Duration::from_secs(2));
+        }
         self.apply_theme(ctx);
         self.sync_window_icon(ctx);
         let autoscroll_on = crate::autoscroll::enabled(self.settings.middle_click_autoscroll);

@@ -46,6 +46,8 @@ dialog.lb img{display:block;max-width:96vw;max-height:94vh;width:auto;height:aut
 <div class="grid"><figure><a href="{{ '/gallery-images/settings-playback.jpg' | relative_url }}" data-full><img src="{{ '/gallery-images/settings-playback.jpg' | relative_url }}" alt="playback settings" loading="lazy"></a><figcaption>playback settings</figcaption></figure><div class="soon"><span>coming soon</span>look and themes</div><div class="soon"><span>coming soon</span>accounts</div><div class="soon"><span>coming soon</span>library</div><div class="soon"><span>coming soon</span>network</div><div class="soon"><span>coming soon</span>about</div><div class="soon"><span>coming soon</span>last.fm</div><div class="soon"><span>coming soon</span>keybinds</div><div class="soon"><span>coming soon</span>first-run tour</div></div>
 <h2>discord</h2>
 <div class="grid"><div class="soon"><span>coming soon</span>discord presence</div></div>
+<h2>web worker pages</h2>
+<div class="grid"><div class="soon"><span>coming soon</span>web worker page</div></div>
 <h2>wallpaper engine</h2>
 <div class="grid"><figure><a href="{{ '/gallery-images/wallpaper-engine.jpg' | relative_url }}" data-full><img src="{{ '/gallery-images/wallpaper-engine.jpg' | relative_url }}" alt="chanceify at 1080p on an ultrawide wallpaper" loading="lazy"></a><figcaption>chanceify at 1080p on an ultrawide wallpaper</figcaption></figure></div><p class="plug">chanceify as a live wallpaper: <a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3791429763">madgeeked mediaviz 1080p</a> and <a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3791421783">madgeeked mediaviz ultra wide</a>.</p>
 
