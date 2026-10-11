@@ -191,7 +191,7 @@ fn tab_of(title: &str) -> Option<u8> {
         Some(0)
     } else if has(&["playback", "equalizer"]) {
         Some(1)
-    } else if has(&["appearance", "song lists"]) {
+    } else if has(&["appearance", "song lists", "gradient"]) {
         Some(2)
     } else if has(&["storage", "unavailable"]) {
         Some(3)
@@ -1934,6 +1934,17 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                 });
                 missing_lists(ui, app, &palette);
             }
+        });
+    }
+
+    if needle.is_empty() || "visualizer gradient colour color bars flow".contains(needle.as_str()) {
+        any_visible = true;
+        section(ui, &palette, "Visualizer gradient", |ui| {
+            let mut on = !app.settings.vis_no_gradient;
+            if widgets::switch_labeled(ui, &palette, "Gradient on the bars and flow", &mut on).changed() {
+                app.actions.push(Action::ToggleVisGradient);
+            }
+            note(ui, &palette, "Off, the bars and flow use one colour from the cover.");
         });
     }
 

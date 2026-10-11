@@ -595,6 +595,9 @@ pub struct App {
     uploaded_covers: std::collections::HashMap<String, crate::playlist_cover::PendingCover>,
     pub show_queue_panel: bool,
     pub show_lyrics_panel: bool,
+    /// The side lyrics were put away because the song has none; they come
+    /// back by themselves for the next song that does.
+    pub lyrics_panel_auto_off: bool,
     pub lyrics_fullscreen: Option<bool>,
     pub lyrics_fullscreen_seen: bool,
     lyrics_fullscreen_restoring: Option<bool>,
@@ -1205,6 +1208,7 @@ impl App {
             uploaded_covers: Default::default(),
             show_queue_panel: session.queue_open.unwrap_or(false),
             show_lyrics_panel: false,
+            lyrics_panel_auto_off: false,
             lyrics_fullscreen: None,
             lyrics_fullscreen_seen: false,
             lyrics_fullscreen_restoring: None,
@@ -3647,7 +3651,7 @@ impl App {
         {
             self.refresh_queue(true);
         }
-        if self.show_lyrics_panel || ((self.fullscreen_vis || self.extra_vis) && self.settings.vis_lyrics) {
+        if self.show_lyrics_panel || self.lyrics_panel_auto_off || ((self.fullscreen_vis || self.extra_vis) && self.settings.vis_lyrics) {
             self.request_lyrics();
         }
     }
@@ -3785,6 +3789,29 @@ impl App {
 
     /// Asks for the playing track's lyrics unless they are here or on the
     /// way. Podcasts have no lyrics to ask for.
+    /// The side lyrics step aside for a song with no words (or an
+    /// instrumental) and return for the next one that has some.
+    fn settle_lyrics_panel(&mut self) {
+        let now_uri = self.now_playing().map(|now| now.uri);
+        let current = now_uri.is_some() && self.lyrics_uri == now_uri;
+        if !current {
+            return;
+        }
+        let none = match &self.lyrics {
+            Loadable::Loaded(None) => true,
+            Loadable::Loaded(Some(lyrics)) => lyrics.instrumental,
+            _ => false,
+        };
+        let some = matches!(&self.lyrics, Loadable::Loaded(Some(lyrics)) if !lyrics.instrumental);
+        if self.show_lyrics_panel && none && self.lyrics_fullscreen.is_none() {
+            self.show_lyrics_panel = false;
+            self.lyrics_panel_auto_off = true;
+        } else if self.lyrics_panel_auto_off && some {
+            self.show_lyrics_panel = true;
+            self.lyrics_panel_auto_off = false;
+        }
+    }
+
     pub fn request_lyrics(&mut self) {
         let Some(now) = self.now_playing() else {
             return;
@@ -10550,6 +10577,7 @@ impl App {
                 }
             }
             Action::ToggleLyricsPanel => {
+                self.lyrics_panel_auto_off = false;
                 self.leave_lyrics_fullscreen(ctx);
                 self.show_lyrics_panel = !self.show_lyrics_panel;
                 if self.show_lyrics_panel {
@@ -12609,6 +12637,7 @@ impl App {
         crate::ui::show(self, ui);
         // The bass jump: everything drawn this frame shakes for a moment.
         self.auto_jump();
+        self.settle_lyrics_panel();
         let jump = self.jump_level();
         if jump > 0.0 {
             let t = ctx.input(|input| input.time) as f32;
