@@ -1452,29 +1452,26 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
         };
         (window, shown)
     });
-    // A click anywhere outside the panel closes it. (A right-click on the
-    // visualizer toggles it, so only the primary button counts here.)
-    crate::crash::stage("visualizer panel: close check");
+    // The panel stays until the X in its top right corner is clicked (or
+    // its key or the right-click on the visualizer is used again): clicking
+    // elsewhere leaves it where it is.
     if let Some((_window, shown)) = window {
-        // Each question is asked on its own, never one inside another's
-        // closure. `Popup::is_any_open` takes the context's lock, and taking
-        // it again while `ctx.input` still held it could wait forever the
-        // moment another thread (the audio, the swirl, a repaint request)
-        // queued for the same lock. That was the freeze: it only happened on
-        // the frame of a click, because only then was the second call made.
-        let pressed_at = ctx.input(|input| {
-            if input.pointer.primary_pressed() {
-                input.pointer.interact_pos()
-            } else {
-                None
-            }
-        });
-        if let Some(at) = pressed_at {
-            let inside = shown.expand(8.0).contains(at);
-            if !inside && !egui::Popup::is_any_open(ctx) {
-                app.vis_panel = false;
-            }
-        }
+        let size = 22.0;
+        egui::Area::new(egui::Id::new("vis-panel-close"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(shown.right_top() + egui::vec2(-size - 6.0, 6.0))
+            .show(ctx, |ui| {
+                let palette = app.palette;
+                let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::click());
+                if response.hovered() {
+                    ui.painter().circle_filled(rect.center(), size / 2.0, palette.surface_hover);
+                }
+                let colour = if response.hovered() { palette.text } else { palette.secondary };
+                theme::paint_icon(ui, Icon::X, rect, 12.0, colour);
+                if response.clicked() {
+                    app.vis_panel = false;
+                }
+            });
     }
 }
 
@@ -1873,14 +1870,18 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
             let view = app.vis_view_now.unwrap_or(0);
             let last_tab: u8 = if view == 0 { 2 } else { 3 };
             let tab: u8 = ui.ctx().data(|data| data.get_temp::<u8>(tab_id)).unwrap_or(0).min(last_tab);
-            theme::subtle(
-                ui,
-                &palette,
-                &format!(
-                    "these settings are for the {} only",
-                    ["normal view", "full screen visualizer", "full screen lyrics"][view.min(2) as usize]
-                ),
-            );
+            // Room is left at the right for the close X.
+            ui.scope(|ui| {
+                ui.set_max_width((ui.available_width() - 30.0).max(100.0));
+                theme::subtle(
+                    ui,
+                    &palette,
+                    &format!(
+                        "these settings are for the {} only",
+                        ["normal view", "full screen visualizer", "full screen lyrics"][view.min(2) as usize]
+                    ),
+                );
+            });
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 for (index, label) in ["Shapes", "Bass and colour", "Title", "Lyrics"].iter().take(last_tab as usize + 1).enumerate() {

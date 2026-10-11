@@ -1,7 +1,7 @@
 [package]
 name = "chanceify"
 default-run = "chanceify"
-version = "0.91.70"
+version = "0.91.71"
 edition = "2024"
 rust-version = "1.98"
 license = "AGPL-3.0-only"
