@@ -2143,6 +2143,18 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                     (9.0 / app.settings.swirl_drift_secs()) as f32,
                     |value| app.actions.push(Action::SetSwirlDrift(value)),
                 );
+                // The same direction switch as the bars have (and the same key).
+                if chip(
+                    ui,
+                    &palette,
+                    if app.settings.vis_reverse { "Scrolls right to left" } else { "Scrolls left to right" },
+                    app.settings.vis_reverse,
+                    ui.available_width().min(290.0),
+                )
+                .clicked()
+                {
+                    app.actions.push(Action::ToggleVisReverse);
+                }
                 if super::widgets::menu_item(ui, &palette, None, &gettext(app.locale, "Reset swirl")) {
                     app.actions.push(Action::ResetSwirlTune);
                 }
