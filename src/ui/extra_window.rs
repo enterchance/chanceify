@@ -129,8 +129,10 @@ pub fn show(app: &mut App, ctx: &Context) {
                 .show(ui, |ui| {
                     // The visualizer paints as it does full screen.
                     app.fullscreen_vis = true;
+                    ctx.data_mut(|data| data.insert_temp(egui::Id::new("in-extra-window"), true));
                     let moving = super::player_bar::lyrics_backdrop(app, ui, rect, now.as_ref(), 3);
                     super::lyrics::vis_overlay(app, ui);
+                    ctx.data_mut(|data| data.insert_temp(egui::Id::new("in-extra-window"), false));
                     app.fullscreen_vis = was_full;
                     if !moving {
                         ui.painter().text(

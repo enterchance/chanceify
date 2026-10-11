@@ -991,6 +991,9 @@ pub struct Settings {
     pub float_hide_bar: bool,
     /// The pop-out controls live in a window of their own, off the app.
     pub float_detached: bool,
+    /// How visible the pop-out controls stay in the full screen visualizer
+    /// once the pointer has left them (0.05 to 1). Half when unset.
+    pub float_idle: Option<f32>,
     /// That window's place on the screen.
     pub float_window: Option<[f32; 2]>,
     /// Width of the Views panel.
@@ -1431,6 +1434,7 @@ impl Default for Settings {
             views_height: 0.0,
             views_scale: 1.0,
             float_detached: false,
+            float_idle: None,
             float_window: None,
             vis_panel_w: 0.0,
             vis_panel_h: 0.0,

@@ -3856,6 +3856,16 @@ fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying
             egui::StrokeKind::Middle,
         );
     }
+    // With the controls up, the song's name lives on their card (above the
+    // controls), so it is not written a second time under the art. The extra
+    // visualizer window has no controls, so it keeps its words.
+    let in_extra: bool = ui.ctx().data(|data| data.get_temp(egui::Id::new("in-extra-window"))).unwrap_or(false);
+    if app.fullscreen_vis
+        && !in_extra
+        && app.float_slot(super::views_panel::default_float(ui.ctx())).is_some()
+    {
+        return;
+    }
     // The words keep to the card's resting size, and sit below the lowest the
     // art can reach: a bounce swells it, and a floating card tips towards the
     // viewer and grows past its edge.

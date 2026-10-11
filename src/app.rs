@@ -3647,7 +3647,7 @@ impl App {
         {
             self.refresh_queue(true);
         }
-        if self.show_lyrics_panel || (self.fullscreen_vis && self.settings.vis_lyrics) {
+        if self.show_lyrics_panel || ((self.fullscreen_vis || self.extra_vis) && self.settings.vis_lyrics) {
             self.request_lyrics();
         }
     }

@@ -237,7 +237,7 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
         }) || last.is_none();
         // Resting, the buttons stay easy to see; the pointer on any part of
         // the card or the controls brings it all to full.
-        fade_to(ctx, near, "pop-out-seen", 0.5)
+        fade_to(ctx, near, "pop-out-seen", app.settings.float_idle.unwrap_or(0.5).clamp(0.05, 1.0))
     } else {
         1.0
     };
@@ -286,8 +286,33 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                 let pad = 8.0;
                 let top = (outer.top() - side - pad * 2.0 - 8.0).max(screen.top() + 4.0 + pad);
                 let cover = Rect::from_min_size(egui::pos2(outer.left() + pad, top), egui::vec2(side, side));
-                let card = Rect::from_min_max(cover.min - egui::vec2(pad, pad), egui::pos2(outer.right(), cover.bottom() + pad));
                 let palette = app.palette;
+                let text_left = if lyrics_page { outer.left() + 14.0 } else { cover.right() + 12.0 };
+                let text_w = (outer.right() - pad - text_left - 28.0).max(40.0);
+                let title = crate::bidi::layout(
+                    ui.painter(),
+                    &now.title,
+                    theme::bold((side * 0.2).clamp(14.0, 22.0)),
+                    palette.text,
+                    text_w,
+                    2,
+                    Some(crate::bidi::ELLIPSIS),
+                );
+                let artist = crate::bidi::layout(
+                    ui.painter(),
+                    &now.subtitle,
+                    theme::regular((side * 0.15).clamp(12.0, 16.0)),
+                    palette.secondary,
+                    text_w,
+                    1,
+                    Some(crate::bidi::ELLIPSIS),
+                );
+                // The card is only as wide as its words need (the cover, the name,
+                // the heart), never wider than the controls under it; a name
+                // too long for that goes onto two lines and then ends in "…".
+                let need = text_left + (title.size().x + 34.0).max(artist.size().x) + pad + 4.0;
+                let card_right = need.clamp(outer.left() + 160.0_f32.min(outer.width()), outer.right());
+                let card = Rect::from_min_max(cover.min - egui::vec2(pad, pad), egui::pos2(card_right, cover.bottom() + pad));
                 ui.ctx().data_mut(|data| data.insert_temp(Id::new("pop-out-card-last"), card));
                 let song = app.now_playing_item();
                 // The whole card is a handle, registered first so the cover,
@@ -313,9 +338,7 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                         app.actions.push(Action::Open(crate::model::Page::Show(id.clone())));
                     }
                 };
-                let text_left = if lyrics_page {
-                    card.left() + 14.0
-                } else {
+                if !lyrics_page {
                     let loader = app.backend.art().clone();
                     super::widgets::paint_sticky_cover(
                         ui,
@@ -333,36 +356,21 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                     if cover_click.clicked() {
                         open_song(app);
                     }
-                    cover.right() + 12.0
-                };
-                let text_w = (outer.right() - pad - text_left - 28.0).max(40.0);
-                let title = crate::bidi::layout(
-                    ui.painter(),
-                    &now.title,
-                    theme::bold((side * 0.2).clamp(14.0, 22.0)),
-                    palette.text,
-                    text_w,
-                    2,
-                    Some(crate::bidi::ELLIPSIS),
-                );
-                let artist = crate::bidi::layout(
-                    ui.painter(),
-                    &now.subtitle,
-                    theme::regular((side * 0.15).clamp(12.0, 16.0)),
-                    palette.secondary,
-                    text_w,
-                    1,
-                    Some(crate::bidi::ELLIPSIS),
-                );
+                }
                 let block = title.size().y + 4.0 + artist.size().y;
                 let y = cover.center().y - block / 2.0;
                 let title_h = title.size().y;
                 let title_w = title.size().x;
                 let first_row = title_h / title.rows.len().max(1) as f32;
                 let words = Rect::from_min_size(egui::pos2(text_left, y), egui::vec2(text_w, block));
-                let words_click = ui
+                let cut = title.rows.len() > 1 || title_w >= text_w - 2.0 || artist.size().x >= text_w - 2.0;
+                let mut words_click = ui
                     .interact(words, Id::new("pop-out-card-words"), egui::Sense::click())
                     .on_hover_cursor(egui::CursorIcon::PointingHand);
+                if cut {
+                    // Too long to show whole: the full name is on hover.
+                    words_click = words_click.on_hover_text(format!("{}\n{}", now.title, now.subtitle));
+                }
                 if words_click.clicked() {
                     open_song(app);
                 }
@@ -455,6 +463,17 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                 }
             }
             grip_response.context_menu(|ui| {
+                if app.fullscreen_vis {
+                    // How much of the controls stays showing once the mouse
+                    // has left them.
+                    let mut idle = app.settings.float_idle.unwrap_or(0.5).clamp(0.05, 1.0) * 100.0;
+                    ui.label("opacity when the mouse is away");
+                    if ui.add(egui::Slider::new(&mut idle, 5.0..=100.0).suffix("%")).changed() {
+                        app.settings.float_idle = Some(idle / 100.0);
+                        app.mark_settings_dirty();
+                    }
+                    ui.separator();
+                }
                 if ui.button("Move out of the window").clicked() {
                     app.settings.float_detached = true;
                     app.mark_settings_dirty();
@@ -829,8 +848,25 @@ pub fn show(app: &mut App, ctx: &Context) {
                         // Always one row: the buttons shrink to fit, never wrap.
                         let count = chips.len() as f32;
                         let chip_w = ((ui.available_width() - 6.0 * (count - 1.0)) / count).clamp(22.0, 38.0);
+                        // The visualizer window and always-on-top sit apart on the
+                        // right, with a gap after the rest.
+                        let avail = ui.available_width();
+                        let right_n = chips
+                            .iter()
+                            .filter(|(label, _, _)| label.ends_with("visualizer window") || *label == "Always on top")
+                            .count();
+                        let left_n = chips.len() - right_n;
                         ui.horizontal(|ui| {
+                            let mut gap_done = false;
                             for (label, on, action) in chips {
+                                let is_right = label.ends_with("visualizer window") || label == "Always on top";
+                                if is_right && !gap_done {
+                                    gap_done = true;
+                                    let used = left_n as f32 * (chip_w + 6.0);
+                                    let right_w = right_n as f32 * chip_w + (right_n as f32 - 1.0) * 6.0;
+                                    let gap = (avail - used - right_w - 6.0).max(8.0);
+                                    ui.add_space(gap);
+                                }
                                 let icon = match label {
                                     "Library" => Icon::Grid3x3,
                                     "Side lyrics" => Icon::Menu,

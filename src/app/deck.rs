@@ -281,7 +281,7 @@ impl App {
             }
             // A song from a file changes without the Spotify bookkeeping
             // that normally asks for lyrics, so ask here.
-            if self.show_lyrics_panel || (self.fullscreen_vis && self.settings.vis_lyrics) {
+            if self.show_lyrics_panel || ((self.fullscreen_vis || self.extra_vis) && self.settings.vis_lyrics) {
                 self.request_lyrics();
             }
         }
