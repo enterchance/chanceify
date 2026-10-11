@@ -2173,6 +2173,49 @@ fn hertz(hz: f32) -> String {
 /// One vertical slider in the app's own style: the track filled from
 /// 0 dB, the handle in the middle when flat, a double-click to put it
 /// back there. Returns whether it moved.
+/// The equalizer, as a tab of the visualizer's settings (the volume bar no
+/// longer opens it): the switch, the presets, the curve, the preamp and the
+/// ten bands.
+pub(super) fn eq_panel(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    let locale = app.locale;
+    ui.set_width(500.0);
+    let mut on = app.settings.eq_on;
+    if widgets::switch(ui, &palette, &gettext(locale, "Equalizer"), &mut on).changed() {
+        app.actions.push(Action::ToggleEq);
+    }
+    ui.add_space(6.0);
+    let names: Vec<(usize, &str)> = crate::eq::PRESETS
+        .iter()
+        .enumerate()
+        .map(|(index, preset)| (index, preset.name))
+        .collect();
+    let current = crate::eq::PRESETS
+        .iter()
+        .position(|preset| preset.bands_db == app.settings.eq_bands_db)
+        .unwrap_or(usize::MAX);
+    if let Some(picked) = widgets::chips(ui, &palette, &names, current) {
+        app.actions.push(Action::ApplyEqPreset(picked));
+    }
+    ui.add_space(8.0);
+    eq_curve(ui, &palette, &crate::app::eq_settings(&app.settings));
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        let on = app.settings.eq_on;
+        let mut preamp = app.settings.eq_preamp_db;
+        if eq_slider(ui, &palette, &pgettext(locale, "equalizer", "Pre"), &mut preamp, on) {
+            app.actions.push(Action::SetEqPreamp(preamp));
+        }
+        for (band, hz) in crate::eq::BANDS.iter().enumerate() {
+            let mut gain = app.settings.eq_bands_db[band];
+            if eq_slider(ui, &palette, &hertz(*hz), &mut gain, on) {
+                app.actions.push(Action::SetEqBand(band, gain));
+            }
+        }
+    });
+}
+
 fn eq_slider(ui: &mut egui::Ui, palette: &Palette, label: &str, value: &mut f32, on: bool) -> bool {
     use egui::{Rect, Stroke, pos2, vec2};
     let range = crate::eq::RANGE_DB;

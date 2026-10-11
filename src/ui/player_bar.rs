@@ -1364,9 +1364,11 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
         (false, Some(x)) => x - 180.0,
         _ => screen.right() - (screen.width() * 0.5).min(560.0) - 14.0,
     };
-    let tab_now = ctx.data(|data| data.get_temp::<u8>(egui::Id::new("vis-menu-tab"))).unwrap_or(0).min(3);
+    let tab_now = ctx.data(|data| data.get_temp::<u8>(egui::Id::new("vis-menu-tab"))).unwrap_or(0).min(4);
     let two_wide = tab_now == 2 || (tab_now == 3 && (app.lyrics_fullscreen.is_some() || app.settings.vis_lyrics));
-    let natural_w = if tab_now == 0 {
+    let natural_w = if tab_now == 4 {
+        520.0
+    } else if tab_now == 0 {
         3.0 * vis_col_w(0.0) + 36.0 + 28.0
     } else if two_wide {
         2.0 * VIS_SINGLE_W + 18.0 + 28.0
@@ -1846,11 +1848,11 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
             // The settings sit in four tabs, one open at a time, so the
             // panel is only as big as what is in front of you.
             let tab_id = egui::Id::new("vis-menu-tab");
-            let tab: u8 = ui.ctx().data(|data| data.get_temp::<u8>(tab_id)).unwrap_or(0).min(3);
+            let tab: u8 = ui.ctx().data(|data| data.get_temp::<u8>(tab_id)).unwrap_or(0).min(4);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                for (index, label) in ["Shapes", "Bass and colour", "Title", "Lyrics"].iter().enumerate() {
-                    let width = [64.0, 104.0, 50.0, 58.0][index];
+                for (index, label) in ["Shapes", "Bass and colour", "Title", "Lyrics", "EQ"].iter().enumerate() {
+                    let width = [64.0, 104.0, 50.0, 58.0, 40.0][index];
                     if chip(ui, &palette, label, tab == index as u8, width).clicked() {
                         ui.ctx().data_mut(|data| data.insert_temp(tab_id, index as u8));
                     }
@@ -2251,7 +2253,7 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
             if chip_i(
                 ui,
                 &palette,
-                "Title sway",
+                "Title vibration",
                 !app.settings.vis_text_still,
                 ui.available_width().min(290.0),
             )
@@ -2272,21 +2274,7 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                 app.mark_settings_dirty();
             }
             {
-                let presets = crate::settings::Settings::SWAY_PRESETS;
-                let names: Vec<&str> = presets.iter().map(|preset| preset.name).collect();
-                let current = (app.settings.vis_sway as usize).min(names.len() - 1);
-                if let Some(index) = numbered_rows(
-                    ui,
-                    &palette,
-                    "SWAY STYLE",
-                    &[(Icon::Wind, 0..4), (Icon::Music, 4..9), (Icon::Wine, 9..12), (Icon::Zap, 12..15), (Icon::ArrowRight, 15..17), (Icon::Expand, 17..20), (Icon::Sparkles, 20..22)],
-                    &names,
-                    Some(current),
-                ) {
-                    app.actions.push(Action::SetVisSway(index as u8));
-                }
-                sway_preview(ui, &palette, app.settings.vis_sway_preset(), app.settings.vis_sway_strength());
-                theme::subtle(ui, &palette, &gettext(app.locale, "SWAY REACTS TO THE MUSIC"));
+                theme::subtle(ui, &palette, &gettext(app.locale, "VIBRATION REACTS TO THE MUSIC"));
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     if chip(ui, &palette, &gettext(app.locale, "On"), app.settings.vis_sway_beat, 60.0).clicked() {
@@ -2296,9 +2284,9 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     for (value, glyph, tip) in [
-                        (0u8, Glyph::Icon(Icon::Volume2), "Sways with the loudness"),
-                        (1, Glyph::Icon(Icon::Speaker), "Sways with the bass"),
-                        (2, Glyph::Icon(Icon::Zap), "Sways on the beat"),
+                        (0u8, Glyph::Icon(Icon::Volume2), "Vibrates with the loudness"),
+                        (1, Glyph::Icon(Icon::Speaker), "Vibrates with the bass"),
+                        (2, Glyph::Icon(Icon::Zap), "Vibrates on the beat"),
                     ] {
                         if glyph_button(ui, &palette, glyph, tip, app.settings.vis_sway_react.min(2) == value).clicked() {
                             app.actions.push(Action::SetSwayReact(value));
@@ -2316,7 +2304,7 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                 slider_row(
                     ui,
                     &palette,
-                    &gettext(app.locale, "Sway strength"),
+                    &gettext(app.locale, "Vibration strength"),
                     20.0..=300.0,
                     app.settings.vis_sway_strength() * 100.0,
                     |value| app.actions.push(Action::SetVisSwayAmount(value / 100.0)),
@@ -2479,6 +2467,9 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
             }); }); }
+            if tab == 4 {
+                super::settings::eq_panel(app, ui);
+            }
             };
             if tab != 0 {
                 if columns_fit {
@@ -3200,7 +3191,7 @@ fn chip(
 /// The little picture a menu option carries, when it has one.
 fn icon_for(label: &str) -> Option<Icon> {
     Some(match label {
-        "Title sway" => Icon::Wind,
+        "Title vibration" | "Title sway" => Icon::Wind,
         "Art border" => Icon::Square,
         "Sway on the beat only" => Icon::Zap,
         "Title outline" => Icon::Pencil,
@@ -4038,7 +4029,7 @@ fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying
         vec2(0.0, 0.0)
     } else {
         let reach = sway.amp * title_size * strength * punch;
-        vec2((time * 43.0).sin() * reach, (time * 37.0).cos() * reach)
+        vec2((time * 43.0).sin() * reach, (time * 37.0).cos() * reach - punch * 0.04 * title_size * strength)
     };
     let contrast = if ink == Color32::WHITE { Color32::BLACK } else { Color32::WHITE };
     let outline = !app.settings.vis_text_no_outline;

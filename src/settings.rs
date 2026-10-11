@@ -129,6 +129,8 @@ pub struct TrackColumns {
     /// zero is the standard width.
     pub cover_w: f32,
     pub length_w: f32,
+    /// How wide the song name column may grow (zero is the standard 460).
+    pub title_w: f32,
 }
 
 impl Default for TrackColumns {
@@ -156,6 +158,7 @@ impl Default for TrackColumns {
             hide_cover: false,
             cover_w: 0.0,
             length_w: 0.0,
+            title_w: 0.0,
         }
     }
 }
@@ -163,7 +166,13 @@ impl Default for TrackColumns {
 impl TrackColumns {
     /// How wide the cover column is (36 to 200).
     pub fn cover_width(&self) -> f32 {
-        if self.cover_w.is_finite() && self.cover_w > 0.0 { self.cover_w.clamp(36.0, 200.0) } else { 52.0 }
+        // The cover picture is a fixed square: it is never resized.
+        52.0
+    }
+
+    /// The widest the song name column gets (200 to 1400).
+    pub fn title_cap(&self) -> f32 {
+        if self.title_w.is_finite() && self.title_w > 0.0 { self.title_w.clamp(200.0, 1400.0) } else { 460.0 }
     }
 
     /// How wide the length column is (44 to 200).
@@ -1750,7 +1759,9 @@ impl Settings {
 
     /// The chosen sway preset.
     pub fn vis_sway_preset(&self) -> SwayPreset {
-        Self::SWAY_PRESETS[(self.vis_sway as usize).min(Self::SWAY_PRESETS.len() - 1)]
+        // The title stays where it is and only vibrates with the music (the old
+        // sway styles are gone), a little more or less by the strength slider.
+        SwayPreset { name: "Vibration", lean: 0.0, speed: 1.0, bass: 1.0, bob: 0.0, stalk: 0.0, kind: 4, amp: 0.07 }
     }
 
     /// Ready-made sways for the full-screen title: a name, how far a line

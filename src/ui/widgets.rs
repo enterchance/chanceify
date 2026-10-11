@@ -1937,10 +1937,11 @@ pub(crate) fn spread_columns(laid: &mut Columns, region: f32) {
 /// too narrow to have room to spare.
 fn centred_shift(room: f32, others: f32, columns: &crate::settings::TrackColumns) -> f32 {
     let title = room - others;
-    if columns.lock_left || (columns.spread && others > 0.0) || title <= 460.0 {
+    let cap = columns.title_cap();
+    if columns.lock_left || (columns.spread && others > 0.0) || title <= cap {
         0.0
     } else {
-        (title - 460.0) / 2.0
+        (title - cap) / 2.0
     }
 }
 
@@ -2004,6 +2005,16 @@ fn columns(
     // hides the length (the queue panel, on request) must give that width
     // back, or the columns are placed as though it were there and a gap the
     // width of a time is left at the right end of every row.
+    // Queue-style rows keep their own plain sizes: the song list's cover and
+    // length choices are not theirs.
+    let mut plain = *settings;
+    if bare {
+        plain.cover_w = 0.0;
+        plain.length_w = 0.0;
+        plain.hide_cover = false;
+        plain.title_w = 0.0;
+    }
+    let settings = &plain;
     let freed = if row.show_time {
         0.0
     } else if row.compact {
@@ -3520,9 +3531,13 @@ fn column_divider(
             // takes its handle with it, and there is then no way to drag it
             // back — the divider used to get stuck there for good.
             let width = match column {
-                crate::model::SortColumn::AddedBy => {
-                    columns.cover_w = (columns.cover_width() + sign).clamp(36.0, 200.0);
-                    columns.cover_w
+                crate::model::SortColumn::Title => {
+                    // The song name's left edge: the table sits in the middle
+                    // and grows from there, so twice the pointer's travel
+                    // keeps the edge under it.
+                    let factor = if columns.lock_left { 1.0 } else { 2.0 };
+                    columns.title_w = (columns.title_cap() + sign * factor).clamp(200.0, 1400.0);
+                    columns.title_w
                 }
                 crate::model::SortColumn::Duration => {
                     columns.length_w = (columns.length_width() + sign).clamp(44.0, 200.0);
@@ -3536,7 +3551,7 @@ fn column_divider(
             };
             // Shift held: every shown column takes the same width.
             if ui.input(|input| input.modifiers.shift)
-                && !matches!(column, crate::model::SortColumn::AddedBy | crate::model::SortColumn::Duration)
+                && !matches!(column, crate::model::SortColumn::Title | crate::model::SortColumn::Duration)
             {
                 use crate::model::SortColumn;
                 for other in [
@@ -3555,7 +3570,7 @@ fn column_divider(
     }
     if response.double_clicked() {
         match column {
-            crate::model::SortColumn::AddedBy => columns.cover_w = 0.0,
+            crate::model::SortColumn::Title => columns.title_w = 0.0,
             crate::model::SortColumn::Duration => columns.length_w = 0.0,
             _ => columns.set(column, crate::settings::TrackColumns::default_width(column)),
         }
@@ -3775,13 +3790,10 @@ pub fn table_header(
         heading(ui, x + 18.0, "#", SortColumn::Index, 44.0, None, natural.then_some(true), &mut anchors);
         x += 44.0;
     }
-    let mut cover_edge: Option<f32> = None;
     if show_cover && cover_embedded.is_none() {
         // The cover's handle: drag it to move the cover among the columns.
         heading(ui, x + 14.0, "cover", SortColumn::AddedBy, cover_w, Some(Icon::Disc), None, &mut anchors);
         x += cover_w;
-        // Dragging the cover's right edge resizes it.
-        cover_edge = Some(x);
     }
     if columns.spread {
         spread_columns(&mut laid, rect.right() - right_fixed - x - embedded_w);
@@ -3800,9 +3812,6 @@ pub fn table_header(
     let title_at = slots.iter().position(|(c, _, _)| *c == SortColumn::Title);
     // (edge, column, whether dragging right makes the column wider)
     let mut edges: Vec<(f32, SortColumn, bool)> = Vec::new();
-    if let Some(at) = cover_edge {
-        edges.push((at, SortColumn::AddedBy, true));
-    }
     if show_length && length_embedded.is_none() {
         edges.push((rect.right() - shift - 8.0 - length_w, SortColumn::Duration, false));
     }
@@ -3817,10 +3826,13 @@ pub fn table_header(
             } else {
                 heading(ui, at + 14.0, "cover", SortColumn::AddedBy, *room, Some(Icon::Disc), None, &mut anchors);
             }
-            // Resized from the edge the title gives way at.
-            match title_at {
-                Some(title) if index < title => edges.push((at + room, *column, true)),
-                _ => edges.push((*at - 7.0, *column, false)),
+            // Only the length is resized (from the edge the title gives way
+            // at); the cover picture is a fixed square.
+            if *column == SortColumn::Duration {
+                match title_at {
+                    Some(title) if index < title => edges.push((at + room, *column, true)),
+                    _ => edges.push((*at - 7.0, *column, false)),
+                }
             }
             continue;
         }
@@ -3834,6 +3846,10 @@ pub fn table_header(
         };
         let room = if *column == SortColumn::Title { f32::INFINITY } else { *room };
         heading(ui, *at, &label, *column, room, None, None, &mut anchors);
+        if *column == SortColumn::Title {
+            // The song name's own handle, on its left edge.
+            edges.push((*at - 7.0, SortColumn::Title, false));
+        }
         if *column != SortColumn::Title {
             // The title gives way to its neighbours: a column after it is
             // resized from its left edge, one before it from its right edge.
@@ -4298,23 +4314,32 @@ pub fn thin_slider_scaled(
     let scale = scale.clamp(0.7, 2.5);
     let (_, rect) = ui.allocate_space(vec2(width, 26.0 * scale));
     let response = ui.interact(rect, id, Sense::click_and_drag());
+    // Where the bar really is, for anything that needs to turn a pointer
+    // position into a value (the pop-out controls' right-click and
+    // double-click).
+    ui.data_mut(|data| data.insert_temp(id.with("rect"), rect));
+    // In the pop-out controls a press or a drag on the bar only moves the
+    // panel: the bar answers a right-click or a double-click instead.
+    let locked = ui.data(|data| data.get_temp::<bool>(egui::Id::new("sliders-locked"))).unwrap_or(false);
     let dragging_value = ui.data(|data| data.get_temp::<f32>(id));
     let pointer_value = response
         .interact_pointer_pos()
         .map(|pos| ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0));
     let mut event = SliderEvent::None;
     // Preview on press, before egui's click-or-drag movement threshold.
-    if (response.is_pointer_button_down_on() || response.drag_started() || response.dragged())
+    if !locked
+        && (response.is_pointer_button_down_on() || response.drag_started() || response.dragged())
         && let Some(v) = pointer_value
     {
         ui.data_mut(|data| data.insert_temp(id, v));
         event = SliderEvent::Dragging(v);
     }
-    if response.drag_stopped() {
+    if !locked && response.drag_stopped() {
         let v = dragging_value.or(pointer_value).unwrap_or(value);
         ui.data_mut(|data| data.remove::<f32>(id));
         event = SliderEvent::Committed(v);
-    } else if response.clicked()
+    } else if !locked
+        && response.clicked()
         && let Some(v) = pointer_value
     {
         ui.data_mut(|data| data.remove::<f32>(id));
@@ -4322,6 +4347,7 @@ pub fn thin_slider_scaled(
     }
     if let Some(step) = wheel_step
         && response.enabled()
+        && !locked
     {
         let notches = wheel_notches(ui, &response);
         if notches != 0 {

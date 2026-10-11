@@ -1338,6 +1338,9 @@ pub(super) fn controls_box_inner(app: &mut App, ui: &mut egui::Ui, top_left: egu
     );
     // The song-length bar always fills the panel, however wide it is made.
     ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("popout-full-seek"), true));
+    // A press or drag on the song bar or the volume bar moves the panel; a
+    // right-click or a double-click is what sets them (below).
+    ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("sliders-locked"), true));
     let before_seek = app.actions.len();
     super::player_bar::transport(
         app,
@@ -1368,67 +1371,46 @@ pub(super) fn controls_box_inner(app: &mut App, ui: &mut egui::Ui, top_left: egu
         let row = Rect::from_min_size(pos2(volume_left, block_top), vec2(volume_row.width(), chips_h));
         super::player_bar::popout_presets(app, ui, row, &presets);
     }
-    // The bars need a double-click before they answer: a single press on
-    // one only moves the panel, so a slip while dragging never seeks or
-    // changes the volume.
+    ui.ctx().data_mut(|data| data.remove::<bool>(egui::Id::new("sliders-locked")));
+    let _ = (before_seek, before_volume);
+    // The song bar and the volume bar only answer a right-click or a
+    // double-click, which jump straight to the spot; a press and drag on
+    // either one moves the panel, so a slip never seeks or changes the volume.
     let ctx = ui.ctx().clone();
     let bars = [seek_row.expand2(vec2(0.0, 4.0)), volume_row.expand2(vec2(6.0, 4.0))];
-    let armed_id = egui::Id::new("popout-bar-armed");
-    let (double, down, pos, origin, delta, t) = ctx.input(|input| {
+    let (double, right, down, pos, origin, delta) = ctx.input(|input| {
         (
             input.pointer.button_double_clicked(egui::PointerButton::Primary),
+            input.pointer.button_clicked(egui::PointerButton::Secondary),
             input.pointer.primary_down(),
             input.pointer.interact_pos(),
             input.pointer.press_origin(),
             input.pointer.delta(),
-            input.time,
         )
     });
-    let mut armed: Option<(usize, f64)> = ctx.data(|data| data.get_temp(armed_id));
-    if double
+    if (double || right)
         && let Some(p) = pos
         && let Some(i) = bars.iter().position(|bar| bar.contains(p))
     {
-        armed = Some((i, t));
-    }
-    if let Some((i, at)) = armed {
-        // Held while it is being used; otherwise it lapses after a few seconds.
-        let using = down && pos.is_some_and(|p| bars[i].contains(p));
-        if using {
-            armed = Some((i, t));
-        } else if t - at > 4.0 {
-            armed = None;
-        }
-    }
-    ctx.data_mut(|data| {
-        match armed {
-            Some(value) => {
-                data.insert_temp(armed_id, value);
-            }
-            None => data.remove::<(usize, f64)>(armed_id),
-        }
-    });
-    let mut bar_drag = egui::Vec2::ZERO;
-    for (i, bar) in bars.iter().enumerate() {
-        let touched = pos.is_some_and(|p| bar.contains(p)) || origin.is_some_and(|p| bar.contains(p) && down);
-        if touched && armed.map(|(a, _)| a) != Some(i) {
-            let from = if i == 0 { before_seek } else { before_volume };
-            let mut index = from;
-            while index < app.actions.len() {
-                if matches!(app.actions[index], Action::Seek(_) | Action::SetVolume(_) | Action::PreviewVolume(_)) {
-                    app.actions.remove(index);
-                } else {
-                    index += 1;
-                }
-            }
+        let slider_id = if i == 0 { "seek-slider" } else { "volume-slider" };
+        let rect = ctx.data(|data| data.get_temp::<Rect>(egui::Id::new(slider_id).with("rect")));
+        if let Some(rect) = rect.filter(|rect| rect.width() > 1.0) {
+            let value = ((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
             if i == 0 {
-                app.seek_preview = None;
+                if now.duration_ms > 0 {
+                    app.seek_preview = None;
+                    app.actions.push(Action::Seek((value * now.duration_ms as f32) as u32));
+                }
             } else {
                 app.volume_preview = None;
+                app.actions.push(Action::SetVolume((value * 100.0).round() as u8));
             }
-            if down && origin.is_some_and(|p| bar.contains(p)) {
-                bar_drag += delta;
-            }
+        }
+    }
+    let mut bar_drag = egui::Vec2::ZERO;
+    for bar in &bars {
+        if down && origin.is_some_and(|p| bar.contains(p)) {
+            bar_drag += delta;
         }
     }
     ctx.data_mut(|data| data.insert_temp(egui::Id::new("popout-bar-drag"), bar_drag));
