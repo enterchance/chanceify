@@ -1,13 +1,14 @@
 [package]
 name = "chanceify"
 default-run = "chanceify"
-version = "0.88.0"
+version = "0.91.72"
 edition = "2024"
 rust-version = "1.98"
 license = "AGPL-3.0-only"
-description = "music reimagined ."
+description = "chanceify™ - music reimagined"
 repository = "https://github.com/madlygeeked/chanceify"
-keywords = ["spotify", "music", "egui", "librespot", "player"]
+homepage = "https://madlygeeked.github.io/chanceify/"
+keywords = ["spotify", "music", "librespot", "lyrics", "visualizer"]
 categories = ["multimedia::audio"]
 
 [lib]
@@ -61,35 +62,13 @@ fastframe-shell = { git = "https://github.com/crmne/fastframe", tag = "v0.2.1" }
 fastframe-macos = { git = "https://github.com/crmne/fastframe", tag = "v0.2.1" }
 # Self-update from GitHub releases, on the reqwest client below.
 fastframe-update = { git = "https://github.com/crmne/fastframe", tag = "v0.2.1", features = ["reqwest"] }
-# Reading installed fonts for MilkDrop's overlays, the Winamp playlist's
-# pixel text, and the playlist face. skrifa is the parser epaint already
-# rasterizes with, and the version has to track epaint's or the binary
-# compiles two copies of it; memmap2 keeps the search for the playlist face
-# to the few pages of each font that name it. fastframe-fonts uses both.
-skrifa = "0.44"
-memmap2 = "0.9"
-# bmp is for Winamp skins, whose bitmaps are BMP files.
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "bmp"] }
-# Inflating the zip a Winamp skin comes as (src/skin/zip.rs). Already
-# compiled for reqwest's gzip support, so this adds no code to the build.
-flate2 = "1"
-# Filling glyph outlines with no anti-aliasing for the Winamp playlist's
-# text (src/ui/winamp/pixel_text.rs). Already compiled for the SVG icons
-# through egui_extras and resvg, so this adds no code to the build.
+# Decoding cover art: JPEG and PNG.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+# Filling glyph outlines for the Windows taskbar thumbnail buttons
+# (src/thumbbar.rs). Already compiled for the SVG icons through egui_extras
+# and resvg, so this adds no code to the build.
 tiny-skia = "0.11"
-# MilkDrop, as libprojectM reimplements it, for the MilkDrop window
-# (src/milkdrop.rs). Built into the binary, so it stays one file.
-projectm-sys = { version = "1.2.2", default-features = false, features = ["static"], optional = true }
-# The MilkDrop window runs as a child process with its own winit event loop
-# and OpenGL context (src/milkdrop/child.rs), because winit allows one event
-# loop per process and eframe owns the app's. These are the same versions
-# eframe already pulls in, so they add no build. Only compiled with the
-# milkdrop feature.
-winit = { version = "0.30", optional = true }
-glutin = { version = "0.32", optional = true }
-glutin-winit = { version = "0.5", optional = true }
-# Detect the live window backend, including when MilkDrop is disabled.
-# eframe already compiles this crate.
+# Detect the live window backend. eframe already compiles this crate.
 raw-window-handle = "0.6"
 # Spotify playback and Connect. rustls everywhere so the client links one TLS
 # stack and builds without OpenSSL on every platform.
@@ -166,7 +145,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 [target.'cfg(windows)'.dependencies]
 windows-native-keyring-store = { version = "1.1", default-features = false }
 # A hidden window for the media controls to belong to, and message loops.
-windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Accessibility", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_System_ProcessStatus", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Accessibility", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Reuses the zbus/Tokio stack already used for desktop integration.
@@ -199,17 +178,13 @@ tokio = { version = "1", features = ["test-util"] }
 winresource = "0.1"
 
 [features]
-default = ["milkdrop"]
+default = []
 # Sample data and screenshot flags; never part of a release build.
 demo = []
 # Keeps the console window on Windows, for `println!` and `dbg!` while
 # working on it. Off by default, and off in every release: a reader who
 # starts the app should get one window, not a window and a terminal.
 console = []
-# MilkDrop, through libprojectM: a C++ library that CMake builds into the
-# binary at compile time, so building needs cmake, a C++ compiler, and
-# libclang. `--no-default-features` leaves it out.
-milkdrop = ["dep:projectm-sys", "dep:winit", "dep:glutin", "dep:glutin-winit"]
 
 [profile.release]
 lto = "thin"
@@ -234,13 +209,6 @@ incremental = true
 # application crate itself stays incremental.
 [profile.dev.package."*"]
 opt-level = 2
-
-# projectm-sys names the library it links after Rust's profile (a `d` suffix
-# for dev) but CMake names what it builds after the optimisation level, so an
-# optimised dev build would look for a library that was never made. A debug
-# build of libprojectM is fine to develop against; releases are optimised.
-[profile.dev.package.projectm-sys]
-opt-level = 0
 
 [patch.crates-io]
 # crmne/egui apps-0.36, shared with ZapFast, RekordFlash and TonePush: egui
@@ -270,10 +238,6 @@ epaint_default_fonts = { git = "https://github.com/crmne/egui", rev = "0b431145c
 # the clipboard from egui's (#614). eframe from the fork above calls the
 # Occluded API. Move both forks together with the other apps.
 winit = { git = "https://github.com/crmne/winit", rev = "544a73716c7a54c916d97d6c86c0b1bdaa81234e" }
-# projectm-sys 1.2.2 hardcodes the Visual Studio 17 2022 CMake generator,
-# which GitHub's windows-latest images no longer carry; the fork lets an
-# explicit CMAKE_GENERATOR win. Drop when upstream takes the change.
-projectm-sys = { git = "https://github.com/crmne/projectm-rs", branch = "respect-cmake-generator" }
 # hyper-proxy2's unreleased rustls 0.23 update plus our upstream provider
 # compatibility fix. Drop this fork when a release includes both changes.
 hyper-proxy2 = { git = "https://github.com/crmne/hyper-proxy2", rev = "efca4811371ddae81c06be168de54194938d70b1" }

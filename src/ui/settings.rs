@@ -68,7 +68,7 @@ impl<'a> RowText<'a> {
 }
 
 /// The guide to writing a palette file for the themes folder.
-const THEMES_GUIDE_URL: &str = "https://madlygeeked.github.io/chanceify/settings-and-files/#custom-themes";
+const THEMES_GUIDE_URL: &str = "https://madlygeeked.github.io/chanceify/#make-a-theme";
 
 fn section_matches(needle: &str, title: &str, rows: &[RowText<'_>]) -> bool {
     let needle = needle.trim().to_lowercase();
@@ -187,11 +187,11 @@ const TABS: [&str; 6] = ["Accounts", "Playback", "Look", "Library", "Network", "
 fn tab_of(title: &str) -> Option<u8> {
     let title = title.to_lowercase();
     let has = |words: &[&str]| words.iter().any(|word| title.contains(word));
-    if has(&["account", "last.fm"]) {
+    if has(&["account", "last.fm", "discord"]) {
         Some(0)
     } else if has(&["playback", "equalizer"]) {
         Some(1)
-    } else if has(&["appearance", "skins", "milkdrop"]) {
+    } else if has(&["appearance", "song lists", "gradient"]) {
         Some(2)
     } else if has(&["storage", "unavailable"]) {
         Some(3)
@@ -224,7 +224,38 @@ fn section(
         return;
     }
     ui.add_space(10.0);
-    theme::text(ui, crate::i18n::ui_text(title), theme::bold(18.0), palette.text);
+    // A heading that folds the section away; which ones are folded is kept.
+    let closed_id = egui::Id::new("settings-closed");
+    let mut closed: Vec<String> = ui.data(|data| data.get_temp(closed_id)).unwrap_or_default();
+    let is_closed = !searching && closed.iter().any(|name| name == title);
+    let head = ui
+        .horizontal(|ui| {
+            let (slot, _) = ui.allocate_exact_size(egui::vec2(20.0, 24.0), egui::Sense::hover());
+            theme::paint_icon(
+                ui,
+                if is_closed { Icon::ChevronRight } else { Icon::ChevronDown },
+                slot,
+                16.0,
+                palette.secondary,
+            );
+            theme::text(ui, crate::i18n::ui_text(title), theme::bold(18.0), palette.text);
+        })
+        .response;
+    let head_click = ui
+        .interact(head.rect, egui::Id::new(("settings-head", title)), egui::Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    if head_click.clicked() && !searching {
+        if is_closed {
+            closed.retain(|name| name != title);
+        } else {
+            closed.push(title.to_string());
+        }
+        ui.data_mut(|data| data.insert_temp(closed_id, closed));
+    }
+    if is_closed {
+        ui.add_space(6.0);
+        return;
+    }
     ui.add_space(8.0);
     Frame::new()
         .fill(
@@ -243,6 +274,21 @@ fn section(
 }
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
+    // Which sections are folded away is remembered between launches.
+    let closed_id = egui::Id::new("settings-closed");
+    if ui.data(|data| data.get_temp::<Vec<String>>(closed_id)).is_none() {
+        let saved = app.settings.settings_closed.clone();
+        ui.data_mut(|data| data.insert_temp(closed_id, saved));
+    }
+    show_inner(app, ui);
+    let now: Vec<String> = ui.data(|data| data.get_temp(closed_id)).unwrap_or_default();
+    if now != app.settings.settings_closed {
+        app.settings.settings_closed = now;
+        app.mark_settings_dirty();
+    }
+}
+
+fn show_inner(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let locale = app.locale;
     ui.add_space(8.0);
@@ -444,7 +490,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     .clicked()
                 {
                     app.actions.push(Action::OpenUrl(
-                        "https://madlygeeked.github.io/chanceify/make-it-even-faster/#make-a-spotify-app".into(),
+                        "https://madlygeeked.github.io/chanceify/#setup".into(),
                     ));
                 }
             });
@@ -899,6 +945,16 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if section_matches(&needle, &appearance, &appearance_rows) {
         any_visible = true;
         section(ui, &palette, &appearance, |ui| {
+            filtered_row(
+                ui,
+                &palette,
+                &needle,
+                &appearance,
+                &appearance_rows[1],
+                |ui| {
+                    ui.horizontal(|ui| language_picker(app, ui));
+                },
+            );
             // Wide enough for the theme's two buttons side by side.
             let theme_buttons_width = theme::soft_button_width(ui, &theme_guide)
                 + theme::soft_button_width(ui, &themes_folder)
@@ -950,22 +1006,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                                 app.actions.push(Action::SettingsChanged);
                             }
                         }
-                        let mut from_cover = app.settings.theme_from_cover;
-                        ui.horizontal(|ui| {
-                            theme::text(
-                                ui,
-                                "Match the theme to the album cover",
-                                theme::regular(13.0),
-                                palette.secondary,
-                            );
-                            if widgets::switch(ui, &palette, "Match the theme to the album cover", &mut from_cover)
-                                .changed()
-                            {
-                                app.settings.theme_from_cover = from_cover;
-                                app.settings.accent_from_art = from_cover;
-                                app.actions.push(Action::SettingsChanged);
-                            }
-                        });
                         let mut solid = app.settings.window_solidity() * 100.0;
                         ui.horizontal(|ui| {
                             theme::text(ui, "See-through window (works with every theme: 100% solid, 50% like frosted glass)", theme::regular(13.0), palette.secondary);
@@ -1019,14 +1059,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         }
                     });
                 },
-            );
-            filtered_row(
-                ui,
-                &palette,
-                &needle,
-                &appearance,
-                &appearance_rows[1],
-                |ui| language_picker(app, ui),
             );
             if cfg!(target_os = "linux") {
                 filtered_row(
@@ -1122,437 +1154,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         });
     }
 
-    let skins_folder = app.dirs.skins_dir();
-    app.winamp.refresh_choices(&skins_folder);
-    let skins = gettext(locale, "Winamp skins");
-    let always_on_top = gettext(locale, "Always on top");
-    let show_in_taskbar = gettext(locale, "Show Winamp in taskbar");
-    let skins_rows = [
-        RowText::new(
-            gettext(locale, "Mini player"),
-            super::keys::platform_shortcut(
-                &gettext(
-                    locale,
-                    "Use classic Winamp .wsz skins. Press Ctrl+M or click the skin logo to return. Drop a skin on either window to add it.",
-                ),
-                &gettext(
-                    locale,
-                    "Use classic Winamp .wsz skins. Press Cmd+Shift+M or click the skin logo to return. Drop a skin on either window to add it.",
-                ),
-            )
-            .to_owned(),
-        ),
-        RowText::new(
-            gettext(locale, "Skin"),
-            gettext(
-                locale,
-                // Translators: {folder} is the path of the skins folder.
-                "Installed skins are in {folder}. Find more at the Winamp Skin Museum.",
-            )
-            .replace("{folder}", &skins_folder.display().to_string()),
-        ),
-        RowText::new(
-            gettext(locale, "Size"),
-            gettext(locale, "Whole-number scaling keeps skin pixels sharp."),
-        ),
-        RowText::new(
-            always_on_top.clone(),
-            if app.window_level_supported {
-                gettext(locale, "Keep the Winamp window above everything else.")
-            } else {
-                crate::window::on_top_unavailable(locale)
-            },
-        ),
-        RowText::new(
-            gettext(locale, "Show in taskbar"),
-            gettext(
-                locale,
-                "Keep a taskbar button for the mini player. The tray icon stays available when hidden.",
-            ),
-        )
-        .when(app.taskbar_setting_visible()),
-        RowText::new(
-            gettext(locale, "Installed skins"),
-            app.winamp
-                .choices
-                .iter()
-                .map(|choice| choice.name.as_str())
-                .collect::<Vec<_>>()
-                .join(" "),
-        ),
-    ];
-    if false && section_matches(&needle, &skins, &skins_rows) {
-        any_visible = true;
-        section(ui, &palette, &skins, |ui| {
-            filtered_row(ui, &palette, &needle, &skins, &skins_rows[0], |ui| {
-                if theme::pill_button(ui, &palette, &gettext(locale, "Switch to it"), true)
-                    .clicked()
-                {
-                    app.actions.push(Action::ToggleWinampWindow);
-                }
-            });
-            filtered_row(ui, &palette, &needle, &skins, &skins_rows[1], |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    if theme::soft_button(
-                        ui,
-                        &palette,
-                        Some(Icon::Globe),
-                        &gettext(locale, "Skin Museum"),
-                        false,
-                    )
-                    .clicked()
-                    {
-                        app.actions
-                            .push(Action::OpenUrl("https://skins.webamp.org/".into()));
-                    }
-                    if theme::soft_button(
-                        ui,
-                        &palette,
-                        Some(Icon::ExternalLink),
-                        &open_folder,
-                        false,
-                    )
-                    .clicked()
-                    {
-                        app.actions.push(Action::OpenSkinsFolder);
-                    }
-                });
-            });
-            let choices = app.winamp.choices.clone();
-            if skins_rows[1].matches(&needle, &skins) || skins_rows[5].matches(&needle, &skins) {
-                // Random comes first; it picks among the others each time
-                // the mini player opens.
-                const RANDOM: usize = usize::MAX;
-                let random = gettext(locale, "Random");
-                let mut options: Vec<(usize, &str)> = vec![(RANDOM, &random), (0, crate::build_info::DISPLAY_NAME)];
-                options.extend(
-                    choices
-                        .iter()
-                        .enumerate()
-                        .map(|(index, choice)| (index + 1, choice.label())),
-                );
-                let showing = app
-                    .settings
-                    .skin
-                    .as_deref()
-                    .and_then(|name| choices.iter().position(|choice| choice.name == name))
-                    .map_or(0, |index| index + 1);
-                let current = if app.settings.random_skin {
-                    RANDOM
-                } else {
-                    showing
-                };
-                if let Some(picked) = widgets::chips(ui, &palette, &options, current)
-                    && picked != current
-                {
-                    if picked == RANDOM {
-                        app.actions.push(Action::SetRandomSkin(true));
-                    } else {
-                        let name = picked
-                            .checked_sub(1)
-                            .map(|index| choices[index].name.clone());
-                        app.actions.push(Action::SetSkin(name));
-                    }
-                }
-                if app.settings.random_skin {
-                    let label = options
-                        .iter()
-                        .find(|(value, _)| *value == showing)
-                        .map_or(crate::build_info::DISPLAY_NAME, |(_, label)| label);
-                    theme::subtle(
-                        ui,
-                        &palette,
-                        &gettext(locale, "Now showing {skin}. Another one is picked each time the mini player opens.")
-                            .replace("{skin}", label),
-                    );
-                }
-                ui.add_space(4.0);
-            }
-            filtered_row(ui, &palette, &needle, &skins, &skins_rows[2], |ui| {
-                let scale =
-                    crate::winamp::WinampState::scale(&app.settings, ui.ctx().pixels_per_point());
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    for candidate in 1..=crate::winamp::MAX_SCALE {
-                        let label = format!("{candidate}x");
-                        if theme::soft_button(ui, &palette, None, &label, candidate == scale)
-                            .clicked()
-                            && candidate != scale
-                        {
-                            app.actions.push(Action::SetSkinScale(candidate as u8));
-                        }
-                    }
-                });
-            });
-            filtered_row(ui, &palette, &needle, &skins, &skins_rows[3], |ui| {
-                ui.add_enabled_ui(app.window_level_supported, |ui| {
-                    let mut on_top = app.settings.winamp_on_top && app.window_level_supported;
-                    if widgets::switch(ui, &palette, &always_on_top, &mut on_top).changed() {
-                        app.actions.push(Action::ToggleWinampOnTop);
-                    }
-                });
-            });
-            if app.taskbar_setting_visible() {
-                filtered_row(ui, &palette, &needle, &skins, &skins_rows[4], |ui| {
-                    let mut visible = app.settings.winamp_show_taskbar;
-                    let response = widgets::switch(ui, &palette, &show_in_taskbar, &mut visible);
-                    if response.changed() {
-                        app.actions.push(Action::SetWinampTaskbar(visible));
-                    }
-                    #[cfg(any(test, feature = "demo"))]
-                    if app.demo_windows_controls {
-                        let id = egui::Id::new("demo-winamp-taskbar-focus");
-                        if !ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false) {
-                            response.scroll_to_me(Some(Align::Center));
-                            ui.data_mut(|data| data.insert_temp(id, true));
-                        }
-                    }
-                });
-            }
-        });
-    }
-
-    let presets_folder = app.dirs.milkdrop_dir();
-    app.winamp.presets.refresh(&presets_folder);
-    let count = app.winamp.presets.count();
-    let screen_hz = app.settings.milkdrop_screen_hz;
-    let milkdrop_window = gettext(locale, "MilkDrop window");
-    let folder = presets_folder.display().to_string();
-    let milkdrop_rows = [
-        RowText::new(
-            milkdrop_window.clone(),
-            super::keys::platform_shortcut(
-                &gettext(
-                    locale,
-                    "A projectM visualiser for local playback. Open it here, from the top bar, with Ctrl+Shift+K, or from the mini player's V menu. Press ? or F1 for its shortcuts.",
-                ),
-                &gettext(
-                    locale,
-                    "A projectM visualiser for local playback. Open it here, from the top bar, with Cmd+Shift+K, or from the mini player's V menu. Press ? or F1 for its shortcuts.",
-                ),
-            )
-            .to_owned(),
-        ),
-        RowText::new(
-            gettext(locale, "Presets"),
-            match count {
-                0 => gettext(
-                    locale,
-                    // Translators: {folder} is the path of the MilkDrop presets folder.
-                    "None yet in {folder}. Add .milk files here. chanceify™ downloads presets when MilkDrop first opens with an empty folder.",
-                )
-                .replace("{folder}", &folder),
-                1 => gettext(
-                    locale,
-                    // Translators: {folder} is the path of the MilkDrop presets folder.
-                    "One preset in {folder}. Add .milk files here. chanceify™ downloads presets when MilkDrop first opens with an empty folder.",
-                )
-                .replace("{folder}", &folder),
-                n => ngettext(
-                    locale,
-                    // Translators: {count} is the number of presets, {folder} the path of the MilkDrop presets folder.
-                    "{count} preset in {folder}. Add .milk files here. chanceify™ downloads presets when MilkDrop first opens with an empty folder.",
-                    "{count} presets in {folder}. Add .milk files here. chanceify™ downloads presets when MilkDrop first opens with an empty folder.",
-                    u32::try_from(n).unwrap_or(u32::MAX),
-                )
-                .replace("{count}", &n.to_string())
-                .replace("{folder}", &folder),
-            },
-        ),
-        RowText::new(
-            gettext(locale, "Time per preset"),
-            gettext(
-                locale,
-                "How long each preset plays before the next fades in.",
-            ),
-        ),
-        RowText::new(
-            gettext(locale, "Frame rate"),
-            match screen_hz {
-                0 => gettext(
-                    locale,
-                    "Lower rates use fewer resources. Uncapped draws as fast as possible.",
-                ),
-                hz => gettext(
-                    locale,
-                    // Translators: {hz} is the screen's refresh rate in hertz.
-                    "Your screen refreshes at {hz} Hz. Higher rates do not add visible frames. Uncapped draws as fast as possible.",
-                )
-                .replace("{hz}", &hz.to_string())
-                .into(),
-            },
-        ),
-        RowText::new(
-            gettext(locale, "Resolution"),
-            gettext(
-                locale,
-                "Half and Quarter use fewer resources and scale the image back up.",
-            ),
-        ),
-        RowText::new(
-            format!(
-                "{} {}",
-                // Translators: search keywords for the MilkDrop preset download buttons.
-                gettext(locale, "Get presets"),
-                open_folder
-            ),
-            crate::milkdrop::PACKS
-                .iter()
-                .map(|pack| pack.name)
-                .collect::<Vec<_>>()
-                .join(" "),
-        ),
-    ];
-    if false && section_matches(&needle, "MilkDrop", &milkdrop_rows) {
-        any_visible = true;
-        section(ui, &palette, "MilkDrop", |ui| {
-            filtered_row(ui, &palette, &needle, "MilkDrop", &milkdrop_rows[0], |ui| {
-                let mut open = app.settings.milkdrop_open;
-                if widgets::switch(ui, &palette, &milkdrop_window, &mut open).changed() {
-                    app.actions.push(Action::ToggleWinampMilkdrop);
-                }
-            });
-            let downloading = app.winamp.presets.downloading();
-            filtered_row(
-                ui,
-                &palette,
-                &needle,
-                "MilkDrop",
-                &milkdrop_rows[1],
-                |_ui| {},
-            );
-            // Three buttons are wider than a row's control slot; they get a
-            // line of their own under the words.
-            if milkdrop_rows[1].matches(&needle, "MilkDrop")
-                || milkdrop_rows[5].matches(&needle, "MilkDrop")
-            {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    for (index, pack) in crate::milkdrop::PACKS.iter().enumerate() {
-                        let label = match downloading {
-                            Some(name) if name == pack.name => {
-                                gettext(locale, "Fetching...").into_owned()
-                            }
-                            // Translators: {pack} is the name of a MilkDrop preset pack.
-                            _ => gettext(locale, "Get {pack}").replace("{pack}", pack.name),
-                        };
-                        if theme::soft_button(ui, &palette, Some(Icon::Globe), &label, false)
-                            .on_hover_text(pack.note)
-                            .clicked()
-                            && downloading.is_none()
-                        {
-                            app.actions.push(Action::DownloadMilkdropPack(index));
-                        }
-                    }
-                    if theme::soft_button(
-                        ui,
-                        &palette,
-                        Some(Icon::ExternalLink),
-                        &open_folder,
-                        false,
-                    )
-                    .clicked()
-                    {
-                        app.actions.push(Action::OpenMilkdropFolder);
-                    }
-                });
-                ui.add_space(10.0);
-            }
-            filtered_row(ui, &palette, &needle, "MilkDrop", &milkdrop_rows[2], |ui| {
-                let mut seconds = app.settings.milkdrop_seconds.clamp(2, 300);
-                let changed = setting_slider(
-                    ui,
-                    &palette,
-                    &mut seconds,
-                    2..=300,
-                    |slider| slider.logarithmic(true),
-                    |value| value.suffix(" s"),
-                )
-                .changed();
-                if changed {
-                    app.actions.push(Action::SetMilkdropSeconds(seconds));
-                }
-            });
-            filtered_row(ui, &palette, &needle, "MilkDrop", &milkdrop_rows[3], |ui| {
-                let fps = app.settings.milkdrop_fps;
-                // The dial stops at the rates worth having and passes
-                // through nothing in between, the way a gear lever does.
-                let stops = crate::milkdrop::fps_stops(screen_hz, fps);
-                let last = stops.len().saturating_sub(1);
-                let mut at = stops.iter().position(|rate| *rate == fps).unwrap_or(1);
-                let labels: Vec<String> = stops
-                    .iter()
-                    .map(|rate| crate::milkdrop::fps_label(locale, *rate, screen_hz))
-                    .collect();
-                let shown = labels.clone();
-                let typed = stops.clone();
-                let changed = setting_slider(
-                    ui,
-                    &palette,
-                    &mut at,
-                    0..=last,
-                    |slider| slider.step_by(1.0),
-                    // A drag moves one stop every twenty points.
-                    |value| {
-                        value
-                            .speed(0.05)
-                            .custom_formatter(move |value, _| {
-                                shown
-                                    .get((value.round().max(0.0) as usize).min(shown.len() - 1))
-                                    .cloned()
-                                    .unwrap_or_default()
-                            })
-                            .custom_parser(move |text| {
-                                // A rate typed in lands on the nearest stop, since
-                                // the stops are all this dial can hold.
-                                let text = text.trim().to_lowercase();
-                                if text.starts_with("un") {
-                                    return Some(typed.len().saturating_sub(1) as f64);
-                                }
-                                let wanted: u32 = text
-                                    .trim_end_matches("fps")
-                                    .trim()
-                                    .split(',')
-                                    .next()?
-                                    .trim()
-                                    .parse()
-                                    .ok()?;
-                                typed
-                                    .iter()
-                                    .enumerate()
-                                    .filter(|(_, rate)| **rate > 0)
-                                    .min_by_key(|(_, rate)| rate.abs_diff(wanted))
-                                    .map(|(index, _)| index as f64)
-                            })
-                    },
-                )
-                .changed();
-                if changed && let Some(rate) = stops.get(at) {
-                    app.actions.push(Action::SetMilkdropFps(*rate));
-                }
-            });
-            filtered_row(ui, &palette, &needle, "MilkDrop", &milkdrop_rows[4], |ui| {
-                let current = app.settings.milkdrop_scale.max(1);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    for (scale, label) in [
-                        (1u32, pgettext(locale, "resolution", "Full")),
-                        (2, pgettext(locale, "resolution", "Half")),
-                        (4, pgettext(locale, "resolution", "Quarter")),
-                    ] {
-                        if theme::soft_button(ui, &palette, None, &label, scale == current)
-                            .clicked()
-                            && scale != current
-                        {
-                            app.actions.push(Action::SetMilkdropScale(scale));
-                        }
-                    }
-                });
-            });
-        });
-    }
-
     let equalizer = gettext(locale, "Equalizer");
     let equalizer_rows = [
         RowText::new(
@@ -1645,14 +1246,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 .replace("{folder}", &app.dirs.art_cache_dir().display().to_string()),
         ),
         RowText::new(
-            audio_cache.clone(),
-            // Translators: {folder} is the path of a cache folder.
-            gettext(locale, "Stored in {folder}").replace(
-                "{folder}",
-                &app.dirs.audio_cache_dir().display().to_string(),
-            ),
-        ),
-        RowText::new(
             gettext(locale, "Play history"),
             gettext(
                 locale,
@@ -1660,13 +1253,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 "Tracks played here are stored in {file}. This file is never uploaded.",
             )
             .replace("{file}", &app.dirs.history_file().display().to_string()),
-        ),
-        RowText::new(
-            gettext(locale, "Sign-in"),
-            gettext(
-                locale,
-                "Sign-ins are saved in the system credential store when available.",
-            ),
         ),
     ];
     if section_matches(&needle, &storage, &storage_rows) {
@@ -1685,8 +1271,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     app.actions.push(Action::ClearArtCache);
                 }
             });
-            filtered_row(ui, &palette, &needle, &storage, &storage_rows[1], |_| {});
-            filtered_row(ui, &palette, &needle, &storage, &storage_rows[2], |ui| {
+            filtered_row(ui, &palette, &needle, &storage, &storage_rows[1], |ui| {
                 if theme::soft_button(
                     ui,
                     &palette,
@@ -1699,7 +1284,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     app.actions.push(Action::ClearPlayHistory);
                 }
             });
-            filtered_row(ui, &palette, &needle, &storage, &storage_rows[3], |_| {});
+            note(ui, &palette, "Everything chanceify saves lives in the chanceify folder beside the program. Nothing is uploaded.");
         });
     }
 
@@ -2017,8 +1602,26 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         theme::semibold(15.0),
                         palette.text,
                     );
+                    if let Some(mb) = crate::util::memory_used_mb() {
+                        theme::text(
+                            ui,
+                            format!("memory used: {mb} MB"),
+                            theme::regular(12.0),
+                            palette.dim,
+                        );
+                        ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
+                    }
                 });
             });
+            if cfg!(windows) {
+                ui.add_space(8.0);
+                if theme::soft_button(ui, &palette, None, "Let chanceify:// links open chanceify (Windows)", false)
+                    .on_hover_text("Adds one entry for your Windows user, so links from the chanceify web page open the song here.")
+                    .clicked()
+                {
+                    app.actions.push(Action::RegisterLinks);
+                }
+            }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
@@ -2030,159 +1633,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 }
             });
             ui.add_space(8.0);
-            {
-                let mut on = app.settings.discord_presence;
-                if widgets::switch_labeled(ui, &palette, "Show what I'm listening to on Discord", &mut on).changed() {
-                    app.settings.discord_presence = on;
-                    app.mark_settings_dirty();
-                }
-                if app.settings.discord_presence {
-                    theme::subtle(
-                        ui,
-                        &palette,
-                        "Shows on your Discord profile like Spotify does: the song and artist, the cover and a progress bar, with a small chanceify badge. Discord's desktop app has to be open.",
-                    );
-                    ui.add_space(4.0);
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
-                        theme::text(ui, "Status line says", theme::regular(12.5), palette.secondary);
-                        for (value, label) in [(0u8, "The song"), (1, "The artist"), (2, "chanceify™")] {
-                            if theme::soft_button(
-                                ui,
-                                &palette,
-                                None,
-                                label,
-                                app.settings.discord_status_line == value,
-                            )
-                            .clicked()
-                            {
-                                app.settings.discord_status_line = value;
-                                app.mark_settings_dirty();
-                            }
-                        }
-                    });
-                    ui.horizontal_wrapped(|ui| {
-                        theme::text(ui, "Card look", theme::regular(12.5), palette.secondary);
-                        for (value, label) in [(0u8, "Album big, swirl small"), (1, "Swirl big, album small"), (2, "chanceify badge only")] {
-                            if theme::soft_button(ui, &palette, None, label, app.settings.discord_look == value).clicked() {
-                                app.settings.discord_look = value;
-                                app.mark_settings_dirty();
-                            }
-                        }
-                    });
-                    if theme::soft_button(ui, &palette, None, "Let chanceify:// links open chanceify (Windows)", false)
-                        .on_hover_text("Adds one entry for your Windows user, so the song page's Open in chanceify button works.")
-                        .clicked()
-                    {
-                        app.actions.push(Action::RegisterLinks);
-                    }
-                    ui.add_space(4.0);
-                    let rows: [(&str, fn(&mut crate::settings::Settings) -> &mut bool); 12] = [
-                        ("Show the album cover", |s| &mut s.discord_cover),
-                        ("Show a swirl in the cover's colour on the cover", |s| &mut s.discord_swirl),
-                        ("Show the small chanceify badge on the cover", |s| &mut s.discord_badge),
-                        ("Say which playlist I'm playing from", |s| &mut s.discord_playlist),
-                        ("Add a button to my Spotify profile", |s| &mut s.discord_profile),
-                        ("Add a button to the playlist I'm playing", |s| &mut s.discord_playlist_button),
-                        ("Song button opens the chanceify song page", |s| &mut s.discord_song_page),
-                        ("Make the song and artist links to Spotify", |s| &mut s.discord_links),
-                        ("Show buttons (Listen on Spotify, Get chanceify)", |s| &mut s.discord_buttons),
-                        ("Show songs I play from my own files", |s| &mut s.discord_files),
-                        ("Show nothing while paused", |s| &mut s.discord_hide_paused),
-                        ("Listen along: friends can join my song, and I can join theirs", |s| &mut s.discord_listen_along),
-                    ];
-                    for (label, field) in rows {
-                        let mut value = *field(&mut app.settings);
-                        if widgets::switch_labeled(ui, &palette, label, &mut value).changed() {
-                            *field(&mut app.settings) = value;
-                            app.mark_settings_dirty();
-                        }
-                    }
-                    ui.add_space(6.0);
-                    {
-                        let (text, colour) = match crate::discord::link_state() {
-                            2 => ("Discord: connected, and the song was sent.", palette.accent),
-                            1 => ("Discord: found. Waiting for a song to send.", palette.secondary),
-                            _ => (
-                                "Discord: not found yet. Open the Discord desktop app (not the website), and turn on Settings > Activity Privacy > Share my activity in Discord.",
-                                palette.secondary,
-                            ),
-                        };
-                        theme::text(ui, text, theme::regular(12.5), colour);
-                        let problem = crate::discord::last_error();
-                        if !problem.is_empty() {
-                            theme::text(ui, &problem, theme::regular(12.0), palette.warning);
-                        }
-                        ui.ctx().request_repaint_after(std::time::Duration::from_secs(2));
-                    }
-                    ui.add_space(6.0);
-                    // A live preview: exactly what is being sent to Discord for the song now playing.
-                    {
-                        let style = app.discord_style();
-                        let seconds = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map_or(0, |elapsed| elapsed.as_secs() as i64);
-                        let activity = app
-                            .now_playing()
-                            .and_then(|now| crate::discord::activity_for(&now, &style, seconds));
-                        theme::subtle(ui, &palette, "PREVIEW (what Discord shows right now)");
-                        egui::Frame::new()
-                            .fill(palette.surface)
-                            .corner_radius(8)
-                            .inner_margin(10)
-                            .show(ui, |ui| match &activity {
-                                Some(activity) => {
-                                    theme::text(ui, &activity.details, theme::bold(13.5), palette.text);
-                                    theme::text(ui, &activity.state, theme::regular(12.5), palette.secondary);
-                                    theme::text(
-                                        ui,
-                                        &format!("Cover hover: {}", activity.large_text),
-                                        theme::regular(12.0),
-                                        palette.dim,
-                                    );
-                                    theme::text(
-                                        ui,
-                                        &format!("Small picture hover: {}", activity.small_text),
-                                        theme::regular(12.0),
-                                        palette.dim,
-                                    );
-                                    if let Some(image) = &activity.small_image {
-                                        theme::text(ui, &format!("Small picture: {image}"), theme::regular(11.5), palette.dim);
-                                    }
-                                    for (label, _) in &activity.buttons {
-                                        theme::text(ui, &format!("[ {label} ]"), theme::regular(12.5), palette.accent);
-                                    }
-                                }
-                                None => {
-                                    theme::text(
-                                        ui,
-                                        "Nothing to show: play a song (or it is paused and \"Show nothing while paused\" is on).",
-                                        theme::regular(12.5),
-                                        palette.secondary,
-                                    );
-                                }
-                            });
-                    }
-                    ui.add_space(4.0);
-                    if theme::soft_button(ui, &palette, None, "Copy what I'm playing for Discord", false).clicked() {
-                        app.actions.push(Action::ShareToDiscord);
-                    }
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        theme::text(ui, "Discord Application ID (optional)", theme::regular(12.5), palette.secondary);
-                        if ui
-                            .add(
-                                egui::TextEdit::singleline(&mut app.settings.discord_client_id)
-                                    .desired_width(210.0)
-                                    .hint_text("empty = chanceify's own"),
-                            )
-                            .changed()
-                        {
-                            app.mark_settings_dirty();
-                        }
-                    });
-                }
-            }
             ui.add_space(8.0);
             ui.label(
                 egui::RichText::new(format!(
@@ -2471,6 +1921,39 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         });
     }
 
+    if needle.is_empty() || "discord rich presence status buttons".contains(needle.as_str()) {
+        any_visible = true;
+        section(ui, &palette, "Discord", |ui| {
+            {
+                let mut on = app.settings.discord_presence;
+                if widgets::switch_labeled(ui, &palette, "Show what I'm listening to on Discord", &mut on).changed() {
+                    app.settings.discord_presence = on;
+                    app.mark_settings_dirty();
+                }
+                if app.settings.discord_presence {
+                    ui.add_space(4.0);
+                    ui.add_space(6.0);
+                    {
+                        let (text, colour) = match crate::discord::link_state() {
+                            2 => ("Discord connected, song sent.", palette.accent),
+                            1 => ("Discord: found. Waiting for a song to send.", palette.secondary),
+                            _ => (
+                                "Discord: not found yet. Open the Discord desktop app (not the website), and turn on Settings > Activity Privacy > Share my activity in Discord.",
+                                palette.secondary,
+                            ),
+                        };
+                        theme::text(ui, text, theme::regular(12.5), colour);
+                        let problem = crate::discord::last_error();
+                        if !problem.is_empty() {
+                            theme::text(ui, &problem, theme::regular(12.0), palette.warning);
+                        }
+                        ui.ctx().request_repaint_after(std::time::Duration::from_secs(2));
+                    }
+                }
+            }
+        });
+    }
+
     // The guided tour is gone: people find things by right-clicking.
     if false {
         any_visible = true;
@@ -2584,6 +2067,28 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 /// A band's frequency the short way: 60, 170, 1K, 16K.
 /// The interface language: System first, then each language by its own name,
 /// so a reader can find theirs whatever language the app is showing.
+fn flag_picture(locale: crate::i18n::Locale) -> (&'static str, &'static [u8]) {
+    use crate::i18n::Locale as L;
+    match locale {
+        L::English => ("bytes://flag-gb.png", include_bytes!("../../assets/flags/gb.png")),
+        L::German => ("bytes://flag-de.png", include_bytes!("../../assets/flags/de.png")),
+        L::Spanish => ("bytes://flag-es.png", include_bytes!("../../assets/flags/es.png")),
+        L::Dutch => ("bytes://flag-nl.png", include_bytes!("../../assets/flags/nl.png")),
+        L::PortugueseBrazil => ("bytes://flag-br.png", include_bytes!("../../assets/flags/br.png")),
+        L::PortuguesePortugal => ("bytes://flag-pt.png", include_bytes!("../../assets/flags/pt.png")),
+        L::French => ("bytes://flag-fr.png", include_bytes!("../../assets/flags/fr.png")),
+        L::Swedish => ("bytes://flag-se.png", include_bytes!("../../assets/flags/se.png")),
+        L::Polish => ("bytes://flag-pl.png", include_bytes!("../../assets/flags/pl.png")),
+        L::Russian => ("bytes://flag-ru.png", include_bytes!("../../assets/flags/ru.png")),
+        L::Italian => ("bytes://flag-it.png", include_bytes!("../../assets/flags/it.png")),
+        L::Japanese => ("bytes://flag-jp.png", include_bytes!("../../assets/flags/jp.png")),
+        L::ChineseSimplified => ("bytes://flag-cn.png", include_bytes!("../../assets/flags/cn.png")),
+        L::ChineseTraditional => ("bytes://flag-tw.png", include_bytes!("../../assets/flags/tw.png")),
+        L::Turkish => ("bytes://flag-tr.png", include_bytes!("../../assets/flags/tr.png")),
+        L::Ukrainian => ("bytes://flag-ua.png", include_bytes!("../../assets/flags/ua.png")),
+    }
+}
+
 fn language_picker(app: &mut App, ui: &mut egui::Ui) {
     let locale = app.locale;
     let system = pgettext(locale, "language", "System");
@@ -2592,6 +2097,11 @@ fn language_picker(app: &mut App, ui: &mut egui::Ui) {
         LanguageChoice::System => system.clone(),
         LanguageChoice::Locale(chosen) => chosen.native_name().into(),
     };
+    // A flag beside the language: pictures, as Windows has no flag emoji.
+    if let LanguageChoice::Locale(chosen) = current {
+        let (uri, bytes) = flag_picture(chosen);
+        ui.add(egui::Image::from_bytes(uri, bytes).fit_to_exact_size(egui::vec2(24.0, 18.0)));
+    }
     let response = egui::ComboBox::from_id_salt("interface_language")
         .selected_text(selected.as_ref())
         .width(200.0_f32.min(ui.available_width()))
@@ -2604,11 +2114,18 @@ fn language_picker(app: &mut App, ui: &mut egui::Ui) {
                     .map(|&each| (LanguageChoice::Locale(each), each.native_name().into())),
             );
             for (choice, label) in choices {
-                if ui
-                    .selectable_label(current == choice, label.as_ref())
-                    .clicked()
-                    && current != choice
-                {
+                let clicked = ui
+                    .horizontal(|ui| {
+                        if let LanguageChoice::Locale(each) = choice {
+                            let (uri, bytes) = flag_picture(each);
+                            ui.add(egui::Image::from_bytes(uri, bytes).fit_to_exact_size(egui::vec2(24.0, 18.0)));
+                        } else {
+                            ui.add_space(24.0);
+                        }
+                        ui.selectable_label(current == choice, label.as_ref()).clicked()
+                    })
+                    .inner;
+                if clicked && current != choice {
                     app.actions.push(Action::SetLanguage(choice));
                 }
             }
@@ -2633,6 +2150,49 @@ fn hertz(hz: f32) -> String {
 /// One vertical slider in the app's own style: the track filled from
 /// 0 dB, the handle in the middle when flat, a double-click to put it
 /// back there. Returns whether it moved.
+/// The equalizer, as a tab of the visualizer's settings (the volume bar no
+/// longer opens it): the switch, the presets, the curve, the preamp and the
+/// ten bands.
+pub(super) fn eq_panel(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    let locale = app.locale;
+    ui.set_width(500.0);
+    let mut on = app.settings.eq_on;
+    if widgets::switch(ui, &palette, &gettext(locale, "On"), &mut on).changed() {
+        app.actions.push(Action::ToggleEq);
+    }
+    ui.add_space(6.0);
+    let names: Vec<(usize, &str)> = crate::eq::PRESETS
+        .iter()
+        .enumerate()
+        .map(|(index, preset)| (index, preset.name))
+        .collect();
+    let current = crate::eq::PRESETS
+        .iter()
+        .position(|preset| preset.bands_db == app.settings.eq_bands_db)
+        .unwrap_or(usize::MAX);
+    if let Some(picked) = widgets::chips(ui, &palette, &names, current) {
+        app.actions.push(Action::ApplyEqPreset(picked));
+    }
+    ui.add_space(8.0);
+    eq_curve(ui, &palette, &crate::app::eq_settings(&app.settings));
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        let on = app.settings.eq_on;
+        let mut preamp = app.settings.eq_preamp_db;
+        if eq_slider(ui, &palette, &pgettext(locale, "equalizer", "Pre"), &mut preamp, on) {
+            app.actions.push(Action::SetEqPreamp(preamp));
+        }
+        for (band, hz) in crate::eq::BANDS.iter().enumerate() {
+            let mut gain = app.settings.eq_bands_db[band];
+            if eq_slider(ui, &palette, &hertz(*hz), &mut gain, on) {
+                app.actions.push(Action::SetEqBand(band, gain));
+            }
+        }
+    });
+}
+
 fn eq_slider(ui: &mut egui::Ui, palette: &Palette, label: &str, value: &mut f32, on: bool) -> bool {
     use egui::{Rect, Stroke, pos2, vec2};
     let range = crate::eq::RANGE_DB;
@@ -2921,6 +2481,7 @@ fn missing_lists(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
             }
             egui::ScrollArea::vertical()
                 .id_salt(("missing-scroll", artists))
+                .min_scrolled_height(380.0)
                 .max_height((ui.ctx().content_rect().height() * 1.3).max(900.0))
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
@@ -2996,7 +2557,7 @@ fn theme_grid(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette)
         let picture = shown.unwrap_or_else(Palette::dark);
         let current = app.settings.custom_theme.is_none() && app.settings.theme == choice;
         // Follow system first, then every dark theme, then every light one.
-        let rank = if choice == ThemeChoice::System { 0 } else if picture.dark { 2 } else { 3 };
+        let rank = if choice == ThemeChoice::Custom { 0 } else if choice == ThemeChoice::System { 1 } else if picture.dark { 3 } else { 4 };
         tiles.push((
             rank,
             choice.label(app.locale).to_string(),
@@ -3010,7 +2571,7 @@ fn theme_grid(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette)
         let current = app.settings.custom_theme.as_deref() == Some(theme.filename.as_str());
         let name = crate::settings::fancy_theme_name(&fastframe_theme::display_name(&theme.filename)).to_string();
         // chanceify's own theme comes second.
-        let rank = if name.eq_ignore_ascii_case("chanceify") { 1 } else if theme.palette.dark { 2 } else { 3 };
+        let rank = if name.eq_ignore_ascii_case("chanceify") { 2 } else if theme.palette.dark { 3 } else { 4 };
         tiles.push((
             rank,
             name,
@@ -3023,7 +2584,7 @@ fn theme_grid(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette)
     // All, only the dark ones, or only the light ones.
     let filter_id = egui::Id::new("theme-grid-filter");
     let mut filter: u8 = ui.data(|data| data.get_temp(filter_id)).unwrap_or(0);
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
         for (value, label) in [(0u8, "All"), (1, "Dark"), (2, "Light")] {
             if theme::soft_button(ui, palette, None, label, filter == value).clicked() {
@@ -3035,6 +2596,13 @@ fn theme_grid(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette)
         if widgets::switch_labeled(ui, palette, "Preview a theme when I point at it", &mut point).changed() {
             app.settings.theme_point_preview = point;
             app.mark_settings_dirty();
+        }
+        ui.add_space(10.0);
+        let mut from_cover = app.settings.theme_from_cover;
+        if widgets::switch_labeled(ui, palette, "Match the theme to the album cover", &mut from_cover).changed() {
+            app.settings.theme_from_cover = from_cover;
+            app.settings.accent_from_art = from_cover;
+            app.actions.push(Action::SettingsChanged);
         }
     });
     ui.data_mut(|data| data.insert_temp(filter_id, filter));

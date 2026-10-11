@@ -983,15 +983,7 @@ fn paint_expanded_art(app: &mut App, ui: &mut egui::Ui, rect: Rect) {
         }
         .as_shape(rect, egui::CornerRadius::same(8)),
     );
-    super::widgets::paint_cover(
-        ui,
-        &palette,
-        Some(&url),
-        rect,
-        8.0,
-        Icon::Music,
-        Some(app.backend.art()),
-    );
+    super::widgets::paint_sticky_cover(ui, &palette, "sidebar-art", Some(&url), rect, 8.0, Icon::Music, app.backend.art());
     super::player_bar::big_art_missing_mark(app, ui, rect, "sidebar");
     let art = ui.interact(rect, egui::Id::new("sidebar-art"), Sense::click());
     // The words ride on the art rather than sitting in the player bar, so
@@ -1290,6 +1282,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, grid_art: Option<Rect>) {
         if can_back && back.clicked() {
             app.actions.push(Action::Back);
         }
+        super::topbar::history_menu(app, &back);
         let can_forward = app.can_go_forward();
         let forward = theme::icon_button(
             ui,
@@ -1302,11 +1295,12 @@ fn contents(app: &mut App, ui: &mut egui::Ui, grid_art: Option<Rect>) {
         if can_forward && forward.clicked() {
             app.actions.push(Action::Forward);
         }
+        super::topbar::history_menu(app, &forward);
         // The library's own button and filter live up here with the page
-        // buttons. The field says "Filter your library" so it is never mistaken
+        // buttons. The field says "Search your library" so it is never mistaken
         // for the global search in the top bar.
         ui.add_space(10.0);
-        let icon_label = gettext(locale, "Filter your library");
+        let icon_label = gettext(locale, "Search your library");
         let icon = theme::icon_button(
             ui,
             Icon::Library,
@@ -1331,7 +1325,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, grid_art: Option<Rect>) {
                 locale,
                 field_id,
                 &mut app.library.filter,
-                "Filter",
+                "Search",
                 room,
             );
             super::widgets::drag_window_from_field(ui, &filter_response, "library-filter");
@@ -1348,7 +1342,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, grid_art: Option<Rect>) {
                 locale,
                 field_id,
                 &mut app.library.filter,
-                "Filter",
+                "Search",
                 room,
             );
             super::widgets::drag_window_from_field(ui, &filter_response, "library-filter");

@@ -15,7 +15,7 @@
 //!
 //! The icons are drawn here rather than loaded, because Windows wants
 //! `HICON`s at whatever size the system asks for and the app already
-//! compiles `tiny-skia` for the Winamp playlist's text. They follow the
+//! compiles `tiny-skia` for the SVG icons. They follow the
 //! system's light or dark setting, not the app's: the preview flyout is
 //! Windows' own surface, so a Chanceify set to Light on a dark desktop
 //! still needs light icons there.

@@ -75,9 +75,28 @@ pub struct SwirlArt {
     /// The settings the reader has moved to, and since when; the backdrop is
     /// only rebuilt once they have held still, so a drag stays smooth.
     wanted: Option<(Look, Instant)>,
+    /// When the backdrop was last asked for by something on screen.
+    asked: Option<Instant>,
 }
 
 impl SwirlArt {
+    /// Lets go of the big backdrop picture once nothing has asked for it for
+    /// a few seconds (the visualizer or swirl is hidden). The next ask builds
+    /// it again. The accent and colours stay, as they are tiny.
+    pub fn release_if_idle(&mut self) {
+        let idle = self
+            .asked
+            .is_some_and(|at| at.elapsed() > Duration::from_secs(4));
+        if idle && (self.texture.is_some() || self.previous.is_some()) {
+            self.texture = None;
+            self.previous = None;
+            self.fade_from = None;
+            self.pending = None;
+            self.requested = false;
+            self.retry_at = None;
+        }
+    }
+
     /// Whether the backdrop is bright enough that light text would vanish.
     pub fn is_light(&self) -> bool {
         self.light
@@ -131,6 +150,7 @@ impl SwirlArt {
             };
         }
         let uri = uri?;
+        self.asked = Some(Instant::now());
         if params != self.params {
             // New wave settings: rebuild once the sliders have stopped.
             let since = match self.wanted {

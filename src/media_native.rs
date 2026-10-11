@@ -409,7 +409,7 @@ impl MediaService {
 
     /// Makes a saved track the macOS Now Playing owner before its metadata
     /// has made a network round trip. The same service stays alive through
-    /// normal, Winamp, tray-only, and MilkDrop-only window states.
+    /// normal and tray-only window states.
     pub fn claim_resume(&mut self, track_uri: &str, position_ms: u32) {
         self.with_bridge(|bridge| {
             if bridge.claimed {

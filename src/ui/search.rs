@@ -135,7 +135,7 @@ fn all(app: &mut App, ui: &mut egui::Ui, results: &SearchResults) {
                 top_result(
                     app,
                     ui,
-                    pick_image(&artist.images, 640),
+                    pick_image(&artist.images, 300),
                     &artist.name,
                     TopResultSubtitle::Text(&gettext(locale, "Artist")),
                     true,
@@ -155,7 +155,7 @@ fn all(app: &mut App, ui: &mut egui::Ui, results: &SearchResults) {
                 top_result(
                     app,
                     ui,
-                    track.image(640),
+                    track.image(300),
                     &track.name,
                     TopResultSubtitle::SongArtists(&track.artists),
                     false,
@@ -176,7 +176,7 @@ fn all(app: &mut App, ui: &mut egui::Ui, results: &SearchResults) {
                 top_result(
                     app,
                     ui,
-                    pick_image(&album.images, 640),
+                    pick_image(&album.images, 300),
                     &album.name,
                     TopResultSubtitle::Text(
                         // Translators: {artists} is the album's artist names.
@@ -202,7 +202,7 @@ fn all(app: &mut App, ui: &mut egui::Ui, results: &SearchResults) {
                 top_result(
                     app,
                     ui,
-                    pick_image(&playlist.images, 640),
+                    pick_image(&playlist.images, 300),
                     &playlist.name,
                     TopResultSubtitle::Text(
                         // Translators: {owner} is the name of the playlist's owner.
@@ -227,7 +227,7 @@ fn all(app: &mut App, ui: &mut egui::Ui, results: &SearchResults) {
                 top_result(
                     app,
                     ui,
-                    pick_image(&show.images, 640),
+                    pick_image(&show.images, 300),
                     &show.name,
                     TopResultSubtitle::Text(
                         // Translators: {publisher} is the podcast's publisher.
@@ -553,7 +553,7 @@ fn artist_card(app: &mut App, ui: &mut egui::Ui, artist: &Artist) {
     let card = widgets::card(
         ui,
         app,
-        pick_image(&artist.images, 640),
+        pick_image(&artist.images, 300),
         &artist.name,
         &gettext(app.locale, "Artist"),
         widgets::CardCover::portrait(playing_here),
@@ -620,7 +620,7 @@ fn album_card(app: &mut App, ui: &mut egui::Ui, album: &crate::api::models::Albu
     let card = widgets::card(
         ui,
         app,
-        pick_image(&album.images, 640),
+        pick_image(&album.images, 300),
         &album.name,
         subtitle.trim_start_matches(" • "),
         widgets::CardCover::square(playing_here),
@@ -682,7 +682,7 @@ fn playlist_card(app: &mut App, ui: &mut egui::Ui, playlist: &crate::api::models
     let card = widgets::card(
         ui,
         app,
-        pick_image(&playlist.images, 640),
+        pick_image(&playlist.images, 300),
         &playlist.name,
         // Translators: {owner} is the name of the playlist's owner.
         &gettext(app.locale, "By {owner}").replace("{owner}", playlist.owner_name()),
@@ -754,7 +754,7 @@ fn show_card(app: &mut App, ui: &mut egui::Ui, show: &crate::api::models::Show) 
     let card = widgets::card(
         ui,
         app,
-        pick_image(&show.images, 640),
+        pick_image(&show.images, 300),
         &show.name,
         &show.publisher,
         widgets::CardCover::default(),

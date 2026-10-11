@@ -177,10 +177,10 @@ impl App {
             };
             match &uri {
                 Some(uri) if self.live.results.get(uri).is_none_or(|m| m.camelot.is_none()) => {
-                    self.winamp.tap.capture_start();
+                    self.audio.tap.capture_start();
                 }
                 _ => {
-                    let _ = self.winamp.tap.capture_take();
+                    let _ = self.audio.tap.capture_take();
                 }
             }
             return;
@@ -198,11 +198,11 @@ impl App {
         }
         self.live.last_position = position;
         if !self.live.early_done
-            && self.winamp.tap.capture_seconds() >= EARLY_SECONDS
+            && self.audio.tap.capture_seconds() >= EARLY_SECONDS
             && self.live.results.get(&uri).is_none_or(|m| m.camelot.is_none())
         {
             self.live.early_done = true;
-            let (samples, rate) = self.winamp.tap.capture_peek();
+            let (samples, rate) = self.audio.tap.capture_peek();
             self.spawn_measure(uri, samples, rate, false);
         }
     }
@@ -212,7 +212,7 @@ impl App {
         let Some(uri) = self.live.current.clone() else {
             return;
         };
-        let (samples, rate) = self.winamp.tap.capture_take();
+        let (samples, rate) = self.audio.tap.capture_take();
         let seconds = samples.len() as f32 / rate.max(1) as f32;
         if seconds < LEAST_SECONDS {
             return;

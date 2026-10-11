@@ -111,8 +111,17 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             app.settings.vis_shapes = shapes;
             app.settings.vis_shapes_set = true;
             if shapes != 0 {
+                // Only what moves behind the words: never the big visualizer's
+                // cover or song name, which have no place in a window this small.
+                let backdrop = if shapes == crate::settings::Settings::SHAPE_FLOW {
+                    1
+                } else if shapes == crate::settings::Settings::SHAPE_SWIRL {
+                    2
+                } else {
+                    4
+                };
                 let moving =
-                    super::player_bar::lyrics_backdrop(app, ui, area, now.as_ref(), 3);
+                    super::player_bar::lyrics_backdrop(app, ui, area, now.as_ref(), backdrop);
                 if shapes != crate::settings::Settings::SHAPE_BARS {
                     // Flow and swirl fill the window: a light veil keeps
                     // the words readable.
@@ -348,14 +357,15 @@ fn cover(app: &mut App, ui: &mut egui::Ui, rect: Rect, now: Option<&NowPlaying>)
     let palette = app.palette;
     let loader = app.backend.art().clone();
     let url = now.and_then(|now| now.art_url.as_deref().or(now.art_small.as_deref()));
-    widgets::paint_cover(
+    widgets::paint_sticky_cover(
         ui,
         &palette,
+        "mini-cover",
         url,
         rect,
         (rect.width() * 0.04).clamp(4.0, 14.0),
         Icon::Music,
-        Some(&loader),
+        &loader,
     );
 }
 

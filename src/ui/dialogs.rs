@@ -28,7 +28,9 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     // can still be moved and resized while it is open.
     let floating = matches!(dialog, Dialog::Shortcuts);
     let body = |ui: &mut egui::Ui| {
-            ui.set_width(420.0);
+            if !floating {
+                ui.set_width(420.0);
+            }
             match dialog {
                 Dialog::PersonalAppIntro => {
                     theme::text(ui, gettext(locale, "Spend less time waiting for Spotify"), theme::bold(20.0), palette.text);
@@ -146,8 +148,6 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     });
                 }
                 Dialog::Shortcuts => {
-                    theme::text(ui, gettext(locale, "Keyboard shortcuts"), theme::bold(20.0), palette.text);
-                    ui.add_space(4.0);
                     // Only while a key is waiting for its new key.
                     if super::keys::rebinding(ui.ctx()).is_some() {
                         theme::text(
@@ -161,10 +161,22 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     }
                     ui.add_space(6.0);
                     // One live list: what is shown here is what the keys do now.
-                    ui.set_width((ui.ctx().content_rect().width() - 120.0).clamp(420.0, 1200.0));
+                    // The window can be dragged to any size; the list fills it.
+                    ui.set_min_width(260.0);
+                    // The list's height follows the window's own height, not what
+                    // the content asks for, so the window can be made any size
+                    // (it used to spring back to the full screen height).
+                    // The window's own room, less the footer measured last frame:
+                    // nothing here depends on the content, so the window can be
+                    // dragged to any size.
+                    let footer_id = egui::Id::new("keybinds-footer-height");
+                    let footer_h = ctx.data(|data| data.get_temp::<f32>(footer_id)).unwrap_or(90.0);
+                    let outer_width = ui.available_width();
+                    let list_height = (ui.available_height() - footer_h - 8.0).clamp(60.0, ctx.content_rect().height());
                     egui::ScrollArea::vertical()
-                        .max_height((ui.ctx().content_rect().height() - 260.0).max(160.0))
-                        .auto_shrink([false, true])
+                        .max_height(list_height)
+                        .min_scrolled_height(60.0)
+                        .auto_shrink([false, false])
                         .show(ui, |ui| {
                     let waiting = super::keys::rebinding(ui.ctx());
                     // Anything not placed in a group still shows, under "More".
@@ -197,7 +209,11 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                             .iter()
                             .filter(|(name, list)| !list.is_empty() || !super::keys::fixed_for(name).is_empty())
                             .collect();
-                    let column_count = if ui.available_width() >= 900.0 { 4 } else { 3 };
+                    // The room is the window's own width (the list lives inside a
+                    // scroll area, which can report less), so the columns follow the
+                    // size the window is dragged to: as many as keep every label readable.
+                    let total = (outer_width - 14.0).max(240.0);
+                    let column_count = (((total + 16.0) / 316.0).floor() as usize).clamp(1, 5);
                     let mut lanes: Vec<Vec<usize>> = vec![Vec::new(); column_count];
                     let mut heights = vec![0usize; column_count];
                     for (index, (group, list)) in shown.iter().enumerate() {
@@ -205,9 +221,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         lanes[lane].push(index);
                         heights[lane] += list.len() + super::keys::fixed_for(group).len() + 2;
                     }
-                    let lane_width = ((ui.available_width() - 16.0 * column_count as f32)
-                        / column_count as f32)
-                        .max(180.0);
+                    let lane_width = ((total - 16.0 * column_count as f32) / column_count as f32).max(240.0);
                     ui.horizontal_top(|ui| {
                         ui.spacing_mut().item_spacing.x = 16.0;
                         for lane in &lanes {
@@ -297,16 +311,21 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         }
                     });
                         });
+                    let footer_top = ui.cursor().top();
                     ui.add_space(12.0);
-                    ui.horizontal(|ui| {
-                        theme::subtle(
-                            ui,
-                            &palette,
-                            "Ctrl+click a song queues it. Shift+Ctrl+click plays it next. Or bind a key under Playback.",
-                        );
-                    });
+                    // Wrapping rows, so a narrow window never has to grow to
+                    // fit the footer.
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new("Ctrl+click a song queues it. Shift+Ctrl+click plays it next. Or bind a key under Playback.")
+                                .font(theme::regular(13.0))
+                                .color(palette.secondary),
+                        )
+                        .wrap()
+                        .selectable(false),
+                    );
                     ui.add_space(6.0);
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if theme::pill_button(ui, &palette, "Reset", false).clicked() {
                             app.settings.key_bindings.clear();
                             app.actions.push(Action::SettingsChanged);
@@ -320,12 +339,12 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         if theme::pill_button(ui, &palette, "Save as the default for everyone", false).clicked() {
                             app.actions.push(Action::SaveKeysAsDefault);
                         }
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if theme::pill_button(ui, &palette, &gettext(locale, "Done"), true).clicked() {
-                                app.actions.push(Action::CloseDialog);
-                            }
-                        });
+                        if theme::pill_button(ui, &palette, &gettext(locale, "Done"), true).clicked() {
+                            app.actions.push(Action::CloseDialog);
+                        }
                     });
+                    let used = ui.min_rect().bottom() - footer_top;
+                    ctx.data_mut(|data| data.insert_temp(footer_id, used.max(40.0)));
                 }
                 Dialog::Views => {
                     theme::text(ui, "Views", theme::bold(20.0), palette.text);
@@ -341,7 +360,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         ("Visualizer", app.settings.vis_shapes_value() != 0, Action::ToggleVisShapes),
                         ("Big album art", app.settings.art_expanded, Action::ToggleArtExpanded),
                         ("Mini player", app.mini_active, Action::ToggleMiniPlayer),
-                        ("Shortcuts", false, Action::ShowDialog(Dialog::Shortcuts)),
+                        ("Keybinds", false, Action::ShowDialog(Dialog::Shortcuts)),
                     ];
                     for (label, on, action) in rows {
                         let mut value = on;
@@ -391,13 +410,19 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     };
     if floating {
         let mut open = true;
-        let shown = egui::Window::new("Keyboard shortcuts")
+        let screen = ctx.content_rect();
+        let shown = egui::Window::new("")
             .id(egui::Id::new("dialog"))
             .open(&mut open)
             .order(egui::Order::Foreground)
             .frame(frame)
             .default_pos(egui::pos2(80.0, 60.0))
-            .resizable(false)
+            .default_size([
+                (screen.width() - 160.0).clamp(420.0, 1200.0),
+                (screen.height() - 200.0).max(240.0),
+            ])
+            .min_size([300.0, 240.0])
+            .resizable(true)
             .collapsible(false)
             .show(ctx, body);
         if let Some(shown) = shown {

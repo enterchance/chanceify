@@ -147,23 +147,11 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
     };
     let lyrics = match &app.lyrics {
         Loadable::NotLoaded | Loadable::Loading => {
-            widgets::loading_row(ui, &palette, app.locale);
+            // Nothing until the words arrive.
             return;
         }
-        Loadable::Failed(error) => {
-            let message = gettext(
-                app.locale,
-                // Translators: Keep {error} unchanged. It is the original failure detail.
-                "Couldn't fetch the lyrics: {error}",
-            )
-            .replace("{error}", error);
-            ui.add_space(8.0);
-            theme::text(ui, message, theme::regular(13.0), palette.secondary);
-            ui.add_space(8.0);
-            if theme::pill_button(ui, &palette, &gettext(app.locale, "Try again"), false).clicked()
-            {
-                app.request_lyrics();
-            }
+        Loadable::Failed(_) => {
+            // Either the words show up or they do not.
             return;
         }
         Loadable::Loaded(None) => {
@@ -171,13 +159,6 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
             return;
         }
         Loadable::Loaded(Some(lyrics)) if lyrics.instrumental => {
-            widgets::empty_state(
-                ui,
-                &palette,
-                Icon::Music,
-                &gettext(app.locale, "Instrumental"),
-                &gettext(app.locale, "No timed lyrics for this track."),
-            );
             return;
         }
         Loadable::Loaded(Some(lyrics)) => lyrics.clone(),
@@ -429,20 +410,24 @@ fn lyrics_menu(app: &mut App, page: &egui::Response, side: bool) {
                 );
             }
             widgets::menu_separator(ui, &palette);
-            let current = app.settings.lyrics_align_value();
-            for (value, label) in [
-                (0u8, "Left"),
-                (2, "Right"),
-                (4, "Focus on the current line"),
-            ] {
+            let right = app.settings.lyrics_right();
+            for (value, label) in [(0u8, "Left"), (2, "Right")] {
                 if widgets::menu_item(
                     ui,
                     &palette,
-                    tick(current == value),
+                    tick((value == 2) == right),
                     &gettext(app.locale, label),
                 ) {
                     app.actions.push(Action::SetLyricsAlign(value));
                 }
+            }
+            if widgets::menu_item(
+                ui,
+                &palette,
+                tick(app.settings.lyrics_focus()),
+                &gettext(app.locale, "Focus on the current line"),
+            ) {
+                app.actions.push(Action::ToggleLyricsFlag(crate::settings::Settings::LYRICS_FOCUS));
             }
         });
 }
@@ -513,69 +498,19 @@ fn with_cover(app: &mut App, ui: &mut egui::Ui, rect: Rect, top: f32) {
             vec2(side, side + 90.0),
         );
         big_cover(app, ui, column, Align::Center);
-        // Why there are no words, quietly, under the song, or that they
-        // are still being fetched.
-        let (heading, detail) = match &app.lyrics {
-            Loadable::Loaded(Some(_)) => (
-                gettext(app.locale, "Instrumental"),
-                gettext(app.locale, "No timed lyrics for this track."),
-            ),
-            Loadable::Loaded(None) => (String::new().into(), Default::default()),
-            Loadable::Failed(error) => (
-                gettext(
-                    app.locale,
-                    // Translators: Keep {error} unchanged. It is the original failure detail.
-                    "Couldn't fetch the lyrics: {error}",
-                )
-                .replace("{error}", error)
-                .into(),
-                Default::default(),
-            ),
-            Loadable::NotLoaded | Loadable::Loading => {
-                (gettext(app.locale, "Loading…"), Default::default())
-            }
-        };
-        let heading = ui.painter().text(
-            pos2(column.center().x, column.bottom() + 94.0),
-            egui::Align2::CENTER_TOP,
-            heading,
-            theme::semibold(13.0),
-            Color32::from_gray(200),
-        );
-        if matches!(app.lyrics, Loadable::Failed(_)) {
-            let retry = Rect::from_center_size(
-                pos2(column.center().x, heading.bottom() + 24.0),
-                vec2(column.width(), 32.0),
-            );
-            let mut retry_ui = ui.new_child(
-                UiBuilder::new()
-                    .max_rect(retry)
-                    .layout(Layout::top_down(Align::Center)),
-            );
-            let label = gettext(app.locale, "Try again");
-            if theme::pill_button(&mut retry_ui, &theme::Palette::dark(), &label, false).clicked() {
-                app.actions.push(Action::RetryLyrics);
-            }
-            return;
-        }
-        ui.painter().text(
-            pos2(column.center().x, heading.bottom() + 4.0),
-            egui::Align2::CENTER_TOP,
-            detail,
-            theme::regular(13.0),
-            Color32::from_gray(170),
-        );
     }
 }
 
 /// The playing song's cover filling the top of `column`, with its title and
 /// artists beneath, aligned to its left edge or centred.
-fn big_cover(app: &mut App, ui: &mut egui::Ui, column: Rect, align: Align) {
+fn big_cover(app: &mut App, ui: &mut egui::Ui, column: Rect, _align: Align) {
     let Some(now) = app.now_playing() else {
         return;
     };
     let base_side = column.width();
     let base_cover = Rect::from_min_size(column.min, vec2(base_side, base_side));
+    // Where the cover rests, whatever it does to the music: the controls hang from here.
+    ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("lyrics-base-cover"), base_cover));
     // Bouncing to the music: the card swells a little with the bass. The words
     // below keep to the card's resting size so they never jump about.
     let bounce_on = app.settings.lyrics_flag(crate::settings::Settings::LYRICS_BOUNCE_ART);
@@ -721,87 +656,7 @@ fn big_cover(app: &mut App, ui: &mut egui::Ui, column: Rect, align: Align) {
                 app.actions.push(Action::SaveAlbumArt);
             }
         });
-    // The tilted card swells towards the viewer; the words follow its lowest
-    // corner so a floating card never covers them.
-    let lowest = [(-1.0_f32, -1.0_f32), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
-        .iter()
-        .map(|(x, y)| {
-            let z = (x * nx + y * ny) * 0.55;
-            base_cover.center().y + y * base_side * 0.5 * (3.2 / (3.2 + z))
-        })
-        .fold(base_cover.bottom(), f32::max);
-    let words_top = ctx.animate_value_with_time(hover_id.with("words"), lowest.max(base_cover.bottom()) + 18.0, 0.1);
-    let words = Rect::from_min_max(pos2(column.left(), words_top), column.max);
-    let mut text = ui.new_child(
-        UiBuilder::new()
-            .max_rect(words)
-            .layout(Layout::top_down(align)),
-    );
-    text.spacing_mut().item_spacing.y = 4.0;
-    // With the artist hidden the song's name takes the room and is bigger.
-    let show_artist = !app.settings.lyrics_flag(crate::settings::Settings::LYRICS_HIDE_ARTIST);
-    let title_size = if show_artist { 22.0 } else { 30.0 };
-    let saved = app.is_saved(&now.uri).unwrap_or(false);
-    let heart = !now.is_episode && now.uri.starts_with("spotify:track:");
-    // The title's own width, so the row can sit in the middle when the
-    // column is centred (and the heart hugs the name when it is not).
-    let heart_w = if heart { 36.0 } else { 0.0 };
-    let room = (words.width() - heart_w - 8.0).max(40.0);
-    let title_w = text
-        .painter()
-        .layout_no_wrap(now.title.clone(), theme::semibold(title_size), Color32::WHITE)
-        .size()
-        .x
-        .min(room)
-        + 4.0;
-    let lead = if align == Align::Center {
-        ((words.width() - title_w - heart_w - 8.0) / 2.0).max(0.0)
-    } else {
-        0.0
-    };
-    text.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        ui.add_space(lead);
-        ui.allocate_ui_with_layout(
-            vec2(title_w, title_size + 8.0),
-            Layout::left_to_right(Align::Center),
-            |ui| {
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(&now.title)
-                            .font(theme::semibold(title_size))
-                            .color(Color32::WHITE),
-                    )
-                    .truncate(),
-                );
-            },
-        );
-        if heart {
-            let dark = theme::Palette::dark();
-            if theme::icon_button(
-                ui,
-                if saved { Icon::HeartFilled } else { Icon::Heart },
-                title_size.min(24.0),
-                if saved { dark.accent } else { Color32::from_gray(225) },
-                dark.accent_hover,
-                if saved { "Remove from Liked Songs" } else { "Save to Liked Songs" },
-            )
-            .clicked()
-            {
-                app.actions.push(Action::ToggleSaved(now.uri.clone()));
-            }
-        }
-    });
-    if show_artist {
-        text.add(
-            egui::Label::new(
-                egui::RichText::new(&now.subtitle)
-                    .font(theme::regular(14.0))
-                    .color(Color32::from_gray(225)),
-            )
-            .truncate(),
-        );
-    }
+    // The song's name and artist live in the card above the controls.
 }
 
 fn fullscreen_content_width(viewport_width: f32) -> f32 {
@@ -837,11 +692,9 @@ fn background(app: &mut App, ui: &mut egui::Ui, rect: Rect) {
         // Shaped by the visualizer settings (Visualizer settings, below).
         // Bars and flow stay below the song and artist names, so they never
         // cover or cut them off; the swirl fills the whole page.
-        let mut area = rect;
-        if app.settings.vis_shapes_value() & crate::settings::Settings::SHAPE_SWIRL == 0 {
-            let top = (rect.height() * 0.36).max(190.0).min(rect.height() * 0.8);
-            area = Rect::from_min_max(pos2(rect.left(), rect.top() + top), rect.max);
-        }
+        // Bars hug whichever edges are on (the visualizer's own choice); the
+        // flow is a low strip along the bottom. Both are capped in height.
+        let area = rect;
         let moving = super::player_bar::lyrics_backdrop(app, ui, area, now.as_ref(), 3);
         if moving {
             ui.ctx().request_repaint_after(std::time::Duration::from_micros(16_667));
@@ -964,7 +817,7 @@ pub fn vis_overlay(app: &mut App, ui: &mut egui::Ui) {
     let pitch = base * 1.5;
     let centre_y = region.center().y;
     // The same anchoring and timestamps as the full-screen lyrics page.
-    let align = app.settings.lyrics_align_value();
+    let right = app.settings.lyrics_right();
     let stamps_on = !app.settings.lyrics_flag(crate::settings::Settings::LYRICS_HIDE_STAMPS);
     let countdown = app.settings.lyrics_flag(crate::settings::Settings::LYRICS_COUNTDOWN);
     let next_line = lyrics
@@ -976,7 +829,8 @@ pub fn vis_overlay(app: &mut App, ui: &mut egui::Ui) {
         .map(|at| (at - now.position_ms).div_ceil(1000))
         .filter(|secs| *secs <= 30);
     let stamp_w = if stamps_on || countdown { 56.0 } else { 0.0 };
-    let text_left = region.left() + stamp_w;
+    // Left: the time on the left, the words after it. Right: the mirror.
+    let text_left = if right { region.left() } else { region.left() + stamp_w };
     let text_w = (region.width() - stamp_w).max(60.0);
     let first = (place.floor() as isize - 3).max(0) as usize;
     let last = ((place.ceil() as isize + 4).max(0) as usize).min(lyrics.lines.len());
@@ -1000,10 +854,10 @@ pub fn vis_overlay(app: &mut App, ui: &mut egui::Ui) {
             fit *= 0.88;
         };
         let y = centre_y + d * pitch + d.signum() * near * base * 0.2 - galley.size().y / 2.0;
-        let x = match align {
-            2 => region.right() - galley.size().x,
-            4 => text_left + (text_w - galley.size().x) / 2.0,
-            _ => text_left,
+        let x = if right {
+            region.right() - stamp_w - galley.size().x
+        } else {
+            text_left
         };
         let label = if countdown && next_line == Some(index) && until_next.is_some() {
             until_next.map(|secs| format!("{secs}s"))
@@ -1017,8 +871,8 @@ pub fn vis_overlay(app: &mut App, ui: &mut egui::Ui) {
         };
         if let Some(label) = label {
             painter.text(
-                pos2(region.left(), y + galley.size().y / 2.0),
-                egui::Align2::LEFT_CENTER,
+                pos2(if right { region.right() } else { region.left() }, y + galley.size().y / 2.0),
+                if right { egui::Align2::RIGHT_CENTER } else { egui::Align2::LEFT_CENTER },
                 label,
                 theme::bold((base * 0.4).max(11.0)),
                 Color32::WHITE.gamma_multiply((alpha * 0.55).clamp(0.0, 1.0)),
@@ -1045,23 +899,11 @@ fn fullscreen_contents(app: &mut App, ui: &mut egui::Ui) {
     };
     let lyrics = match &app.lyrics {
         Loadable::NotLoaded | Loadable::Loading => {
-            widgets::loading_row(ui, &palette, app.locale);
+            // Nothing until the words arrive.
             return;
         }
-        Loadable::Failed(error) => {
-            let message = gettext(
-                app.locale,
-                // Translators: Keep {error} unchanged. It is the original failure detail.
-                "Couldn't fetch the lyrics: {error}",
-            )
-            .replace("{error}", error);
-            ui.add_space(8.0);
-            theme::text(ui, message, theme::regular(13.0), palette.text);
-            ui.add_space(8.0);
-            if theme::pill_button(ui, &palette, &gettext(app.locale, "Try again"), false).clicked()
-            {
-                app.actions.push(Action::RetryLyrics);
-            }
+        Loadable::Failed(_) => {
+            // Either the words show up or they do not.
             return;
         }
         Loadable::Loaded(None) => {
@@ -1069,13 +911,6 @@ fn fullscreen_contents(app: &mut App, ui: &mut egui::Ui) {
             return;
         }
         Loadable::Loaded(Some(lyrics)) if lyrics.instrumental => {
-            widgets::empty_state(
-                ui,
-                &palette,
-                Icon::Music,
-                &gettext(app.locale, "Instrumental"),
-                &gettext(app.locale, "No timed lyrics for this track."),
-            );
             return;
         }
         Loadable::Loaded(Some(lyrics)) => lyrics.clone(),
@@ -1106,17 +941,11 @@ fn fullscreen_contents(app: &mut App, ui: &mut egui::Ui) {
     // so highlighting cannot rewrap the words during a transition.
     // A line takes 300 ms to light up or fade.
     let quiet = palette.text.gamma_multiply(0.68);
-    let align = app.settings.lyrics_align_value();
-    // 3, 4 and 5 are the focus modes: the sung line big, the rest small.
-    // At 3 the page runs backwards: the line being sung is at the bottom
-    // and the next ones fade in from the top.
-    let focus = align >= 3;
-    let reversed = align == 3;
-    let sung_at = match align {
-        3 => 0.8,
-        4 => 0.5,
-        _ => SUNG_LINE_AT,
-    };
+    let right = app.settings.lyrics_right();
+    // Focus: the sung line big, the rest small, held in the middle.
+    let focus = app.settings.lyrics_focus();
+    let reversed = false;
+    let sung_at = if focus { 0.5 } else { SUNG_LINE_AT };
     let stamps_on = !app.settings.lyrics_flag(crate::settings::Settings::LYRICS_HIDE_STAMPS);
     let countdown = app.settings.lyrics_flag(crate::settings::Settings::LYRICS_COUNTDOWN)
         && lyrics.synced;
@@ -1217,11 +1046,7 @@ fn fullscreen_contents(app: &mut App, ui: &mut egui::Ui) {
                     Sense::hover()
                 };
                 let side_w = if column_on { stamp_w + STAMP_GAP } else { 0.0 };
-                let wrap = if focus {
-                    (ui.available_width() - 130.0).max(120.0)
-                } else {
-                    (ui.available_width() - side_w - 8.0).max(120.0)
-                };
+                let wrap = (ui.available_width() - side_w - 8.0).max(120.0);
                 let galley = crate::bidi::layout(ui.painter(), text, font, color, wrap, usize::MAX, None);
                 let center = ui.cursor().top() + galley.size().y * 0.5;
                 let edge = ((center - viewport.top()).min(viewport.bottom() - center)
@@ -1236,13 +1061,14 @@ fn fullscreen_contents(app: &mut App, ui: &mut egui::Ui) {
                             sense,
                         );
                         let painter = ui.painter().clone();
-                        // Left: time column, small fixed gap, words from one
-                        // shared edge. Right: the mirror of that. Centre:
-                        // words centred, time at the left edge.
-                        let text_x = match align {
-                            0 => rect.left() + side_w,
-                            2 => rect.right() - side_w - galley.size().x,
-                            _ => rect.center().x - galley.size().x / 2.0,
+                        // Left: words from the left edge, time on the right.
+                        // Right: the mirror. Focus: words centred, time right.
+                        // The time sits on the same side as the words: the
+                        // left edge for Left, the right edge for Right.
+                        let text_x = if right {
+                            rect.right() - 2.0 - side_w - galley.size().x
+                        } else {
+                            rect.left() + 2.0 + side_w
                         };
                         painter.galley(pos2(text_x, rect.top()), galley.clone(), color);
                         // The time of each timed line; the line after the
@@ -1257,7 +1083,9 @@ fn fullscreen_contents(app: &mut App, ui: &mut egui::Ui) {
                             None
                         };
                         if let Some((label, hot)) = shown {
-                            let (x, anchor) = if align == 2 {
+                            // Words on the left put the time on the right, and
+                            // the other way round.
+                            let (x, anchor) = if right {
                                 (rect.right() - 2.0, egui::Align2::RIGHT_CENTER)
                             } else {
                                 (rect.left() + 2.0, egui::Align2::LEFT_CENTER)
@@ -1460,17 +1288,23 @@ fn controls_slim(app: &mut App, ui: &mut egui::Ui, top_left: egui::Pos2, width: 
 }
 
 /// How wide the pop-out controls panel is, for the width asked for.
-pub(super) fn controls_width(app: &App, width: f32) -> f32 {
-    let k = app.settings.controls_scale_value();
-    let kc = 1.0 + (k - 1.0) * 0.5;
-    width.max(218.0 * kc + 40.0).clamp(300.0, 640.0)
+pub(super) fn controls_width(app: &App, _width: f32) -> f32 {
+    controls_width_for(app.settings.controls_scale_value())
+}
+
+/// The panel's width follows its size: the smallest it goes is wide enough
+/// for the buttons and a volume bar, the biggest is 640, and nothing in
+/// between is wider or narrower than its height asks for.
+pub(super) fn controls_width_for(scale: f32) -> f32 {
+    let t = ((scale - 0.7) / 1.1).clamp(0.0, 1.0);
+    385.0 + t * (640.0 - 385.0)
 }
 
 /// How tall the pop-out controls panel is: buttons, song bar, volume.
 pub(super) fn controls_height(app: &App) -> f32 {
     let k = app.settings.controls_scale_value();
     let kc = 1.0 + (k - 1.0) * 0.5;
-    10.0 + 36.0 * kc + 4.0 + 26.0 * k + 4.0 + 24.0 * kc + 10.0
+    10.0 + 36.0 * kc + 4.0 + 26.0 * k + 10.0
 }
 
 pub(super) fn controls_box_inner(app: &mut App, ui: &mut egui::Ui, top_left: egui::Pos2, width: f32, centred: bool) -> Option<Rect> {
@@ -1504,22 +1338,96 @@ pub(super) fn controls_box_inner(app: &mut App, ui: &mut egui::Ui, top_left: egu
     );
     // The song-length bar always fills the panel, however wide it is made.
     ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("popout-full-seek"), true));
+    // A press or drag on the song bar or the volume bar moves the panel; a
+    // right-click or a double-click is what sets them (below).
+    ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("sliders-locked"), true));
+    let before_seek = app.actions.len();
     super::player_bar::transport(
         app,
         ui,
         Some(&now),
         seek_row,
         buttons_row,
-        outer.center().x - controls_w / 2.0,
+        outer.left() + 14.0,
         (outer.left() + 54.0, outer.right() - 14.0),
     );
     ui.ctx().data_mut(|data| data.remove::<bool>(egui::Id::new("popout-full-seek")));
-    // The volume bar stays inside the song bar's ends: never longer.
-    let volume_row = Rect::from_min_size(
-        pos2(outer.left() + 60.0, seek_row.bottom() + 4.0),
-        vec2(width - 120.0, volume_h),
+    // The volume bar sits on the first row, right of the repeat button; the
+    // volume buttons are squeezed in above it on the same row.
+    let volume_left = outer.left() + 14.0 + controls_w + 10.0;
+    let presets = app.settings.volume_presets_value();
+    let has_presets = !presets.is_empty();
+    let slider_h = if has_presets { (volume_h * 0.62).max(12.0) } else { volume_h };
+    let chips_h = if has_presets { (buttons_h - slider_h - 2.0).clamp(10.0, 18.0) } else { 0.0 };
+    let block_h = slider_h + if has_presets { chips_h + 1.0 } else { 0.0 };
+    let block_top = buttons_row.center().y - block_h / 2.0;
+    let volume_row = Rect::from_min_max(
+        pos2(volume_left, block_top + block_h - slider_h),
+        pos2(outer.right() - 14.0, block_top + block_h),
     );
+    let before_volume = app.actions.len();
     super::player_bar::volume_row(app, ui, volume_row);
+    if has_presets {
+        let row = Rect::from_min_size(pos2(volume_left, block_top), vec2(volume_row.width(), chips_h));
+        super::player_bar::popout_presets(app, ui, row, &presets);
+    }
+    ui.ctx().data_mut(|data| data.remove::<bool>(egui::Id::new("sliders-locked")));
+    let _ = (before_seek, before_volume);
+    // The song bar and the volume bar only answer a right-click or a
+    // double-click, which jump straight to the spot; a press and drag on
+    // either one moves the panel, so a slip never seeks or changes the volume.
+    let ctx = ui.ctx().clone();
+    // Only the bar itself jumps on a right-click; the speaker and the
+    // percentage beside it open the volume menu instead.
+    let volume_track = ctx
+        .data(|data| data.get_temp::<Rect>(egui::Id::new("pop-volume-slider").with("rect")))
+        .unwrap_or(volume_row);
+    let bars = [seek_row.expand2(vec2(0.0, 4.0)), volume_track.expand2(vec2(6.0, 4.0))];
+    let (double, right, down, pressed, pos, delta) = ctx.input(|input| {
+        (
+            input.pointer.button_double_clicked(egui::PointerButton::Primary),
+            input.pointer.button_clicked(egui::PointerButton::Secondary),
+            input.pointer.primary_down(),
+            input.pointer.primary_pressed(),
+            input.pointer.interact_pos(),
+            input.pointer.delta(),
+        )
+    });
+    if (double || right)
+        && let Some(p) = pos
+        && let Some(i) = bars.iter().position(|bar| bar.contains(p))
+    {
+        let slider_id = if i == 0 { "seek-slider" } else { "pop-volume-slider" };
+        let rect = ctx.data(|data| data.get_temp::<Rect>(egui::Id::new(slider_id).with("rect")));
+        if let Some(rect) = rect.filter(|rect| rect.width() > 1.0) {
+            let value = ((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+            if i == 0 {
+                if now.duration_ms > 0 {
+                    app.seek_preview = None;
+                    app.actions.push(Action::Seek((value * now.duration_ms as f32) as u32));
+                }
+            } else {
+                app.volume_preview = None;
+                app.actions.push(Action::SetVolume((value * 100.0).round() as u8));
+            }
+        }
+    }
+    // A drag that began on a bar keeps moving the panel until the button is
+    // let go, even though the bar moves away from where the press was (asking
+    // "is the press still on the bar" dropped the panel after a few pixels).
+    // Kept per window, so the extra visualizer window and the main one never
+    // share a drag.
+    let viewport = ctx.viewport_id();
+    let drag_flag = egui::Id::new(("popout-bar-dragging", viewport));
+    let mut dragging = ctx.data(|data| data.get_temp::<bool>(drag_flag)).unwrap_or(false);
+    if pressed {
+        dragging = pos.is_some_and(|p| bars.iter().any(|bar| bar.contains(p)));
+    }
+    if !down {
+        dragging = false;
+    }
+    ctx.data_mut(|data| data.insert_temp(drag_flag, dragging));
+    let _ = delta;
     if now.playing {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
     }

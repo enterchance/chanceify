@@ -1,5 +1,6 @@
 //! Chanceify's internals, exposed so diagnostics and tests can reach them.
 
+pub mod audio_shared;
 pub mod analysis;
 pub mod app_icons;
 pub mod api;
@@ -52,7 +53,6 @@ pub mod media_controls;
 #[path = "media_native.rs"]
 pub mod media_controls;
 pub mod membership;
-pub mod milkdrop;
 pub mod model;
 pub mod opener;
 pub mod paths;
@@ -66,7 +66,6 @@ pub mod session_reads;
 pub mod settings;
 pub mod single_instance;
 pub mod sink;
-pub mod skin;
 pub mod smart_shuffle;
 pub mod speed;
 pub mod stats;
@@ -80,6 +79,5 @@ pub mod unavailable;
 pub mod updates;
 pub mod util;
 pub mod vis;
-pub mod winamp;
 pub mod window;
 pub mod zeroconf;

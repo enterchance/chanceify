@@ -108,9 +108,29 @@ pub struct TrackColumns {
     /// 3 date added, 4 release date, 5 tempo. The title takes whatever room
     /// the others leave, wherever it is.
     pub order: [u8; 6],
+    /// Where the # column sits when it has been dragged off the left edge:
+    /// the number of places from the left, among the columns shown (the
+    /// length included). `None` keeps it first, before the cover.
+    pub number_at: Option<u8>,
+    /// Where the length column sits once dragged off the right edge: the
+    /// number of places from the left among the columns shown (the # not
+    /// counted). `None` keeps it at the right end.
+    pub length_at: Option<u8>,
+    /// Where the cover picture column sits once dragged away from the song
+    /// name: places from the left among the columns shown (the # not counted).
+    /// `None` keeps it right before the song name.
+    pub cover_at: Option<u8>,
     /// The columns share the width of the list between them instead of
     /// keeping the widths they were dragged to.
     pub spread: bool,
+    /// The album cover column is switched off.
+    pub hide_cover: bool,
+    /// Width of the cover column and of the length column, as dragged;
+    /// zero is the standard width.
+    pub cover_w: f32,
+    pub length_w: f32,
+    /// How wide the song name column may grow (zero is the standard 460).
+    pub title_w: f32,
 }
 
 impl Default for TrackColumns {
@@ -131,12 +151,64 @@ impl Default for TrackColumns {
             lock_left: false,
             grid: false,
             order: Self::DEFAULT_ORDER,
+            number_at: None,
+            length_at: None,
+            cover_at: None,
             spread: false,
+            hide_cover: false,
+            cover_w: 0.0,
+            length_w: 0.0,
+            title_w: 0.0,
         }
     }
 }
 
 impl TrackColumns {
+    /// How wide the cover column is (36 to 200).
+    pub fn cover_width(&self) -> f32 {
+        // The cover picture is a fixed square: it is never resized.
+        52.0
+    }
+
+    /// The widest the song name column gets (200 to 1400).
+    pub fn title_cap(&self) -> f32 {
+        if self.title_w.is_finite() && self.title_w > 0.0 { self.title_w.clamp(200.0, 1400.0) } else { 380.0 }
+    }
+
+    /// How wide the length column is: always the same, it only ever holds a
+    /// time such as 4:13 (or 1:02:03).
+    pub fn length_width(&self) -> f32 {
+        60.0
+    }
+
+    /// The tempo column is always as wide as three digits need.
+    pub const BPM_WIDTH: f32 = 48.0;
+
+    /// The playlists column is one cover square wide; more playlists make the
+    /// covers smaller, never the column bigger.
+    pub const PLAYLISTS_WIDTH: f32 = 52.0;
+
+    /// The widest a column is drawn. The playlists column only ever holds a
+    /// small grid of covers, so it never needs more than this.
+    pub fn max_width(column: crate::model::SortColumn) -> f32 {
+        match column {
+            crate::model::SortColumn::Playlists => 96.0,
+            _ => Self::MAX,
+        }
+    }
+
+    /// The narrowest a column is drawn, so what it holds always fits without
+    /// being cut: "11 months ago" and the heading "date added" need more than
+    /// the general minimum.
+    pub fn min_width(column: crate::model::SortColumn) -> f32 {
+        match column {
+            crate::model::SortColumn::Added => 100.0,
+            crate::model::SortColumn::Release => 84.0,
+            crate::model::SortColumn::Bpm => Self::BPM_WIDTH,
+            _ => Self::MIN,
+        }
+    }
+
     /// Title first, then the others in the order they have always had.
     pub const DEFAULT_ORDER: [u8; 6] = [0, 1, 2, 3, 4, 5];
 
@@ -202,18 +274,18 @@ impl TrackColumns {
     }
 
     /// The narrowest a column may be dragged before it is treated as hidden.
-    pub const MIN: f32 = 38.0;
+    pub const MIN: f32 = 64.0;
     /// The widest, so one drag cannot swallow the song names.
     pub const MAX: f32 = 640.0;
 
     /// The width this column starts at, and returns to on a double-click.
     pub fn default_width(column: crate::model::SortColumn) -> f32 {
         match column {
-            crate::model::SortColumn::Album => 200.0,
-            crate::model::SortColumn::Added => 120.0,
+            crate::model::SortColumn::Album => 160.0,
+            crate::model::SortColumn::Added => 104.0,
             crate::model::SortColumn::Bpm => 72.0,
-            crate::model::SortColumn::Release => 110.0,
-            crate::model::SortColumn::Playlists => 150.0,
+            crate::model::SortColumn::Release => 90.0,
+            crate::model::SortColumn::Playlists => 76.0,
             crate::model::SortColumn::Genre => 170.0,
             _ => 0.0,
         }
@@ -232,10 +304,14 @@ impl TrackColumns {
             crate::model::SortColumn::Genre => 0.0,
             _ => 0.0,
         };
-        if raw.is_finite() {
-            raw.clamp(0.0, Self::MAX)
-        } else {
+        if !raw.is_finite() || raw <= 0.0 {
             0.0
+        } else if column == crate::model::SortColumn::Bpm {
+            Self::BPM_WIDTH
+        } else if column == crate::model::SortColumn::Playlists {
+            Self::PLAYLISTS_WIDTH
+        } else {
+            raw.clamp(Self::min_width(column), Self::max_width(column))
         }
     }
 
@@ -473,6 +549,12 @@ pub struct SwayPreset {
     /// 1 anchors every letter at its foot so only the tops sway, like a
     /// stalk of wheat; 0 turns the whole line about its middle.
     pub stalk: f32,
+    /// How the title moves: 0 rocks (the original), 1 bounces up and down,
+    /// 2 slides side to side, 3 leans, every letter tilting together with its
+    /// foot fixed, 4 shakes.
+    pub kind: u8,
+    /// How far a bounce, slide or shake travels, as a fraction of a line's height.
+    pub amp: f32,
 }
 
 impl ThemeChoice {
@@ -584,7 +666,55 @@ pub struct VisPreset {
 impl Settings {
     /// The settings that make up a visualizer look.
     fn is_vis_key(key: &str) -> bool {
-        key.starts_with("player_bar_vis") || key.starts_with("swirl_") || key.starts_with("vis_") && key != "vis_presets"
+        key.starts_with("player_bar_vis") || key.starts_with("swirl_") || key.starts_with("vis_") && key != "vis_presets" && key != "vis_views"
+    }
+
+    /// The settings each view keeps for itself (see `vis_views`).
+    fn is_view_key(key: &str) -> bool {
+        (Self::is_vis_key(key) && !matches!(key, "vis_panel_w" | "vis_panel_h" | "vis_live_preview"))
+            || matches!(
+                key,
+                "jump_shake" | "jump_sens" | "jump_gap" | "jump_floor" | "jump_adapt" | "sway_sens" | "lyrics_flags"
+                    | "lyrics_align" | "lyrics_vis" | "lyrics_vis_dark" | "lyrics_vis_mode"
+            )
+    }
+
+    /// Keep the open view's settings in its slot.
+    pub fn store_view(&mut self, view: u8) {
+        let Ok(serde_json::Value::Object(all)) = serde_json::to_value(&*self) else {
+            return;
+        };
+        let own: serde_json::Map<_, _> = all.into_iter().filter(|(key, _)| Self::is_view_key(key)).collect();
+        self.vis_views[view.min(2) as usize] = Some(own);
+    }
+
+    /// Put a view's own settings in place. A view never opened before keeps
+    /// the values as they are, so it starts as a copy of the one before.
+    pub fn load_view(&mut self, view: u8) {
+        let Some(profile) = self.vis_views[view.min(2) as usize].clone() else {
+            return;
+        };
+        let Ok(serde_json::Value::Object(mut all)) = serde_json::to_value(&*self) else {
+            return;
+        };
+        for (key, value) in profile {
+            if Self::is_view_key(&key) {
+                all.insert(key, value);
+            }
+        }
+        if let Ok(mut next) = serde_json::from_value::<Settings>(serde_json::Value::Object(all)) {
+            next.proxy_password = std::mem::take(&mut self.proxy_password);
+            next.proxy_password_legacy = self.proxy_password_legacy;
+            *self = next;
+        }
+    }
+
+    /// Leave view `from` (if there was one) and enter view `to`.
+    pub fn switch_view(&mut self, from: Option<u8>, to: u8) {
+        if let Some(from) = from {
+            self.store_view(from);
+        }
+        self.load_view(to);
     }
 
     pub fn save_vis_preset(&mut self, name: &str) {
@@ -813,6 +943,8 @@ pub struct Settings {
     pub bar_layout: u8,
     /// Ask before removing one unavailable song from its playlist.
     pub unavailable_confirm_one: bool,
+    /// Ask before taking a song off "New from your artists".
+    pub release_confirm_remove: bool,
     /// Show the time as "1:23 / 3:45" before the bar instead of at both ends.
     #[serde(default)]
     pub seek_time_joined: bool,
@@ -881,6 +1013,11 @@ pub struct Settings {
     /// The title only sways on the beat and holds still between hits.
     #[serde(default)]
     pub vis_sway_beat: bool,
+    /// What the title's sway follows while it reacts to the music: 0 the
+    /// loudness, 1 the bass, 2 the beat.
+    pub vis_sway_react: u8,
+    /// How readily the sway reacts (1.0 = normal).
+    pub sway_sens: f32,
     /// How the title sways, an index into `SWAY_PRESETS`.
     #[serde(default)]
     pub vis_sway: u8,
@@ -908,6 +1045,12 @@ pub struct Settings {
     pub vis_text_font: u8,
     /// Hide the artist name under the full-screen title.
     pub vis_text_no_artist: bool,
+    /// A thin border round the album art in the full screen visualizer.
+    pub vis_art_border: bool,
+    /// What the lyrics page of the extra window names: the song, the artist, a heart.
+    pub extra_show_title: bool,
+    pub extra_show_artist: bool,
+    pub extra_show_heart: bool,
     /// Show the playing song on the reader's Discord profile.
     pub discord_presence: bool,
     /// The Application ID of the Discord app that presence is shown as.
@@ -936,8 +1079,22 @@ pub struct Settings {
     pub float_controls: Option<[f32; 3]>,
     /// Where the controls panel sits while the album art is big, and in full-screen lyrics.
     pub float_hide_bar: bool,
+    /// The pop-out controls live in a window of their own, off the app.
+    pub float_detached: bool,
+    /// How visible the pop-out controls stay in the full screen visualizer
+    /// once the pointer has left them (0.05 to 1). Half when unset.
+    pub float_idle: Option<f32>,
+    /// That window's place on the screen.
+    pub float_window: Option<[f32; 2]>,
     /// Width of the Views panel.
     pub views_width: f32,
+    /// Height of the Views panel (0 = fit the content).
+    pub views_height: f32,
+    /// How big the Views panel is drawn (1 = normal).
+    pub views_scale: f32,
+    /// Size of the visualizer settings panel (0 = fit the content).
+    pub vis_panel_w: f32,
+    pub vis_panel_h: f32,
     /// The mini player window: x, y, width, height.
     pub mini_window: Option<[f32; 4]>,
     /// The extra visualizer window: x, y, width, height.
@@ -946,6 +1103,8 @@ pub struct Settings {
     pub mini_restore_size: Option<[f32; 2]>,
     pub float_big: Option<[f32; 3]>,
     pub float_lyrics: Option<[f32; 3]>,
+    /// Where the extra visualizer window keeps its controls.
+    pub float_extra: Option<[f32; 3]>,
     /// Calm mode: how much of the cover shows soft (0 sharp, 1 fully soft).
     pub calm_blur: f32,
     /// Hovering a theme in the list shows it for the moment.
@@ -959,6 +1118,18 @@ pub struct Settings {
     /// 0 album big, swirl small; 1 swirl big, album small; 2 chanceify badge only.
     pub discord_look: u8,
     pub discord_song_page: bool,
+    /// Which lines the Discord card says: the song, the artist, chanceify.
+    pub discord_say_song: bool,
+    /// The playlist's name after the artist on the second line, linking to it.
+    pub discord_playlist_line: bool,
+    pub discord_say_artist: bool,
+    pub discord_say_app: bool,
+    /// Settings sections folded away (kept between launches).
+    pub settings_closed: Vec<String>,
+    /// The two buttons under the song: 0 none, 1 open in chanceify, 2 open in
+    /// Spotify, 3 the playlist, 4 the reader's profile, 5 get chanceify.
+    pub discord_button_1: u8,
+    pub discord_button_2: u8,
     /// Show the "Listen on Spotify" and "Get chanceify" buttons.
     pub discord_buttons: bool,
     /// Make the song and the artist links to Spotify.
@@ -1070,6 +1241,14 @@ pub struct Settings {
     pub vis_title_layout: u8,
     /// How hard the bass jump shakes the window (1.0 = normal).
     pub jump_shake: f32,
+    /// How easily the screen jumps: more means smaller rises count (0.4 to 2.5).
+    pub jump_sens: f32,
+    /// The rest between two jumps, in hundredths of a second (10 to 100).
+    pub jump_gap: f32,
+    /// Music quieter than this never makes a jump, 0 to 20 (percent of full).
+    pub jump_floor: f32,
+    /// How fast the jump follows a song's own loudness, 1 to 30.
+    pub jump_adapt: f32,
     /// Which app icon the window and taskbar button wear. See `app_icons`.
     pub app_icon: u8,
     /// The compact mini player layout, switched on by the reader. A window
@@ -1173,28 +1352,8 @@ pub struct Settings {
     pub library_sort: std::collections::BTreeMap<LibraryShelf, LibrarySort>,
     /// Interface zoom, egui's zoom factor; Ctrl+plus/minus changes it.
     pub zoom: f32,
-    /// The Winamp window is open.
-    pub winamp_window: bool,
-    /// Windows and X11: keep a taskbar button while the Winamp window is visible.
-    pub winamp_show_taskbar: bool,
-    /// Skin file or folder name. `None` selects the built-in skin.
-    pub skin: Option<String>,
-    /// Pick a different skin each time the mini player opens; `skin` holds
-    /// the one picked.
-    pub random_skin: bool,
-    /// Screen pixels per skin pixel; `None` picks double size for the
-    /// display.
-    pub skin_scale: Option<u8>,
-    /// The Winamp window stays above other windows.
-    pub winamp_on_top: bool,
     /// The mini player's visualiser: bars, scope, or off.
     pub vis: VisMode,
-    /// The playlist window is open under the mini player.
-    pub playlist_open: bool,
-    /// How tall the playlist window is, in skin pixels.
-    pub playlist_height: u32,
-    /// The equalizer window is open under the mini player.
-    pub eq_open: bool,
     /// The equalizer shapes local playback.
     pub eq_on: bool,
     /// The preamp, in decibels, never above zero.
@@ -1205,27 +1364,6 @@ pub struct Settings {
     pub balance: f32,
     /// Play both channels the same.
     pub mono: bool,
-    /// The playlist window is rolled up to its title bar.
-    pub playlist_shaded: bool,
-    /// The equalizer window is rolled up to its title bar.
-    pub eq_shaded: bool,
-    /// The main window is rolled up to its title bar.
-    pub winamp_shaded: bool,
-    /// The MilkDrop window is open (its own window, not part of the skin).
-    pub milkdrop_open: bool,
-    /// How long each preset plays before the next, in seconds.
-    pub milkdrop_seconds: u32,
-    /// How many frames a second the MilkDrop window draws; 0 is uncapped.
-    pub milkdrop_fps: u32,
-    /// Last reported MilkDrop screen refresh rate. The first value sets the
-    /// default frame rate; this field is not directly configurable.
-    pub milkdrop_screen_hz: u32,
-    /// The picture's inner resolution: 1 full, 2 half, 4 quarter.
-    pub milkdrop_scale: u32,
-    /// The MilkDrop window fills the screen.
-    pub milkdrop_fullscreen: bool,
-    /// The MilkDrop window's size in logical points, when not full-screen.
-    pub milkdrop_size: [f32; 2],
     /// Which proxy to use. Older files without this field stay on `system`.
     #[serde(default, skip_serializing_if = "proxy_mode_is_system")]
     pub proxy_mode: ProxyMode,
@@ -1251,6 +1389,11 @@ pub struct Settings {
     /// succeeds. This flag is only in memory and is never persisted.
     #[serde(skip)]
     pub proxy_password_legacy: bool,
+    /// The visualizer and lyrics settings each view keeps for itself: 0 the
+    /// normal view, 1 the full screen visualizer, 2 the full screen lyrics.
+    /// The plain fields above always hold the open view's own values; moving
+    /// to another view saves them here and loads that view's.
+    pub vis_views: [Option<serde_json::Map<String, serde_json::Value>>; 3],
 }
 
 impl std::fmt::Debug for Settings {
@@ -1331,6 +1474,7 @@ impl Default for Settings {
             bar_stacked: false,
             bar_layout: 0,
             unavailable_confirm_one: true,
+            release_confirm_remove: true,
             anchor_volume: None,
             seek_time_joined: false,
             seek_time_mode: 0,
@@ -1354,6 +1498,8 @@ impl Default for Settings {
             vis_text_still: false,
             vis_sway: 0,
             vis_sway_beat: false,
+            vis_sway_react: 2,
+            sway_sens: 1.0,
             vis_sway_amount: 0.0,
             vis_text_no_outline: false,
             vis_text_back: false,
@@ -1365,6 +1511,10 @@ impl Default for Settings {
             vis_font_random: false,
             vis_text_font: 0,
             vis_text_no_artist: false,
+            vis_art_border: true,
+            extra_show_title: true,
+            extra_show_artist: true,
+            extra_show_heart: true,
             discord_presence: false,
             discord_client_id: String::new(),
             discord_status_line: 0,
@@ -1374,15 +1524,23 @@ impl Default for Settings {
             my_view: None,
             views_disc: None,
             disc_dim: 0.2,
-            calm_look: 0,
+            calm_look: 1,
             float_controls: None,
             float_hide_bar: false,
             views_width: 316.0,
+            views_height: 0.0,
+            views_scale: 1.0,
+            float_detached: false,
+            float_idle: None,
+            float_window: None,
+            vis_panel_w: 0.0,
+            vis_panel_h: 0.0,
             mini_window: None,
             extra_window: None,
             mini_restore_size: None,
             float_big: None,
             float_lyrics: None,
+            float_extra: None,
             calm_blur: 0.8,
             theme_point_preview: false,
             discord_playlist: false,
@@ -1390,6 +1548,13 @@ impl Default for Settings {
             discord_playlist_button: false,
             discord_look: 0,
             discord_song_page: false,
+            discord_say_song: true,
+            discord_playlist_line: false,
+            discord_say_artist: true,
+            discord_say_app: true,
+            settings_closed: Vec::new(),
+            discord_button_1: 2,
+            discord_button_2: 5,
             discord_buttons: true,
             discord_links: true,
             discord_hide_paused: false,
@@ -1433,7 +1598,11 @@ impl Default for Settings {
             recents_show_cover: true,
             vis_title_layout: 0,
             vis_presets: Vec::new(),
-            jump_shake: 1.0,
+            jump_shake: 0.5,
+            jump_sens: 1.0,
+            jump_gap: 32.0,
+            jump_floor: 3.0,
+            jump_adapt: 5.0,
             app_icon: 1,
             mini_player: false,
             mini_queue: true,
@@ -1475,31 +1644,12 @@ impl Default for Settings {
             sidebar_order: Vec::new(),
             library_sort: std::collections::BTreeMap::new(),
             zoom: 1.0,
-            winamp_window: false,
-            winamp_show_taskbar: true,
-            skin: None,
-            random_skin: false,
-            skin_scale: None,
-            winamp_on_top: false,
             vis: VisMode::default(),
-            playlist_open: false,
-            playlist_height: 174,
-            eq_open: false,
             eq_on: false,
             eq_preamp_db: 0.0,
             eq_bands_db: [0.0; 10],
             balance: 0.0,
             mono: false,
-            playlist_shaded: false,
-            eq_shaded: false,
-            winamp_shaded: false,
-            milkdrop_open: false,
-            milkdrop_seconds: crate::milkdrop::DEFAULT_SECONDS,
-            milkdrop_fps: crate::milkdrop::DEFAULT_FPS,
-            milkdrop_screen_hz: 0,
-            milkdrop_scale: 1,
-            milkdrop_fullscreen: false,
-            milkdrop_size: crate::milkdrop::DEFAULT_SIZE,
             proxy_mode: ProxyMode::System,
             proxy: String::new(),
             proxy_host: String::new(),
@@ -1507,6 +1657,7 @@ impl Default for Settings {
             proxy_username: String::new(),
             proxy_password: String::new(),
             proxy_password_legacy: false,
+            vis_views: [None, None, None],
         }
     }
 }
@@ -1674,7 +1825,7 @@ impl Settings {
         ("Colour strength", 50.0, 250.0, 140.0),
         ("Contrast", 60.0, 200.0, 120.0),
         ("Speed", 0.0, 300.0, 100.0),
-        ("Speeds up with the music", 0.0, 300.0, 100.0),
+        ("Music boost", 0.0, 300.0, 100.0),
         ("Brightness", 20.0, 100.0, 100.0),
         ("Colour overlay", 0.0, 150.0, 100.0),
         ("Colour overlay: bands", 1.0, 6.0, 1.8),
@@ -1698,25 +1849,37 @@ impl Settings {
 
     /// The chosen sway preset.
     pub fn vis_sway_preset(&self) -> SwayPreset {
-        Self::SWAY_PRESETS[(self.vis_sway as usize).min(Self::SWAY_PRESETS.len() - 1)]
+        // The title stays where it is and only vibrates with the music (the old
+        // sway styles are gone), a little more or less by the strength slider.
+        SwayPreset { name: "Vibration", lean: 0.0, speed: 1.0, bass: 1.0, bob: 0.0, stalk: 0.0, kind: 4, amp: 0.07 }
     }
 
     /// Ready-made sways for the full-screen title: a name, how far a line
     /// leans, how fast, how much the bass adds, and how far each letter
     /// bobs on its own (a fraction of its height).
-    pub const SWAY_PRESETS: [SwayPreset; 12] = [
-        SwayPreset { name: "Sway", lean: 0.9, speed: 1.0, bass: 1.0, bob: 0.0, stalk: 1.0 },
-        SwayPreset { name: "Soft sway", lean: 0.5, speed: 0.6, bass: 0.5, bob: 0.0, stalk: 1.0 },
-        SwayPreset { name: "Big sway", lean: 1.6, speed: 1.3, bass: 1.0, bob: 0.0, stalk: 1.0 },
-        SwayPreset { name: "Bass pump", lean: 0.5, speed: 1.0, bass: 3.5, bob: 0.0, stalk: 0.0 },
-        SwayPreset { name: "Wave", lean: 0.25, speed: 1.0, bass: 1.0, bob: 0.22, stalk: 0.0 },
-        SwayPreset { name: "Dance", lean: 0.6, speed: 1.6, bass: 2.0, bob: 0.14, stalk: 0.0 },
-        SwayPreset { name: "Dance calm", lean: 0.3, speed: 1.2, bass: 1.5, bob: 0.12, stalk: 0.0 },
-        SwayPreset { name: "Dance bounce", lean: 0.15, speed: 1.8, bass: 3.0, bob: 0.2, stalk: 0.0 },
-        SwayPreset { name: "Dance fast", lean: 0.4, speed: 2.4, bass: 2.0, bob: 0.14, stalk: 0.0 },
-        SwayPreset { name: "Drunk", lean: 1.2, speed: 0.7, bass: 1.0, bob: 0.1, stalk: 0.0 },
-        SwayPreset { name: "Drunk tipsy", lean: 0.7, speed: 0.6, bass: 0.8, bob: 0.07, stalk: 0.0 },
-        SwayPreset { name: "Drunk wobbly", lean: 1.6, speed: 1.0, bass: 1.2, bob: 0.14, stalk: 0.0 },
+    pub const SWAY_PRESETS: [SwayPreset; 22] = [
+        SwayPreset { name: "Sway", lean: 0.9, speed: 1.0, bass: 1.0, bob: 0.0, stalk: 1.0, kind: 0, amp: 0.0 },
+        SwayPreset { name: "Soft sway", lean: 0.5, speed: 0.6, bass: 0.5, bob: 0.0, stalk: 1.0, kind: 0, amp: 0.0 },
+        SwayPreset { name: "Big sway", lean: 1.6, speed: 1.3, bass: 1.0, bob: 0.0, stalk: 1.0, kind: 0, amp: 0.0 },
+        SwayPreset { name: "Bass pump", lean: 0.5, speed: 1.0, bass: 3.5, bob: 0.0, stalk: 0.0, kind: 0, amp: 0.0 },
+        SwayPreset { name: "Wave", lean: 0.25, speed: 1.0, bass: 1.0, bob: 0.22, stalk: 0.0, kind: 0, amp: 0.0 },
+        SwayPreset { name: "Dance", lean: 0.6, speed: 1.6, bass: 2.0, bob: 0.14, stalk: 0.0, kind: 0, amp: 0.0 },
+        SwayPreset { name: "Dance calm", lean: 0.3, speed: 1.2, bass: 1.5, bob: 0.12, stalk: 0.0, kind: 0, amp: 0.0 },
+        SwayPreset { name: "Dance bounce", lean: 0.15, speed: 1.8, bass: 3.0, bob: 0.2, stalk: 0.0, kind: 0, amp: 0.0 },
+        SwayPreset { name: "Dance fast", lean: 0.4, speed: 2.4, bass: 2.0, bob: 0.14, stalk: 0.0, kind: 0, amp: 0.0 },
+        SwayPreset { name: "Drunk", lean: 1.2, speed: 0.7, bass: 1.0, bob: 0.1, stalk: 0.0, kind: 0, amp: 0.0 },
+        SwayPreset { name: "Drunk tipsy", lean: 0.7, speed: 0.6, bass: 0.8, bob: 0.07, stalk: 0.0, kind: 0, amp: 0.0 },
+        SwayPreset { name: "Drunk wobbly", lean: 1.6, speed: 1.0, bass: 1.2, bob: 0.14, stalk: 0.0, kind: 0, amp: 0.0 },
+        SwayPreset { name: "Bounce", lean: 1.0, speed: 1.0, bass: 1.5, bob: 0.0, stalk: 0.0, kind: 1, amp: 0.22 },
+        SwayPreset { name: "Soft bounce", lean: 1.0, speed: 0.8, bass: 1.0, bob: 0.0, stalk: 0.0, kind: 1, amp: 0.12 },
+        SwayPreset { name: "Hard bounce", lean: 1.0, speed: 1.3, bass: 3.0, bob: 0.0, stalk: 0.0, kind: 1, amp: 0.38 },
+        SwayPreset { name: "Slide", lean: 1.0, speed: 1.0, bass: 1.0, bob: 0.0, stalk: 0.0, kind: 2, amp: 0.35 },
+        SwayPreset { name: "Glide", lean: 1.0, speed: 0.5, bass: 0.6, bob: 0.0, stalk: 0.0, kind: 2, amp: 0.6 },
+        SwayPreset { name: "Lean", lean: 1.2, speed: 0.8, bass: 1.0, bob: 0.0, stalk: 1.0, kind: 3, amp: 0.0 },
+        SwayPreset { name: "Lean lazy", lean: 0.7, speed: 0.5, bass: 0.6, bob: 0.0, stalk: 1.0, kind: 3, amp: 0.0 },
+        SwayPreset { name: "Lean snappy", lean: 1.6, speed: 1.6, bass: 2.0, bob: 0.0, stalk: 1.0, kind: 3, amp: 0.0 },
+        SwayPreset { name: "Ripple", lean: 0.05, speed: 1.2, bass: 1.5, bob: 0.35, stalk: 0.0, kind: 0, amp: 0.0 },
+        SwayPreset { name: "Shake", lean: 1.0, speed: 3.0, bass: 3.0, bob: 0.0, stalk: 0.0, kind: 4, amp: 0.07 },
     ];
 
     /// How solid the window is: 1 is opaque, down to 0.3.
@@ -1821,13 +1984,13 @@ impl Settings {
         "player_bar_vis_flow_speed", "player_bar_vis_gap", "player_bar_vis_hex",
         "player_bar_vis_rise", "player_bar_vis_scale", "queue_compact", "queue_show_artist",
         "queue_show_cover", "queue_show_icons", "queue_show_length", "queue_show_numbers", "queue_show_time",
-        "queue_width", "float_controls", "float_big", "float_lyrics", "float_hide_bar", "calm_blur", "recents_show_artist", "recents_show_cover", "recents_show_icons", "recents_show_numbers", "vis_title_layout", "jump_shake", "mini_queue", "mini_volume", "mini_vis", "queue_click", "vis_reverse", "missing_mark_big", "row_order", "seek_anchor", "seek_custom_width", "seek_time_joined", "seek_time_mode",
+        "queue_width", "float_hide_bar", "calm_blur", "recents_show_artist", "recents_show_cover", "recents_show_icons", "recents_show_numbers", "vis_title_layout", "jump_shake", "mini_queue", "mini_volume", "mini_vis", "queue_click", "vis_reverse", "missing_mark_big", "row_order", "seek_anchor", "seek_custom_width", "seek_time_joined", "seek_time_mode",
         "seek_width", "show_shortcut_hints", "sidebar_compact", "sidebar_grid", "sidebar_order",
         "sidebar_width", "swirl_art_scroll", "swirl_art_single", "swirl_art_edge", "swirl_colours_fixed", "swirl_drift", "swirl_peaks",
         "swirl_scale", "swirl_tune", "swirl_warp", "swirl_waves", "theme", "theme_from_cover", "custom_bg", "custom_accent",
         "track_columns", "tracklist_compact", "vis", "vis_bar_sides", "vis_shapes",
         "vis_shapes_last", "vis_shapes_set", "volume_presets", "zoom",
-        "volume_custom_width", "vis_no_gradient", "vis_lyrics", "vis_text_still", "vis_sway", "vis_sway_amount", "vis_text_no_outline", "vis_text_back", "vis_back_alpha", "vis_back_round", "vis_back_pad", "vis_back_block", "vis_live_preview", "vis_font_random", "vis_text_font", "vis_text_no_artist", "vis_lyrics_no_back", "vis_bars_stay", "lyrics_vis", "lyrics_vis_dark", "lyrics_vis_mode", "window_opacity", "anchor_controls", "anchor_volume", "nudge_controls", "nudge_volume", "nudge_seek", "bar_stacked", "bar_layout", "bar_free", "bar_free_pos", "bar_free_seek", "lyrics_ctl_off", "vis_bars_opacity", "vis_flow_opacity", "swirl_react_mode", "vis_jump_react", "vis_jump_on",
+        "volume_custom_width", "vis_no_gradient", "vis_lyrics", "vis_text_still", "vis_sway", "vis_sway_amount", "vis_sway_react", "sway_sens", "vis_text_no_outline", "vis_text_back", "vis_back_alpha", "vis_back_round", "vis_back_pad", "vis_back_block", "vis_live_preview", "vis_font_random", "vis_text_font", "vis_text_no_artist", "vis_lyrics_no_back", "vis_bars_stay", "lyrics_vis", "lyrics_vis_dark", "lyrics_vis_mode", "window_opacity", "anchor_controls", "anchor_volume", "bar_stacked", "bar_layout", "bar_free", "lyrics_ctl_off", "vis_bars_opacity", "vis_flow_opacity", "swirl_react_mode", "vis_jump_react", "vis_jump_on", "float_idle",
     ];
 
     /// The shareable part of the settings, as the text of a file.
@@ -1881,6 +2044,30 @@ impl Settings {
     pub const LYRICS_BOUNCE_ART: u8 = 16;
     /// The artist's name is left off the lyrics page; the song's is bigger.
     pub const LYRICS_HIDE_ARTIST: u8 = 32;
+
+    /// The current line is big and the rest small (a switch of its own).
+    pub const LYRICS_FOCUS: u8 = 64;
+
+    /// Lyrics anchored to the right (with their time on the right too).
+    pub fn lyrics_right(&self) -> bool {
+        self.lyrics_align == 2
+    }
+
+    /// Focus on the current line. An old saved "focus" alignment (1, 3, 4, 5)
+    /// counts as the switch being on.
+    pub fn lyrics_focus(&self) -> bool {
+        self.lyrics_flags & Self::LYRICS_FOCUS != 0 || matches!(self.lyrics_align, 1 | 3..=5)
+    }
+
+    /// Moves an old saved focus alignment into the switch.
+    pub fn settle_lyrics_focus(&mut self) {
+        if self.lyrics_focus() {
+            self.lyrics_flags |= Self::LYRICS_FOCUS;
+        }
+        if self.lyrics_align != 2 {
+            self.lyrics_align = 0;
+        }
+    }
 
     pub fn lyrics_align_value(&self) -> u8 {
         // The old plain Centre (1) became the middle focus mode.
@@ -1940,7 +2127,11 @@ impl Settings {
     /// The volume shortcut buttons, at most four.
     pub fn volume_presets_value(&self) -> Vec<u8> {
         match &self.volume_presets {
-            Some(list) => list.iter().map(|v| (*v).min(100)).take(4).collect(),
+            Some(list) => {
+                let list: Vec<u8> = list.iter().map(|v| (*v).min(100)).take(4).collect();
+                // There is always at least one button.
+                if list.is_empty() { vec![50] } else { list }
+            }
             None => vec![50, 100],
         }
     }
@@ -2545,6 +2736,25 @@ impl ManualProxy {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn each_view_keeps_its_own_visualizer_settings() {
+        let mut s = super::Settings::default();
+        s.switch_view(None, 0);
+        s.vis_jump_on = true;
+        s.lyrics_align = 2;
+        // A view never opened starts as a copy of the one before.
+        s.switch_view(Some(0), 1);
+        assert!(s.vis_jump_on);
+        s.vis_jump_on = false;
+        s.lyrics_align = 0;
+        s.switch_view(Some(1), 0);
+        assert!(s.vis_jump_on);
+        assert_eq!(s.lyrics_align, 2);
+        s.switch_view(Some(0), 1);
+        assert!(!s.vis_jump_on);
+        assert_eq!(s.lyrics_align, 0);
+    }
+
+    #[test]
     fn the_bar_layout_follows_the_old_stack_switch_and_stays_in_range() {
         let mut settings = super::Settings::default();
         assert_eq!(settings.bar_layout_value(), 0);
@@ -2845,23 +3055,13 @@ mod tests {
     }
 
     #[test]
-    fn older_settings_keep_the_winamp_window_closed_and_the_built_in_skin() {
+    fn older_settings_keep_the_equalizer_and_visualiser_defaults() {
         let settings: Settings = serde_json::from_str(r#"{"zoom": 1.2}"#).unwrap();
-        assert!(!settings.winamp_window);
-        assert!(settings.winamp_show_taskbar);
-        assert_eq!(settings.skin, None);
-        assert_eq!(settings.skin_scale, None);
-        assert!(!settings.winamp_on_top);
         assert_eq!(settings.vis, super::VisMode::Bars);
-        assert!(!settings.playlist_open);
-        assert_eq!(settings.playlist_height, 174);
         assert!(!settings.eq_on);
         assert_eq!(settings.eq_bands_db, [0.0; 10]);
         assert_eq!(settings.balance, 0.0);
         assert!(!settings.mono);
-        assert!(!settings.playlist_shaded);
-        assert!(!settings.eq_shaded);
-        assert!(!settings.winamp_shaded);
     }
 
     #[test]
@@ -2872,19 +3072,6 @@ mod tests {
         assert_eq!(VisMode::Off.next(), VisMode::Bars);
         let settings: Settings = serde_json::from_str(r#"{"vis": "scope"}"#).unwrap();
         assert_eq!(settings.vis, VisMode::Scope);
-    }
-
-    #[test]
-    fn a_chosen_skin_round_trips() {
-        let settings = Settings {
-            winamp_window: true,
-            skin: Some("Zaxon.wsz".into()),
-            skin_scale: Some(3),
-            ..Settings::default()
-        };
-        let json = serde_json::to_string(&settings).unwrap();
-        let restored: Settings = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored, settings);
     }
 
     #[test]
@@ -3051,13 +3238,6 @@ mod tests {
         assert_eq!(PlayerBarVis::Flow.next(), PlayerBarVis::Swirl);
         assert_eq!(PlayerBarVis::Swirl.next(), PlayerBarVis::Waveform);
         assert_eq!(PlayerBarVis::Waveform.next(), PlayerBarVis::Off);
-    }
-
-    #[test]
-    fn older_settings_keep_the_chosen_skin() {
-        let settings: Settings = serde_json::from_str(r#"{"skin":"A.wsz"}"#).unwrap();
-        assert!(!settings.random_skin);
-        assert_eq!(settings.skin.as_deref(), Some("A.wsz"));
     }
 
     #[test]
@@ -3375,10 +3555,6 @@ pub struct SessionState {
     pub queue_open: Option<bool>,
     /// Which tab the queue panel showed: `queue` or `recents`.
     pub queue_tab: Option<String>,
-    /// Last outer position of the Winamp window.
-    pub winamp_pos: Option<[f32; 2]>,
-    /// Last outer position of the MilkDrop window.
-    pub milkdrop_pos: Option<[f32; 2]>,
     /// The window mode fullscreen lyrics left, when the app closed while
     /// showing them. eframe restores the window full screen, so the next
     /// start returns it to this mode instead.

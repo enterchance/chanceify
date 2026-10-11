@@ -1,6 +1,6 @@
 //! No input interception or frame state on macOS.
 
-use egui::{Context, Id, Rect, Response, ScrollArea, Ui};
+use egui::{Context, Id, Response, ScrollArea, Ui};
 
 #[derive(Default)]
 pub struct Autoscroll {
@@ -11,7 +11,6 @@ pub struct Autoscroll {
 pub struct Outcome {
     pub scrolling: bool,
     pub stop_following_lyrics: bool,
-    pub playlist_scroll: Option<usize>,
 }
 
 impl Autoscroll {
@@ -39,5 +38,3 @@ pub fn show<R>(
 }
 
 pub fn lyrics(_ui: &Ui, _id: Id) {}
-
-pub fn playlist(_ui: &mut Ui, _rect: Rect, _offset: usize, _maximum: usize, _row_points: f32) {}

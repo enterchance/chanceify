@@ -21,26 +21,6 @@ fn dark_palette(app: &App) -> Palette {
     palette
 }
 
-/// One line of the zoom control: smaller, the size, bigger.
-pub fn zoom_row(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
-        theme::text(ui, "Zoom", theme::medium(13.5), palette.text);
-        if theme::soft_button(ui, palette, None, "-", false).clicked() {
-            app.actions.push(Action::AdjustZoom(-1));
-        }
-        if theme::soft_button(ui, palette, None, &format!("{:.0}%", app.settings.zoom * 100.0), false)
-            .on_hover_text("Back to 100%")
-            .clicked()
-        {
-            app.actions.push(Action::AdjustZoom(0));
-        }
-        if theme::soft_button(ui, palette, None, "+", false).clicked() {
-            app.actions.push(Action::AdjustZoom(1));
-        }
-    });
-}
-
 /// The Views disc: a small disc the mouse can drag anywhere and click to open
 /// the Views panel, on every screen. Until it has been moved, it stays out of
 /// the way where the sidebar has its own disc.
@@ -49,6 +29,22 @@ pub fn zoom_row(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
 fn idle_dim(ctx: &Context, panel_open: bool, floor: f32, over: bool) -> f32 {
     let seen_id = Id::new("views-disc-seen");
     let now_t = ctx.input(|input| input.time);
+    // Back after being away (a view without it, or the panel just closed):
+    // it shows in full again and fades only after a fresh few seconds.
+    let pass = ctx.cumulative_pass_nr();
+    let drawn_id = seen_id.with("drawn");
+    let open_id = seen_id.with("open");
+    let last_drawn: u64 = ctx.data(|data| data.get_temp(drawn_id)).unwrap_or(pass);
+    let was_open: bool = ctx.data(|data| data.get_temp(open_id)).unwrap_or(panel_open);
+    let returned = pass > last_drawn + 3 || (was_open && !panel_open);
+    ctx.data_mut(|data| {
+        data.insert_temp(drawn_id, pass);
+        data.insert_temp(open_id, panel_open);
+    });
+    if returned {
+        ctx.data_mut(|data| data.insert_temp(seen_id, now_t));
+        ctx.animate_value_with_time(seen_id.with("dim"), 1.0, 0.0);
+    }
     if over {
         ctx.data_mut(|data| data.insert_temp(seen_id, now_t));
     }
@@ -72,34 +68,21 @@ pub fn topbar_disc(ui: &mut egui::Ui, app: &mut App) {
     ui.set_opacity(dim);
     ui.painter().circle_filled(rect.center(), size / 2.0, Color32::from_black_alpha(if over { 190 } else { 140 }));
     ui.painter().circle_stroke(rect.center(), size / 2.0, Stroke::new(1.0, Color32::from_white_alpha(if over { 90 } else { 40 })));
-    mono_logo(ui, rect.center(), 20.0, if over { palette.text } else { Color32::from_white_alpha(150) });
+    theme::paint_icon(ui, Icon::Disc, rect, 20.0, if over { palette.text } else { Color32::from_white_alpha(150) });
     ui.set_opacity(1.0);
     if over {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
+    // A left click opens it where it was left; a right click opens it right
+    // under the disc.
+    let anchor = rect.left_bottom() + egui::vec2(0.0, 6.0);
+    ui.ctx().data_mut(|data| data.insert_temp(Id::new("views-anchor"), anchor));
     if response.clicked() || response.secondary_clicked() {
+        if response.secondary_clicked() {
+            ui.ctx().data_mut(|data| data.insert_temp(Id::new("views-at-disc"), true));
+        }
         app.actions.push(Action::ToggleViewsPanel);
     }
-}
-
-/// The chanceify logo (a record with a play triangle) in one colour, for the
-/// views button.
-fn mono_logo(ui: &egui::Ui, center: egui::Pos2, diameter: f32, colour: Color32) {
-    let radius = diameter / 2.0;
-    let painter = ui.painter();
-    painter.circle_stroke(center, radius, Stroke::new((diameter * 0.09).max(1.2), colour));
-    painter.circle_stroke(center, radius * 0.72, Stroke::new(1.0, colour.gamma_multiply(0.5)));
-    let w = radius * 0.46;
-    let h = radius * 0.5;
-    painter.add(egui::Shape::convex_polygon(
-        vec![
-            center + egui::vec2(-w * 0.55, -h),
-            center + egui::vec2(w * 1.05, 0.0),
-            center + egui::vec2(-w * 0.55, h),
-        ],
-        colour,
-        Stroke::NONE,
-    ));
 }
 
 pub fn corner_disc(app: &mut App, ctx: &Context) {
@@ -156,8 +139,10 @@ pub fn corner_disc(app: &mut App, ctx: &Context) {
             grab = None;
         }
     }
+    ctx.data_mut(|data| data.insert_temp(Id::new("views-anchor"), hit.left_bottom() + egui::vec2(0.0, 6.0)));
     if right_released && pos.is_some_and(|p| hit.contains(p)) {
         toggle = true;
+        ctx.data_mut(|data| data.insert_temp(Id::new("views-at-disc"), true));
     }
     ctx.data_mut(|data| data.insert_temp(grab_id, grab));
     let over = pos.is_some_and(|p| hit.contains(p)) || grab.is_some();
@@ -185,9 +170,10 @@ pub fn corner_disc(app: &mut App, ctx: &Context) {
                 (size + 12.0) / 2.0,
                 Stroke::new(1.0, Color32::from_white_alpha(if hot { 90 } else { 40 })),
             );
-            mono_logo(
+            theme::paint_icon(
                 ui,
-                rect.center(),
+                Icon::Disc,
+                rect,
                 size,
                 if hot { palette.text } else { Color32::from_white_alpha(if app.mini_active { 110 } else { 150 }) },
             );
@@ -222,21 +208,69 @@ pub(super) fn default_float(ctx: &Context) -> [f32; 3] {
 /// dragged anywhere by its top strip, widened from its right edge, snapped
 /// onto the library sidebar, or put away from the right-click menu.
 pub fn floating_controls(app: &mut App, ctx: &Context) {
+    // Read once, out here: asking the context for it from inside one of its
+    // own data closures would lock it against itself and freeze the app.
+    let vp = ctx.viewport_id();
     let Some([x, y, width]) = app.float_slot(default_float(ctx)) else {
         return;
     };
-    if app.fullscreen_vis || app.calm_mode || app.mini_active {
+    if app.settings.float_detached && !app.calm_mode && !app.mini_active {
+        // Where the app's own window is, for the controls to snap to.
+        if let Some(main) = ctx.input(|input| input.viewport().outer_rect) {
+            ctx.data_mut(|data| data.insert_temp(Id::new("main-outer"), main));
+        }
+        detached_controls(app, ctx);
         return;
     }
+    if app.calm_mode || app.mini_active {
+        return;
+    }
+    // In the full screen visualizer there is no bar, so the panel is here
+    // too, fading away when the pointer is not near, like the views panel.
+    let dim = if app.fullscreen_vis {
+        let mut last: Option<Rect> = ctx.data(|data| data.get_temp(Id::new(("pop-out-last", vp))));
+        if let (Some(rect), Some(card)) = (last, ctx.data(|data| data.get_temp::<Rect>(Id::new(("pop-out-card-last", vp))))) {
+            last = Some(rect.union(card));
+        }
+        let near = last.is_some_and(|rect| {
+            ctx.input(|input| {
+                input.pointer.hover_pos().is_some_and(|p| rect.expand(30.0).contains(p))
+                    || (input.pointer.any_down() && input.pointer.interact_pos().is_some_and(|p| rect.expand(40.0).contains(p)))
+            })
+        }) || last.is_none();
+        // Resting, the buttons stay easy to see; the pointer on any part of
+        // the card or the controls brings it all to full.
+        fade_to(ctx, near, &format!("pop-out-seen-{vp:?}"), app.settings.float_idle.unwrap_or(0.5).clamp(0.05, 1.0))
+    } else {
+        1.0
+    };
     let screen = ctx.content_rect();
     let width = super::lyrics::controls_width(app, width);
     let mut change: Option<Option<[f32; 3]>> = None;
-    let mut top_left = egui::pos2(x, y);
+    // Never off screen: if a view or window change would leave it outside,
+    // it sits against the bottom or right edge instead.
+    let mut top_left = egui::pos2(
+        x.clamp(screen.left(), (screen.right() - width).max(screen.left())),
+        y.clamp(screen.top(), (screen.bottom() - super::lyrics::controls_height(app)).max(screen.top())),
+    );
+    // Until it has been moved, the lyrics page's controls hang under the
+    // cover's resting place, so a bouncing or tilting cover never reaches them.
+    if app.lyrics_fullscreen.is_some()
+        && app.settings.float_lyrics.is_none()
+        && let Some(base) = ctx.data(|data| data.get_temp::<Rect>(Id::new("lyrics-base-cover")))
+    {
+        top_left = egui::pos2(base.left(), (base.bottom() + 96.0).min(screen.bottom() - 120.0));
+    }
+    // The area itself senses nothing (it starts at the window's corner, so
+    // anything it sensed would sit on top of the title bar and stop it from
+    // dragging the window); every control on it senses for itself.
     egui::Area::new(Id::new("pop-out-controls"))
         .order(egui::Order::Foreground)
         .fixed_pos(egui::pos2(0.0, 0.0))
         .interactable(true)
+        .sense(egui::Sense::hover())
         .show(ctx, |ui| {
+            ui.set_opacity(dim);
             // The whole panel is a handle: this is registered first, so the
             // buttons and bars drawn over it still take their own clicks.
             let body = Rect::from_min_size(top_left, egui::vec2(width, super::lyrics::controls_height(app)));
@@ -244,33 +278,36 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
             let Some(outer) = super::lyrics::controls_box_inner(app, ui, top_left, width, false) else {
                 return;
             };
-            // The small album art mode: the cover and the song's name sit
-            // just above the controls and travel with them.
-            if !app.settings.art_expanded
+            ui.ctx().data_mut(|data| data.insert_temp(Id::new(("pop-out-last", vp)), outer));
+            // The now playing card: the cover and the song's name sit just
+            // above the controls and travel with them. Under the full screen
+            // lyrics the big cover is already on the page, so the card is
+            // only the words. Any part of it drags the whole panel.
+            let mut card_drag = egui::Vec2::ZERO;
+            let mut card_dragging = false;
+            let lyrics_page = app.lyrics_fullscreen.is_some();
+            if (lyrics_page || app.fullscreen_vis || !app.settings.art_expanded)
                 && let Some(now) = app.now_playing()
             {
-                let side = (outer.width() * 0.26).clamp(64.0, 120.0);
-                let gap = 8.0;
-                let top = (outer.top() - side - gap).max(screen.top() + 4.0);
-                let cover = Rect::from_min_size(egui::pos2(outer.left(), top), egui::vec2(side, side));
-                let palette = dark_palette(app);
-                let loader = app.backend.art().clone();
-                super::widgets::paint_cover(
-                    ui,
-                    &palette,
-                    now.art_url.as_deref().or(now.art_small.as_deref()),
-                    cover,
-                    8.0,
-                    Icon::Music,
-                    Some(&loader),
-                );
-                let text_left = cover.right() + 12.0;
-                let text_w = (outer.right() - text_left).max(40.0);
+                let side = if lyrics_page { 44.0 } else { (outer.width() * 0.26).clamp(64.0, 120.0) };
+                let pad = 8.0;
+                // Above the controls; where that would be cut off by the top of
+                // the window, below them instead.
+                let above_top = outer.top() - side - pad * 2.0 - 8.0;
+                let top = if above_top >= screen.top() + 4.0 + pad {
+                    above_top
+                } else {
+                    outer.bottom() + 8.0 + pad
+                };
+                let cover = Rect::from_min_size(egui::pos2(outer.left() + pad, top), egui::vec2(side, side));
+                let palette = app.palette;
+                let text_left = if lyrics_page { outer.left() + 14.0 } else { cover.right() + 12.0 };
+                let text_w = (outer.right() - pad - text_left - 28.0).max(40.0);
                 let title = crate::bidi::layout(
                     ui.painter(),
                     &now.title,
                     theme::bold((side * 0.2).clamp(14.0, 22.0)),
-                    Color32::WHITE,
+                    palette.text,
                     text_w,
                     2,
                     Some(crate::bidi::ELLIPSIS),
@@ -279,36 +316,122 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                     ui.painter(),
                     &now.subtitle,
                     theme::regular((side * 0.15).clamp(12.0, 16.0)),
-                    Color32::from_white_alpha(190),
+                    palette.secondary,
                     text_w,
                     1,
                     Some(crate::bidi::ELLIPSIS),
                 );
+                // The card is only as wide as its words need (the cover, the name,
+                // the heart), never wider than the controls under it; a name
+                // too long for that goes onto two lines and then ends in "…".
+                let need = text_left + (title.size().x + 34.0).max(artist.size().x) + pad + 4.0;
+                let card_right = need.clamp(outer.left() + 160.0_f32.min(outer.width()), outer.right());
+                let card = Rect::from_min_max(cover.min - egui::vec2(pad, pad), egui::pos2(card_right, cover.bottom() + pad));
+                ui.ctx().data_mut(|data| data.insert_temp(Id::new(("pop-out-card-last", vp)), card));
+                let song = app.now_playing_item();
+                // The whole card is a handle, registered first so the cover,
+                // the name and the heart still take their own clicks.
+                let handle = ui.interact(card, Id::new("pop-out-card-grip"), egui::Sense::click_and_drag());
+                if handle.hovered() || handle.dragged() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                }
+                card_drag = handle.drag_delta();
+                card_dragging = handle.dragged();
+                // A backing, so the words read over any page.
+                ui.painter().rect(
+                    card,
+                    12.0,
+                    palette.panel.gamma_multiply(0.94),
+                    Stroke::new(1.0, palette.outline),
+                    egui::StrokeKind::Inside,
+                );
+                let open_song = |app: &mut App| {
+                    if let Some(id) = &now.album_id {
+                        app.actions.push(Action::Open(crate::model::Page::Album(id.clone())));
+                    } else if let Some(id) = &now.show_id {
+                        app.actions.push(Action::Open(crate::model::Page::Show(id.clone())));
+                    }
+                };
+                if !lyrics_page {
+                    let loader = app.backend.art().clone();
+                    super::widgets::paint_sticky_cover(
+                        ui,
+                        &palette,
+                        "pop-out-card",
+                        now.art_url.as_deref().or(now.art_small.as_deref()),
+                        cover,
+                        8.0,
+                        Icon::Music,
+                        &loader,
+                    );
+                    let cover_click = ui
+                        .interact(cover, Id::new("pop-out-card-cover"), egui::Sense::click())
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if cover_click.clicked() {
+                        open_song(app);
+                    }
+                }
                 let block = title.size().y + 4.0 + artist.size().y;
                 let y = cover.center().y - block / 2.0;
                 let title_h = title.size().y;
-                ui.painter().galley(egui::pos2(text_left, y), title, Color32::WHITE);
-                ui.painter().galley(egui::pos2(text_left, y + title_h + 4.0), artist, Color32::WHITE);
-            }
-            let grip = Rect::from_min_size(outer.min, egui::vec2(outer.width(), 12.0));
-            let dots = Rect::from_center_size(egui::pos2(grip.center().x, grip.center().y + 1.0), egui::vec2(22.0, 4.0));
-            for i in 0..3 {
-                ui.painter().circle_filled(
-                    egui::pos2(dots.left() + 3.0 + i as f32 * 8.0, dots.center().y),
-                    1.6,
-                    Color32::from_white_alpha(if grip_response.hovered() { 150 } else { 70 }),
+                let title_w = title.size().x;
+                let first_row = title_h / title.rows.len().max(1) as f32;
+                let words = Rect::from_min_size(egui::pos2(text_left, y), egui::vec2(text_w, block));
+                let cut = title.rows.len() > 1 || title_w >= text_w - 2.0 || artist.size().x >= text_w - 2.0;
+                let mut words_click = ui
+                    .interact(words, Id::new("pop-out-card-words"), egui::Sense::click())
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                if cut {
+                    // Too long to show whole: the full name is on hover.
+                    words_click = words_click.on_hover_text(format!("{}\n{}", now.title, now.subtitle));
+                }
+                if words_click.clicked() {
+                    open_song(app);
+                }
+                if let Some(song) = &song {
+                    words_click.context_menu(|ui| super::widgets::item_menu(ui, app, song, None, None));
+                }
+                ui.painter().galley(egui::pos2(text_left, y), title, palette.text);
+                // The like heart, right after the song's name.
+                super::player_bar::like_heart(
+                    app,
+                    ui,
+                    "pop-out-card",
+                    egui::pos2(text_left + title_w.min(text_w) + 16.0, y + first_row / 2.0),
+                    18.0,
+                    &now.uri,
                 );
+                ui.painter().galley(egui::pos2(text_left, y + title_h + 4.0), artist, palette.secondary);
             }
             if grip_response.hovered() || grip_response.dragged() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
             }
-            if grip_response.dragged() {
-                let to = top_left + grip_response.drag_delta();
+            // The panel follows the pointer exactly: where it was grabbed is
+            // remembered, and every frame it is put at pointer minus that, so
+            // it moves at the pointer's own speed whichever part is held (the
+            // handle, the card or a bar), however the frames are paced.
+            let bar_dragging = ui
+                .ctx()
+                .data(|data| data.get_temp::<bool>(Id::new(("popout-bar-dragging", vp))))
+                .unwrap_or(false);
+            let grab_key = Id::new(("pop-out-grab", vp));
+            let pointer = ui.ctx().input(|input| input.pointer.latest_pos());
+            if (grip_response.dragged() || card_dragging || bar_dragging)
+                && let Some(p) = pointer
+            {
+                let grab = ui
+                    .ctx()
+                    .data(|data| data.get_temp::<egui::Vec2>(grab_key))
+                    .unwrap_or(p - top_left);
+                ui.ctx().data_mut(|data| data.insert_temp(grab_key, grab));
+                let to = p - grab;
                 top_left = egui::pos2(
                     to.x.clamp(screen.left(), (screen.right() - width).max(screen.left())),
                     to.y.clamp(screen.top(), (screen.bottom() - outer.height()).max(screen.top())),
                 );
                 change = Some(Some([top_left.x, top_left.y, width]));
+            } else {
+                ui.ctx().data_mut(|data| data.remove::<egui::Vec2>(grab_key));
             }
             // Resizable from any edge or corner. The sides widen it (the left
             // one moves it so the far edge stays put); the bottom makes it
@@ -351,25 +474,48 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                     ui.ctx().set_cursor_icon(cursor);
                 }
             }
-            // Never so wide that the song bar runs the whole screen.
-            let max_w = (screen.width() - 16.0).clamp(300.0, 640.0);
+            // The same little dot as the Views panel, so it shows that the
+            // corner resizes.
+            if corner_right_response.hovered() || corner_right_response.dragged() {
+                ui.painter().circle_filled(egui::pos2(outer.right() - 7.0, outer.bottom() - 7.0), 4.0, Color32::from_white_alpha(110));
+            }
+            // Wider and taller are one thing: the panel only scales, between
+            // the smallest and the biggest it can be, so it is never long
+            // and thin.
             let grow_right = right_response.drag_delta().x + corner_right_response.drag_delta().x;
             let grow_left = -(left_response.drag_delta().x + corner_left_response.drag_delta().x);
             let grow_down = bottom_response.drag_delta().y
                 + corner_right_response.drag_delta().y
                 + corner_left_response.drag_delta().y;
-            if grow_right != 0.0 || grow_left != 0.0 {
-                let wider = (width + grow_right + grow_left).clamp(300.0, max_w);
-                let x = (top_left.x + width - wider).max(screen.left());
-                let x = if grow_left != 0.0 { x } else { top_left.x.min((screen.right() - wider).max(screen.left())) };
-                change = Some(Some([x, top_left.y, wider]));
-            }
-            if grow_down != 0.0 {
-                // Height is the controls' size: dragging down makes them bigger.
-                let scale = (app.settings.controls_scale_value() + grow_down / 56.0).clamp(0.7, 1.8);
+            let steps = (grow_right + grow_left) / 232.0 + grow_down / 56.0;
+            if steps != 0.0 {
+                let before = app.settings.controls_scale_value();
+                let scale = (before + steps).clamp(0.7, 1.8);
                 app.actions.push(Action::SetControlsScale(scale));
+                if grow_left != 0.0 {
+                    // The far edge stays where it is.
+                    let wider = super::lyrics::controls_width_for(scale);
+                    let x = (top_left.x + width - wider).max(screen.left());
+                    change = Some(Some([x, top_left.y, wider]));
+                }
             }
             grip_response.context_menu(|ui| {
+                if app.fullscreen_vis {
+                    // How much of the controls stays showing once the mouse
+                    // has left them.
+                    let mut idle = app.settings.float_idle.unwrap_or(0.5).clamp(0.05, 1.0) * 100.0;
+                    ui.label("opacity when the mouse is away");
+                    if ui.add(egui::Slider::new(&mut idle, 5.0..=100.0).suffix("%")).changed() {
+                        app.settings.float_idle = Some(idle / 100.0);
+                        app.mark_settings_dirty();
+                    }
+                    ui.separator();
+                }
+                if ui.button("Move out of the window").clicked() {
+                    app.settings.float_detached = true;
+                    app.mark_settings_dirty();
+                    ui.close();
+                }
                 if ui.button("Snap to the library sidebar").clicked() {
                     let side = app.settings.sidebar_width.clamp(300.0, 460.0);
                     change = Some(Some([
@@ -386,7 +532,200 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
             });
         });
     if let Some(place) = change {
-        app.actions.push(Action::SetFloatControls(place));
+        // The extra visualizer window keeps its own place for the panel.
+        if app.extra_drawing {
+            app.actions.push(Action::SetFloatExtra(place));
+        } else {
+            app.actions.push(Action::SetFloatControls(place));
+        }
+    }
+}
+
+/// The controls in a window of their own: it can be dragged anywhere on any
+/// screen, off the app. It keeps its place between launches, stays on top,
+/// and scales as the panel does.
+fn detached_controls(app: &mut App, ctx: &Context) {
+    use egui::{ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
+    let id = ViewportId::from_hash_of("chanceify-pop-out-controls");
+    let width = super::lyrics::controls_width(app, 0.0);
+    // The song's card (little cover and name) goes out of the window with
+    // the controls, above them, unless the big album art is on (that one
+    // stays in the window).
+    let with_card = !app.settings.art_expanded && app.now_playing().is_some();
+    let card_side = (width * 0.26).clamp(64.0, 120.0);
+    let card_h = if with_card { card_side + 16.0 + 8.0 } else { 0.0 };
+    let controls_h = super::lyrics::controls_height(app);
+    let height = controls_h + card_h;
+    let saved = app.settings.float_window;
+    let mut builder = ViewportBuilder::default()
+        .with_title("chanceify controls")
+        .with_decorations(false)
+        .with_resizable(false)
+        .with_always_on_top()
+        .with_inner_size([width, height]);
+    if let Some(at) = saved
+        && at[0] > -20000.0
+        && at[1] > -20000.0
+    {
+        builder = builder.with_position(at);
+    }
+    let mut put_back = false;
+    let mut place: Option<[f32; 2]> = None;
+    ctx.show_viewport_immediate(id, builder, |ui, class| {
+        let ctx = ui.ctx().clone();
+        if class != ViewportClass::Immediate && class != ViewportClass::Root {
+            put_back = true;
+            return;
+        }
+        if ctx.input(|input| input.viewport().close_requested()) {
+            put_back = true;
+            return;
+        }
+        // The window is exactly the panel, whatever size it has been scaled to.
+        let size = ctx.content_rect().size();
+        // Asked for once per size, not every frame: a window that cannot be
+        // exactly that size (rounding on a scaled screen) would otherwise be
+        // told again each frame and shake.
+        let size_key = Id::new("detached-asked-size");
+        let asked: Option<egui::Vec2> = ctx.data(|data| data.get_temp(size_key));
+        if ((size.x - width).abs() > 1.0 || (size.y - height).abs() > 1.0)
+            && asked.is_none_or(|asked| (asked.x - width).abs() > 0.5 || (asked.y - height).abs() > 0.5)
+        {
+            ctx.send_viewport_cmd(ViewportCommand::InnerSize(egui::vec2(width, height)));
+            ctx.data_mut(|data| data.insert_temp(size_key, egui::vec2(width, height)));
+        }
+        egui::CentralPanel::default()
+            .frame(Frame::new().fill(app.palette.window))
+            .show(ui, |ui| {
+                let body = Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, height));
+                let grip = ui.interact(body, Id::new("detached-grip"), egui::Sense::click_and_drag());
+                if grip.drag_started() {
+                    ctx.send_viewport_cmd(ViewportCommand::StartDrag);
+                }
+                if with_card && let Some(now) = app.now_playing() {
+                    let palette = app.palette;
+                    let pad = 8.0;
+                    let cover = Rect::from_min_size(egui::pos2(pad, pad), egui::vec2(card_side, card_side));
+                    let card = Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, card_side + pad * 2.0));
+                    ui.painter().rect(
+                        card,
+                        12.0,
+                        palette.panel.gamma_multiply(0.94),
+                        Stroke::new(1.0, palette.outline),
+                        egui::StrokeKind::Inside,
+                    );
+                    let loader = app.backend.art().clone();
+                    super::widgets::paint_sticky_cover(
+                        ui,
+                        &palette,
+                        "pop-out-card",
+                        now.art_url.as_deref().or(now.art_small.as_deref()),
+                        cover,
+                        8.0,
+                        Icon::Music,
+                        &loader,
+                    );
+                    let text_left = cover.right() + 12.0;
+                    let text_w = (width - pad - text_left - 28.0).max(40.0);
+                    let title = crate::bidi::layout(
+                        ui.painter(),
+                        &now.title,
+                        theme::bold((card_side * 0.2).clamp(14.0, 22.0)),
+                        palette.text,
+                        text_w,
+                        2,
+                        Some(crate::bidi::ELLIPSIS),
+                    );
+                    let artist = crate::bidi::layout(
+                        ui.painter(),
+                        &now.subtitle,
+                        theme::regular((card_side * 0.15).clamp(12.0, 16.0)),
+                        palette.secondary,
+                        text_w,
+                        1,
+                        Some(crate::bidi::ELLIPSIS),
+                    );
+                    let block = title.size().y + 4.0 + artist.size().y;
+                    let y = cover.center().y - block / 2.0;
+                    let title_h = title.size().y;
+                    let title_w = title.size().x;
+                    let first_row = title_h / title.rows.len().max(1) as f32;
+                    ui.painter().galley(egui::pos2(text_left, y), title, palette.text);
+                    super::player_bar::like_heart(
+                        app,
+                        ui,
+                        "pop-out-card",
+                        egui::pos2(text_left + title_w.min(text_w) + 16.0, y + first_row / 2.0),
+                        18.0,
+                        &now.uri,
+                    );
+                    ui.painter().galley(egui::pos2(text_left, y + title_h + 4.0), artist, palette.secondary);
+                }
+                let _ = super::lyrics::controls_box_inner(app, ui, egui::pos2(0.0, card_h), width, false);
+                // A press that begins on a bar drags the window too.
+                // Once, when the press lands (asking again every frame made the
+                // window judder).
+                let own_vp = ctx.viewport_id();
+                let bar_dragging = ctx
+                    .data(|data| data.get_temp::<bool>(Id::new(("popout-bar-dragging", own_vp))))
+                    .unwrap_or(false);
+                let was_key = Id::new("detached-bar-was");
+                let was = ctx.data(|data| data.get_temp::<bool>(was_key)).unwrap_or(false);
+                if bar_dragging && !was {
+                    ctx.send_viewport_cmd(ViewportCommand::StartDrag);
+                }
+                ctx.data_mut(|data| data.insert_temp(was_key, bar_dragging));
+                // Scaling: the bottom-right corner, like the one in the app.
+                let corner = Rect::from_min_size(body.max - egui::vec2(18.0, 18.0), egui::vec2(18.0, 18.0));
+                let handle = ui.interact(corner, Id::new("detached-corner"), egui::Sense::drag());
+                if handle.hovered() || handle.dragged() {
+                    ctx.set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+                    ui.painter().circle_filled(corner.center(), 4.0, Color32::from_white_alpha(110));
+                }
+                if handle.dragged() {
+                    let d = handle.drag_delta();
+                    let scale = (app.settings.controls_scale_value() + d.x / 232.0 + d.y / 56.0).clamp(0.7, 1.8);
+                    app.actions.push(Action::SetControlsScale(scale));
+                }
+                grip.context_menu(|ui| {
+                    if ui.button("Put back in the window").clicked() {
+                        put_back = true;
+                        ui.close();
+                    }
+                });
+            });
+        if let Some(outer) = ctx.input(|input| input.viewport().outer_rect) {
+            place = Some([outer.min.x, outer.min.y]);
+            // Let go near an edge of the app's window and it sticks there,
+            // flush along it (inside, or just outside, the edge).
+            let main: Option<Rect> = ctx.data(|data| data.get_temp(Id::new("main-outer")));
+            if let Some(main) = main
+                && !ctx.input(|input| input.pointer.any_down())
+            {
+                const NEAR: f32 = 18.0;
+                let pick = |value: f32, targets: [f32; 4]| {
+                    targets.into_iter().find(|t| (value - t).abs() <= NEAR && (value - t).abs() >= 1.0)
+                };
+                let (w, h) = (outer.width(), outer.height());
+                let x = pick(outer.min.x, [main.left(), main.right() - w, main.right(), main.left() - w]);
+                let y = pick(outer.min.y, [main.top(), main.bottom() - h, main.bottom(), main.top() - h]);
+                if x.is_some() || y.is_some() {
+                    let to = egui::pos2(x.unwrap_or(outer.min.x), y.unwrap_or(outer.min.y));
+                    ctx.send_viewport_cmd(ViewportCommand::OuterPosition(to));
+                    place = Some([to.x, to.y]);
+                }
+            }
+        }
+        ctx.request_repaint_after(std::time::Duration::from_millis(33));
+    });
+    if put_back {
+        app.settings.float_detached = false;
+        app.mark_settings_dirty();
+    } else if let Some(now) = place
+        && saved.is_none_or(|old| (old[0] - now[0]).abs() > 1.0 || (old[1] - now[1]).abs() > 1.0)
+    {
+        app.settings.float_window = Some(now);
+        app.mark_settings_dirty();
     }
 }
 
@@ -396,9 +735,32 @@ pub fn show(app: &mut App, ctx: &Context) {
         corner_disc(app, ctx);
     }
     floating_controls(app, ctx);
+    // The panel remembers where it was left. A right click on the disc asks
+    // for the place right under it instead.
+    let open_id = Id::new("views-panel-was-open");
+    let pos_id = Id::new("views-panel-pos");
     if !app.views_panel {
+        if ctx.data(|data| data.get_temp::<bool>(open_id)).unwrap_or(false) {
+            ctx.data_mut(|data| {
+                data.insert_temp(open_id, false);
+                data.remove::<Rect>(Id::new("views-panel-rect"));
+            });
+        }
         return;
     }
+    if !ctx.data(|data| data.get_temp::<bool>(open_id)).unwrap_or(false) {
+        // Just opened.
+        let at_disc = ctx.data(|data| data.get_temp::<bool>(Id::new("views-at-disc"))).unwrap_or(false);
+        let anchor: egui::Pos2 = ctx.data(|data| data.get_temp(Id::new("views-anchor"))).unwrap_or(egui::pos2(60.0, 60.0));
+        let known: Option<egui::Pos2> = ctx.data(|data| data.get_temp(pos_id));
+        let start = if at_disc || known.is_none() { anchor } else { known.unwrap_or(anchor) };
+        ctx.data_mut(|data| {
+            data.insert_temp(pos_id, start);
+            data.insert_temp(Id::new("views-at-disc"), false);
+        });
+    }
+    ctx.data_mut(|data| data.insert_temp(open_id, true));
+    let panel_id = Id::new("views-panel-v4");
     let palette = dark_palette(app);
     let frame = Frame::new()
         .fill(Color32::from_rgb(0x14, 0x16, 0x1a))
@@ -417,39 +779,71 @@ pub fn show(app: &mut App, ctx: &Context) {
     // and comes straight back when it returns.
     let rect_id = Id::new("views-panel-rect");
     let last_rect: Option<Rect> = ctx.data(|data| data.get_temp(rect_id));
+    let last_rect_local = last_rect;
+    // The panel can be drawn bigger or smaller: its layer is scaled about its
+    // top-left corner, drawing and pointer alike.
+    let scale = if app.settings.views_scale.is_finite() { app.settings.views_scale.clamp(0.7, 1.6) } else { 1.0 };
+    // Shrunk further when the window is too short for it, so it never needs a
+    // scroll bar: everything on it just gets smaller.
+    let scale = match last_rect {
+        Some(rect) if rect.height() > 1.0 => scale.min(((ctx.content_rect().height() - 16.0) / rect.height()).clamp(0.45, 1.6)),
+        _ => scale,
+    };
+    // The panel's corner is its pivot: it grows and shrinks from there, and
+    // dragging it moves the corner by exactly as much as the pointer moved.
+    let mut panel_pos: egui::Pos2 = ctx.data(|data| data.get_temp(pos_id)).unwrap_or(egui::pos2(60.0, 60.0));
+    if let Some(rect) = last_rect {
+        let screen = ctx.content_rect();
+        panel_pos.x = panel_pos.x.clamp(screen.left(), (screen.right() - rect.width() * scale).max(screen.left()));
+        panel_pos.y = panel_pos.y.clamp(screen.top(), (screen.bottom() - rect.height() * scale).max(screen.top()));
+    }
+    let pivot = panel_pos;
+    let to_global = |p: egui::Pos2| pivot + (p - pivot) * scale;
+    let panel_layer = egui::LayerId::new(egui::Order::Foreground, panel_id);
+    ctx.set_transform_layer(
+        panel_layer,
+        egui::emath::TSTransform::new(pivot.to_vec2() * (1.0 - scale), scale),
+    );
+    let last_rect = last_rect.map(|rect| Rect::from_min_max(to_global(rect.min), to_global(rect.max)));
     let over = last_rect.is_some_and(|rect| {
         ctx.input(|input| input.pointer.hover_pos().is_some_and(|p| rect.expand(10.0).contains(p)) || input.pointer.any_down() && input.pointer.interact_pos().is_some_and(|p| rect.expand(30.0).contains(p)))
     });
     let dim = panel_dim(ctx, over);
     let frame = frame.multiply_with_opacity(dim);
-    let width = app.settings.views_width.clamp(260.0, 520.0);
+    let width = 400.0;
     let shown = egui::Window::new("Views")
-        .id(Id::new("views-panel-v3"))
+        .id(panel_id)
         .title_bar(false)
         .order(egui::Order::Foreground)
         .frame(frame)
-        .default_pos(egui::pos2(60.0, 60.0))
+        .fixed_pos(panel_pos)
         .min_width(width)
         .max_width(width)
         .resizable(false)
         .collapsible(false)
-        .constrain(true)
+        .constrain(false)
         .show(ctx, |ui| {
             ui.set_opacity(dim);
+            // The whole panel is a handle (registered first, so the buttons
+            // on it still take their own clicks).
+            if let Some(grip_rect) = last_rect_local {
+                let grip = ui.interact(grip_rect, Id::new("views-panel-grip"), egui::Sense::drag());
+                if grip.dragged() {
+                    let moved = ui.ctx().input(|input| input.pointer.delta());
+                    ui.ctx().data_mut(|data| data.insert_temp(pos_id, panel_pos + moved));
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                }
+            }
             ui.visuals_mut().override_text_color = Some(palette.text);
             ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-            let screen_h = ctx.content_rect().height();
-            egui::ScrollArea::vertical()
-                .max_height((screen_h - 120.0).max(200.0))
-                .auto_shrink([false, true])
-                .show(ui, |ui| {
+            ui.vertical(|ui| {
                     // Icons only, one row: the four views of this window (exactly
                     // one is on) and the mini player, which is a window of its own.
                     let views = [
-                        (Icon::Shrink, "Mini player", ViewKind::Mini),
                         (Icon::PanelLeft, "Normal", ViewKind::Visualizer),
-                        (Icon::AudioLines, "Full screen visualizer", ViewKind::FullVisualizer),
                         (Icon::Mic, "Full screen lyrics", ViewKind::FullLyrics),
+                        (Icon::AudioLines, "Full screen visualizer", ViewKind::FullVisualizer),
+                        (Icon::Shrink, "Mini player", ViewKind::Mini),
                         (Icon::Moon, "Calm mode", ViewKind::Calm),
                     ];
                     let each = ((ui.available_width() - 6.0 * 4.0) / 5.0).max(30.0);
@@ -476,6 +870,8 @@ pub fn show(app: &mut App, ctx: &Context) {
                         ViewKind::Calm => Vec::new(),
                         ViewKind::FullVisualizer => vec![
                             ("Lyrics on it", app.settings.vis_lyrics, Action::ToggleVisLyrics),
+                            flag(S::LYRICS_FLOAT_ART, "Floating art", false, app),
+                            flag(S::LYRICS_BOUNCE_ART, "Art bounces", false, app),
                             ("Artist name", !app.settings.vis_text_no_artist, Action::ToggleVisArtist),
                             ("Visualizer settings", app.vis_panel, Action::ToggleVisPanel),
                             (if app.extra_vis { "Close visualizer window" } else { "New visualizer window" }, app.extra_vis, Action::ToggleExtraWindow),
@@ -493,108 +889,93 @@ pub fn show(app: &mut App, ctx: &Context) {
                             on_top,
                         ],
                         _ => vec![
-                            ("Library only", false, Action::GoView(ViewKind::LibraryOnly)),
-                            ("Default view", false, Action::GoView(ViewKind::Default)),
-                            ("My view", false, Action::InDefaultView(Box::new(Action::ApplyMyView))),
-                            ("Save my view", false, Action::SaveMyView),
                             ("Library", app.settings.sidebar_visible, Action::InDefaultView(Box::new(Action::ToggleSidebar))),
-                            ("Queue", app.show_queue_panel, Action::InDefaultView(Box::new(Action::ToggleQueuePanel))),
                             ("Side lyrics", app.show_lyrics_panel, Action::InDefaultView(Box::new(Action::ToggleLyricsPanel))),
+                            ("Queue", app.show_queue_panel, Action::InDefaultView(Box::new(Action::ToggleQueuePanel))),
                             ("Big album art", app.settings.art_expanded, Action::InDefaultView(Box::new(Action::ToggleArtExpanded))),
-                            ("Clean screen", app.settings.float_hide_bar, Action::SetFloatHideBar(!app.settings.float_hide_bar)),
+                            ("Visualizer", app.settings.vis_shapes_value() != 0, Action::ToggleVisShapes),
                             ("Visualizer settings", app.vis_panel, Action::ToggleVisPanel),
                             (if app.extra_vis { "Close visualizer window" } else { "New visualizer window" }, app.extra_vis, Action::ToggleExtraWindow),
                             on_top,
                         ],
                     };
                     if !chips.is_empty() {
-                        ui.horizontal_wrapped(|ui| {
+                        // Always one row: the buttons shrink to fit, never wrap.
+                        let count = chips.len() as f32;
+                        let chip_w = ((ui.available_width() - 6.0 * (count - 1.0)) / count).clamp(22.0, 38.0);
+                        // The visualizer window and always-on-top sit apart on the
+                        // right, with a gap after the rest.
+                        let avail = ui.available_width();
+                        let right_n = chips
+                            .iter()
+                            .filter(|(label, _, _)| label.ends_with("visualizer window") || *label == "Always on top")
+                            .count();
+                        let left_n = chips.len() - right_n;
+                        ui.horizontal(|ui| {
+                            let mut gap_done = false;
                             for (label, on, action) in chips {
-                                let response = theme::soft_button(ui, &palette, None, label, on);
-                                let response = if label == "Clean screen" {
-                                    response.on_hover_text("With the controls popped out, hides the whole bottom bar too")
-                                } else {
-                                    response
+                                let is_right = label.ends_with("visualizer window") || label == "Always on top";
+                                if is_right && !gap_done {
+                                    gap_done = true;
+                                    let used = left_n as f32 * (chip_w + 6.0);
+                                    let right_w = right_n as f32 * chip_w + (right_n as f32 - 1.0) * 6.0;
+                                    let gap = (avail - used - right_w - 6.0).max(8.0);
+                                    ui.add_space(gap);
+                                }
+                                let icon = match label {
+                                    "Library" => Icon::Grid3x3,
+                                    "Side lyrics" => Icon::Menu,
+                                    "Queue" => Icon::LayoutList,
+                                    "Big album art" | "Album art" => Icon::Square,
+                                    "Visualizer" | "Visualizer behind" => Icon::AudioLines,
+                                    "Visualizer settings" => Icon::Settings,
+                                    "Always on top" => Icon::Pin,
+                                    "Lyrics on it" => Icon::Mic,
+                                    "Artist name" => Icon::User,
+                                    "Floating art" => Icon::Expand,
+                                    "Art bounces" => Icon::Zap,
+                                    "Timestamps" => Icon::Clock,
+                                    "Countdown" => Icon::Loader,
+                                    "Close visualizer window" | "New visualizer window" => Icon::AudioLines,
+                                    _ => Icon::Info,
                                 };
+                                let response = view_button(ui, &palette, icon, label, on, chip_w);
+                                if label.ends_with("visualizer window") {
+                                    // A small plus (or cross, when it is open) on the corner.
+                                    let badge = egui::Rect::from_center_size(response.rect.right_top() + egui::vec2(-9.0, 9.0), egui::Vec2::splat(12.0));
+                                    ui.painter().circle_filled(badge.center(), 7.0, palette.accent);
+                                    theme::paint_icon(ui, if on { Icon::X } else { Icon::Plus }, badge, 10.0, palette.window);
+                                }
                                 if response.clicked() {
                                     app.actions.push(action);
                                 }
                             }
                         });
                     }
-                    ui.add_space(2.0);
-                    egui::CollapsingHeader::new(
-                        egui::RichText::new("More").color(palette.secondary).font(theme::medium(13.0)),
-                    )
-                    .id_salt("views-more")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        zoom_row(ui, app, &palette);
-                        ui.spacing_mut().slider_width = 110.0;
-                        let mut dim = app.settings.disc_dim;
-                        if ui.add(egui::Slider::new(&mut dim, 0.05..=1.0).text("Disc when idle")).changed() {
-                            app.settings.disc_dim = dim;
-                            app.mark_settings_dirty();
-                        }
-                        ui.horizontal_wrapped(|ui| {
-                            if theme::soft_button(ui, &palette, None, "Default controls", false).clicked() {
-                                app.actions.push(Action::ResetBlockNudge);
-                            }
-                            if theme::soft_button(ui, &palette, Some(Icon::Info), "Bug test guide", false).clicked() {
-                                app.show_bug_guide = !app.show_bug_guide;
-                            }
-                            if theme::soft_button(ui, &palette, Some(Icon::Info), "Shortcuts", false).clicked() {
-                                app.actions.push(Action::ShowDialog(crate::model::Dialog::Shortcuts));
-                            }
-                        });
-                        // Every key's job as a button, for those who use the mouse only.
-                        egui::CollapsingHeader::new(
-                            egui::RichText::new("Everything the keys do").color(palette.text).font(theme::medium(13.0)),
-                        )
-                        .id_salt("views-all-actions")
-                        .default_open(false)
-                        .show(ui, |ui| {
-                            for (group, ids) in super::keys::CATEGORIES {
-                                theme::subtle(ui, &palette, &group.to_uppercase());
-                                ui.horizontal_wrapped(|ui| {
-                                    for id in *ids {
-                                        if let Some(bindable) = super::keys::BINDABLE.iter().find(|b| b.id == *id) {
-                                            let hint = super::keys::chord_label(app, bindable.id);
-                                            let mut button = theme::soft_button(ui, &palette, None, bindable.label, false);
-                                            if let Some(hint) = hint {
-                                                button = button.on_hover_text(format!("Key: {hint}"));
-                                            }
-                                            if button.clicked() {
-                                                app.actions.push((bindable.action)());
-                                            }
-                                        }
-                                    }
-                                });
-                                ui.add_space(4.0);
-                            }
-                        });
-                    });
                 });
         });
     if let Some(window) = shown {
-        let rect = window.response.rect;
-        ctx.data_mut(|data| data.insert_temp(rect_id, rect));
-        // A strip on the right edge: drag it to make the panel wider or narrower.
-        egui::Area::new(Id::new("views-panel-edge"))
+        let local = window.response.rect;
+        ctx.data_mut(|data| data.insert_temp(rect_id, local));
+        // Where the panel really is on the screen, scaled.
+        let rect = Rect::from_min_max(to_global(local.min), to_global(local.max));
+        // The bottom-right corner scales the whole panel (double-click: normal size).
+        egui::Area::new(Id::new("views-panel-corner"))
             .order(egui::Order::Foreground)
-            .fixed_pos(egui::pos2(rect.right() - 7.0, rect.top() + 10.0))
+            .fixed_pos(egui::pos2(rect.right() - 18.0, rect.bottom() - 18.0))
             .show(ctx, |ui| {
-                let (strip, response) = ui.allocate_exact_size(egui::vec2(10.0, (rect.height() - 20.0).max(10.0)), egui::Sense::drag());
+                let (strip, response) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::drag());
                 if response.hovered() || response.dragged() {
-                    ctx.set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-                    ui.painter().rect_filled(
-                        egui::Rect::from_center_size(strip.center(), egui::vec2(3.0, 28.0)),
-                        1.5,
-                        Color32::from_white_alpha(90),
-                    );
+                    ctx.set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+                    ui.painter().circle_filled(strip.center(), 4.0, Color32::from_white_alpha(110));
                 }
                 if response.dragged() {
-                    app.settings.views_width = (width + response.drag_delta().x).clamp(260.0, 520.0);
+                    let d = response.drag_delta();
+                    app.settings.views_scale = (scale + (d.x + d.y) / 800.0).clamp(0.7, 1.6);
+                    app.mark_settings_dirty();
+                }
+                if response.double_clicked() {
+                    app.settings.views_scale = 1.0;
                     app.mark_settings_dirty();
                 }
             });
@@ -602,13 +983,23 @@ pub fn show(app: &mut App, ctx: &Context) {
     if close {
         app.actions.push(Action::ToggleViewsPanel);
     }
-    bug_guide(app, ctx);
 }
 
 /// How visible the Views panel is: full while the pointer is near it, and
 /// almost gone (5%) a couple of seconds after it leaves.
 fn panel_dim(ctx: &Context, over: bool) -> f32 {
-    let seen_id = Id::new("views-panel-seen");
+    fade(ctx, over, "views-panel-seen")
+}
+
+/// The same fade for any panel: full while the pointer is near, nearly gone
+/// two seconds after it leaves. `key` keeps each panel's timer apart.
+fn fade(ctx: &Context, over: bool, key: &str) -> f32 {
+    fade_to(ctx, over, key, 0.05)
+}
+
+/// `fade`, but resting at `floor` instead of nearly gone.
+fn fade_to(ctx: &Context, over: bool, key: &str, floor: f32) -> f32 {
+    let seen_id = Id::new(key);
     let now_t = ctx.input(|input| input.time);
     if over {
         ctx.data_mut(|data| data.insert_temp(seen_id, now_t));
@@ -618,7 +1009,7 @@ fn panel_dim(ctx: &Context, over: bool) -> f32 {
     if !away {
         ctx.request_repaint_after(std::time::Duration::from_millis(500));
     }
-    ctx.animate_value_with_time(seen_id.with("dim"), if away { 0.05 } else { 1.0 }, 0.4)
+    ctx.animate_value_with_time(seen_id.with("dim"), if away { floor } else { 1.0 }, 0.4)
 }
 
 /// A round-ended pill holding just an icon (the name is its tooltip), lit
@@ -654,34 +1045,5 @@ fn current_view(app: &App) -> ViewKind {
         ViewKind::Visualizer
     } else {
         ViewKind::Default
-    }
-}
-
-/// The bug test checklist, in a window of its own.
-fn bug_guide(app: &mut App, ctx: &Context) {
-    if !app.show_bug_guide {
-        return;
-    }
-    let mut open = true;
-    egui::Window::new("How to bug test chanceify")
-        .id(Id::new("bug-guide"))
-        .open(&mut open)
-        .default_width(480.0)
-        .default_height(420.0)
-        .resizable(true)
-        .show(ctx, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                for line in include_str!("../../docs/BUG_TEST_GUIDE.md").lines() {
-                    let line = line.trim_start_matches('#').trim();
-                    if line.is_empty() {
-                        ui.add_space(4.0);
-                    } else {
-                        ui.label(line);
-                    }
-                }
-            });
-        });
-    if !open {
-        app.show_bug_guide = false;
     }
 }

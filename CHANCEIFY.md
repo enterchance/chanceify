@@ -34,13 +34,6 @@ CARGO_TARGET_DIR=target/chanceify cargo build --locked --no-default-features
 target/chanceify/debug/spotifast.exe
 ```
 
-**`--no-default-features` is required.** `milkdrop` is a default feature that
-builds libprojectM through CMake and needs vcpkg with GLEW. Without it the
-build fails on `VCPKG_INSTALLATION_ROOT is not set`. MilkDrop is a music
-visualiser and is not wanted. To enable it later:
-`vcpkg install glew:x64-windows-static`, then export
-`VCPKG_INSTALLATION_ROOT` and build without the flag.
-
 The gates upstream expects, all of which our changes must pass:
 
 ```sh

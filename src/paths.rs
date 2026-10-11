@@ -177,17 +177,6 @@ impl AppDirs {
         self.config.join("settings.json")
     }
 
-    /// Winamp skins the listener has added, as `.wsz` files or folders.
-    pub fn skins_dir(&self) -> PathBuf {
-        self.config.join("skins")
-    }
-
-    /// MilkDrop presets, as `.milk` files, in folders or not, with any
-    /// textures they use in a `textures` folder inside.
-    pub fn milkdrop_dir(&self) -> PathBuf {
-        self.config.join("milkdrop")
-    }
-
     pub fn session_file(&self) -> PathBuf {
         self.state.join("session.json")
     }

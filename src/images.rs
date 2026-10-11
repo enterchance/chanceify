@@ -17,7 +17,7 @@ use crate::http::Http;
 /// reloaded every two and a half minutes (#129).
 ///
 /// Size-based eviction keeps visible images stable.
-const HELD_BYTES: usize = 64 * 1024 * 1024;
+const HELD_BYTES: usize = 40 * 1024 * 1024;
 const MAX_ART_BYTES: usize = 8 * 1024 * 1024;
 
 /// Decoded ColorImage plus the GPU texture, both RGBA.
@@ -538,7 +538,7 @@ const LYRICS_BLUR: f32 = 9.0;
 const COVER_BLUR: f32 = 1.5;
 
 /// Softened covers held at once, for library artwork seen recently.
-const HELD_COVERS: usize = 64;
+const HELD_COVERS: usize = 32;
 
 #[derive(Default)]
 pub struct LyricsBackdrop {

@@ -581,6 +581,8 @@ fastframe_icons::icons! {
         Info => lucide "info",
         Laptop => "laptop",
         Library => "library",
+        Grid3x3 => "grid-3x3",
+        Menu => "menu",
         LayoutGrid => "layout-grid",
         LayoutList => "layout-list",
         ListEnd => "list-end",
@@ -633,6 +635,9 @@ fastframe_icons::icons! {
         Volume2 => lucide "volume-2",
         VolumeX => lucide "volume-x",
         Watch => "watch",
+        Waves => "waves",
+        Wind => "wind",
+        Wine => "wine",
         X => lucide "x",
         Zap => "zap",
     }

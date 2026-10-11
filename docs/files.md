@@ -1,12 +1,4 @@
 ---
-title: files
+layout: null
 ---
-
-# where your files live
-
-everything chanceify saves is in the folder beside `chanceify.exe`. delete that folder to remove every trace.
-
-- `index/settings`: settings, themes, shortcuts
-- `index/stats.json`: listening stats
-- `index/lastfm-art`: cover images from last.fm
-- `index/recaps`: weekly recap pictures
+<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0; url={{ "/" | relative_url }}"><link rel="canonical" href="{{ "/" | relative_url }}"><a href="{{ "/" | relative_url }}">chanceify</a>

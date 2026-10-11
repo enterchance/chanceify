@@ -210,7 +210,8 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
-/// Clears manual rows from the active local queue.
+/// A faint trash can beside "Playing next" that brightens under the pointer.
+/// Pressing it asks first; the question is drawn by `clear_question`.
 fn clear_button(app: &mut App, ui: &mut egui::Ui) {
     if !app.can_clear_queue() {
         return;
@@ -220,14 +221,46 @@ fn clear_button(app: &mut App, ui: &mut egui::Ui) {
         ui,
         Icon::Trash,
         18.0,
-        palette.secondary,
+        palette.secondary.gamma_multiply(0.4),
         palette.text,
         &gettext(app.locale, "Clear queue"),
     )
     .clicked()
     {
-        app.actions.push(Action::ClearQueue);
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(egui::Id::new("queue-clear-ask"), true));
     }
+}
+
+/// "Are you sure?" under the heading, once the trash can has been pressed.
+fn clear_question(app: &mut App, ui: &mut egui::Ui) {
+    let ask_id = egui::Id::new("queue-clear-ask");
+    let asking = ui.ctx().data(|data| data.get_temp::<bool>(ask_id)).unwrap_or(false);
+    if !asking {
+        return;
+    }
+    if !app.can_clear_queue() {
+        ui.ctx().data_mut(|data| data.insert_temp(ask_id, false));
+        return;
+    }
+    let palette = app.palette;
+    ui.add_space(2.0);
+    theme::text(
+        ui,
+        &*gettext(app.locale, "Are you sure you want to clear the queue?"),
+        theme::regular(13.0),
+        palette.text,
+    );
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        if theme::soft_button(ui, &palette, None, &gettext(app.locale, "Yes, clear it"), false).clicked() {
+            app.actions.push(Action::ClearQueue);
+            ui.ctx().data_mut(|data| data.insert_temp(ask_id, false));
+        }
+        if theme::soft_button(ui, &palette, None, &gettext(app.locale, "Cancel"), false).clicked() {
+            ui.ctx().data_mut(|data| data.insert_temp(ask_id, false));
+        }
+    });
 }
 
 /// A song was dropped on the queue this frame: the primary button was
@@ -435,10 +468,9 @@ fn contents_inner(app: &mut App, ui: &mut egui::Ui, compact: bool) {
                 theme::semibold(14.0),
                 palette.text,
             );
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                clear_button(app, ui);
-            });
+            clear_button(app, ui);
         });
+        clear_question(app, ui);
         ui.add_space(4.0);
         if reorderable && egui::DragAndDrop::has_payload_of_type::<DragTrack>(ui.ctx()) {
             widgets::scroll_during_drag(ui);

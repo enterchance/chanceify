@@ -306,11 +306,31 @@ fn mark_rgba(size: usize, polished: bool) -> Vec<u8> {
 }
 
 pub fn greeting(locale: Locale) -> Cow<'static, str> {
-    match local_hour() {
+    let hello = match local_hour() {
         5..=11 => gettext(locale, "Good morning"),
         12..=17 => gettext(locale, "Good afternoon"),
         _ => gettext(locale, "Good evening"),
-    }
+    };
+    Cow::Owned(format!("{hello}!"))
+}
+
+/// A small friendly line under the greeting. It reads the clock, and a new
+/// one is picked each time chanceify starts.
+pub fn welcome_line() -> &'static str {
+    static SEED: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let seed = *SEED.get_or_init(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.subsec_nanos() as usize / 1000)
+    });
+    let pool: &[&str] = match local_hour() {
+        0..=4 => &["still up?", "late night listening", "the quiet hours are the best ones", "what are we playing?"],
+        5..=11 => &["welcome back to chanceify", "good to see you", "what are we playing?", "start the day with a song"],
+        12..=17 => &["welcome back to chanceify", "good to see you", "what are we playing?", "a song for the afternoon"],
+        18..=22 => &["welcome back to chanceify", "good to see you", "what are we playing?", "time to wind down with some music"],
+        _ => &["still up?", "late night listening", "what are we playing?"],
+    };
+    pool[seed % pool.len()]
 }
 
 fn local_hour() -> u8 {
@@ -580,5 +600,33 @@ mod tests {
             "Hi there & you"
         );
         assert_eq!(strip_html("ONE&#x2F;TWO&#x2F;THREE"), "ONE/TWO/THREE");
+    }
+}
+
+/// Memory this program is using right now, in megabytes, for the About page.
+pub fn memory_used_mb() -> Option<u64> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+        // SAFETY: a zeroed counters struct with its size set is what the call expects.
+        unsafe {
+            let mut counters: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+            counters.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+            if K32GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, counters.cb) != 0 {
+                return Some(counters.WorkingSetSize as u64 / (1024 * 1024));
+            }
+        }
+        None
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let text = std::fs::read_to_string("/proc/self/statm").ok()?;
+        let pages: u64 = text.split_whitespace().nth(1)?.parse().ok()?;
+        Some(pages * 4096 / (1024 * 1024))
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        None
     }
 }

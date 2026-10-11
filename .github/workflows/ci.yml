@@ -63,8 +63,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       CMAKE_GENERATOR: Ninja
-    # A cold mbx cache on Windows (projectM through cmake) needs about 30
-    # minutes before the action saves the cache; warm runs take far less.
+    # A cold mbx cache on Windows needs about 30 minutes before the action
+    # saves the cache; warm runs take far less.
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -79,17 +79,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libpulse-dev libxkbcommon-dev \
             libwayland-dev libgl1-mesa-dev cmake libclang-dev
-      # libprojectM reads OpenGL through GLEW on Windows; projectm-sys builds
-      # against vcpkg's static-CRT triplet, matching .cargo/config.toml.
-      - name: GLEW for libprojectM
-        if: runner.os == 'Windows'
-        run: vcpkg install glew:x64-windows-static
-      # projectm-sys asks CMake for the Visual Studio generator, which the
-      # runner image no longer satisfies; Ninja inside the MSVC environment
-      # builds the same thing without caring which Visual Studio is on. The
-      # generator is job-level env, since a GITHUB_ENV write never reached
-      # the build script.
-      - name: MSVC environment for libprojectM
+      # CMake-built dependencies ask for the Visual Studio generator, which
+      # the runner image no longer satisfies; Ninja inside the MSVC
+      # environment builds the same thing without caring which Visual Studio
+      # is on. The generator is job-level env, since a GITHUB_ENV write never
+      # reached the build script. The environment also provides dumpbin below.
+      - name: MSVC environment
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
       - uses: jdx/mr-boxington-action@v1

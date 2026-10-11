@@ -6,7 +6,7 @@ Keeps the Last.fm key and secret out of the app and GitHub.
 2. Edit code: paste all of `lastfm-proxy.js`, Deploy.
 3. Settings, Variables and Secrets, add two **Secrets**: `LASTFM_KEY` and `LASTFM_SECRET`.
 4. Copy the worker address (https://chanceify-lastfm.<you>.workers.dev) and give it to the developer:
-   it goes into `PROXY_URL` in `src/lastfm.rs`.
+   make a file called `lastfm-proxy.txt` next to `Cargo.toml` with just that address on one line (git never uploads it), then build.
 
 # Song link page (embed.js)
 

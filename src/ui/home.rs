@@ -17,6 +17,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(6.0);
     let greeting = crate::util::greeting(app.locale);
     theme::text(ui, greeting.as_ref(), theme::bold(30.0), palette.text);
+    theme::text(ui, crate::util::welcome_line(), theme::regular(15.0), palette.secondary);
     ui.add_space(10.0);
     let tab = app.settings.home.tab.min(1);
     ui.horizontal(|ui| {
@@ -58,7 +59,12 @@ fn new_releases(app: &mut App, ui: &mut egui::Ui) {
         .as_ref()
         .map(|scan| (scan.total.saturating_sub(scan.queue.len()), scan.total));
     let releases: Vec<crate::releases::Release> = if app.releases.user == user {
-        app.releases.found.clone()
+        app.releases
+            .found
+            .iter()
+            .filter(|release| !app.releases.dismissed.contains(&release.album_id))
+            .cloned()
+            .collect()
     } else {
         Vec::new()
     };
@@ -84,6 +90,13 @@ fn new_releases(app: &mut App, ui: &mut egui::Ui) {
         theme::section_title(ui, &palette, &gettext(app.locale, "New from your artists"));
         if folded && !releases.is_empty() {
             theme::subtle(ui, &palette, &format!("{} new", releases.len()));
+        }
+        {
+            let mut ask = app.settings.release_confirm_remove;
+            if widgets::switch_labeled(ui, &palette, "Confirm removal", &mut ask).changed() {
+                app.settings.release_confirm_remove = ask;
+                app.mark_settings_dirty();
+            }
         }
         match scanning {
             Some((done, total)) => {
@@ -160,7 +173,7 @@ fn new_releases(app: &mut App, ui: &mut egui::Ui) {
                 );
                 let text = Rect::from_min_max(
                     pos2(cover.right() + 12.0, rect.top()),
-                    pos2(rect.right() - 12.0, rect.bottom()),
+                    pos2(rect.right() - 12.0 - 72.0, rect.bottom()),
                 );
                 let painter = ui.painter().with_clip_rect(text);
                 crate::bidi::paint_line(
@@ -186,7 +199,71 @@ fn new_releases(app: &mut App, ui: &mut egui::Ui) {
                     theme::regular(12.0),
                     palette.secondary,
                 );
-                if response.clicked() {
+                // Play and remove, at the right of the row. Asking first when the
+                // reader wants to be asked.
+                let ask_id = egui::Id::new(("release-remove", &release.album_id));
+                let asking = ui.data(|data| data.get_temp::<bool>(ask_id)).unwrap_or(false);
+                let mut used_button = false;
+                let slot = |n: f32| Rect::from_min_size(pos2(rect.right() - 12.0 - 34.0 * n, rect.center().y - 15.0), vec2(30.0, 30.0));
+                if asking {
+                    let yes_rect = Rect::from_min_size(pos2(rect.right() - 12.0 - 150.0, rect.center().y - 14.0), vec2(70.0, 28.0));
+                    let no_rect = Rect::from_min_size(pos2(rect.right() - 12.0 - 72.0, rect.center().y - 14.0), vec2(70.0, 28.0));
+                    ui.painter().text(
+                        pos2(yes_rect.left() - 8.0, rect.center().y),
+                        egui::Align2::RIGHT_CENTER,
+                        "Remove it?",
+                        theme::regular(12.0),
+                        palette.warning,
+                    );
+                    for (area, label, yes) in [(yes_rect, "Yes", true), (no_rect, "No", false)] {
+                        let r = ui.interact(area, ui.id().with(("release-ask", index, yes)), Sense::click());
+                        ui.painter().rect_filled(
+                            area,
+                            CornerRadius::same(6),
+                            if yes { palette.accent.gamma_multiply(0.45) } else { palette.surface_hover },
+                        );
+                        ui.painter().text(area.center(), egui::Align2::CENTER_CENTER, label, theme::semibold(12.5), palette.text);
+                        if r.clicked() {
+                            used_button = true;
+                            if yes {
+                                app.actions.push(Action::DismissRelease(release.album_id.clone()));
+                            }
+                            ui.data_mut(|data| data.insert_temp(ask_id, false));
+                        }
+                    }
+                } else {
+                    let play = ui.interact(slot(2.0), ui.id().with(("release-play", index)), Sense::click());
+                    let remove = ui.interact(slot(1.0), ui.id().with(("release-remove", index)), Sense::click());
+                    for (area, icon, is_play, response) in [(slot(2.0), Icon::PlayFilled, true, &play), (slot(1.0), Icon::X, false, &remove)] {
+                        if response.hovered() {
+                            ui.painter().rect_filled(area, CornerRadius::same(15), palette.surface_hover);
+                        }
+                        theme::paint_icon(
+                            ui,
+                            icon,
+                            area,
+                            if is_play { 16.0 } else { 15.0 },
+                            if response.hovered() { palette.text } else { palette.secondary },
+                        );
+                    }
+                    if play.clicked() {
+                        used_button = true;
+                        app.actions.push(Action::PlayContext {
+                            uri: release.album_uri.clone(),
+                            offset_uri: None,
+                            offset_index: None,
+                        });
+                    } else if remove.clicked() {
+                        used_button = true;
+                        if app.settings.release_confirm_remove {
+                            ui.data_mut(|data| data.insert_temp(ask_id, true));
+                        } else {
+                            app.actions.push(Action::DismissRelease(release.album_id.clone()));
+                        }
+                    }
+                    let _ = (play.on_hover_text("Play"), remove.on_hover_text("Remove from this list"));
+                }
+                if response.clicked() && !used_button {
                     app.actions.push(Action::Open(Page::Album(release.album_id.clone())));
                 }
             }
@@ -234,40 +311,7 @@ fn stats_section(app: &mut App, ui: &mut egui::Ui) {
             palette.secondary,
         );
     });
-    if summary.streak_days > 1 {
-        theme::subtle(ui, &palette, &format!("{} days in a row", summary.streak_days));
-    }
-    ui.add_space(6.0);
-    if theme::pill_button(ui, &palette, &gettext(app.locale, "Make a recap picture"), false).clicked() {
-        app.actions.push(Action::OpenRecap);
-    }
     ui.add_space(10.0);
-    // The last two weeks, one bar a day.
-    let top = summary.per_day.iter().copied().max().unwrap_or(0).max(1) as f32;
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width().min(520.0), 84.0), Sense::hover());
-    let slot = rect.width() / 14.0;
-    for (index, count) in summary.per_day.iter().enumerate() {
-        let height = (rect.height() - 16.0) * (*count as f32 / top);
-        let bar = Rect::from_min_max(
-            pos2(rect.left() + slot * index as f32 + slot * 0.18, rect.bottom() - 14.0 - height),
-            pos2(rect.left() + slot * (index as f32 + 1.0) - slot * 0.18, rect.bottom() - 14.0),
-        );
-        ui.painter().rect_filled(
-            bar,
-            CornerRadius::same(3),
-            if *count == 0 { palette.surface } else { palette.accent },
-        );
-        if index == 0 || index == 13 {
-            ui.painter().text(
-                pos2(bar.center().x, rect.bottom()),
-                egui::Align2::CENTER_BOTTOM,
-                if index == 13 { "today" } else { "14 days ago" },
-                theme::regular(10.5),
-                palette.dim,
-            );
-        }
-    }
-    response.on_hover_text(gettext(app.locale, "Songs played each day, the last two weeks").to_string());
     ui.add_space(12.0);
     for songs in [false, true] {
         ranked_shelf(app, ui, songs, now);
@@ -671,7 +715,7 @@ fn made_for_you(app: &mut App, ui: &mut egui::Ui) {
                 let card = widgets::card(
                     ui,
                     app,
-                    pick_image(&playlist.images, 640),
+                    pick_image(&playlist.images, 300),
                     &playlist.name,
                     &subtitle,
                     widgets::CardCover::square(playing_here),
@@ -775,7 +819,7 @@ fn recently_played(app: &mut App, ui: &mut egui::Ui) {
                 let card = widgets::card(
                     ui,
                     app,
-                    track.image(640),
+                    track.image(300),
                     &track.name,
                     &track.artist_names(),
                     widgets::CardCover::square(false),
@@ -925,7 +969,7 @@ fn podcasts(app: &mut App, ui: &mut egui::Ui) {
                 let card = widgets::card(
                     ui,
                     app,
-                    pick_image(&episode.images, 640).or_else(|| pick_image(&show.images, 640)),
+                    pick_image(&episode.images, 300).or_else(|| pick_image(&show.images, 300)),
                     &episode.name,
                     &subtitle,
                     widgets::CardCover::square(false),
@@ -999,7 +1043,7 @@ fn top_artists(app: &mut App, ui: &mut egui::Ui) {
                 let card = widgets::card(
                     ui,
                     app,
-                    pick_image(&artist.images, 640),
+                    pick_image(&artist.images, 300),
                     &artist.name,
                     &gettext(app.locale, "Artist"),
                     widgets::CardCover::portrait(playing_here),

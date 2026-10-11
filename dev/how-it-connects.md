@@ -104,9 +104,6 @@ current-track pickup.
   See [migration, sign-out, and storage protection](/settings-and-files/).
 - Downloaded audio and artwork, in the cache directory, within the budget
   you set.
-- The first time MilkDrop opens with an empty preset folder, the two projectM
-  preset packs are downloaded from GitHub (about 26 MB) and stored in the
-  config directory.
 - On Windows and macOS, desktop media controls load the cover themselves and
   are given a file, so the full-size artwork is downloaded into that cache
   when a song starts, even when no view on screen is showing it. Linux MPRIS
@@ -357,8 +354,8 @@ The mode selects the protocol. Host and port are separate fields.
 These settings apply to Spotifast's requests. The external browser used
 for Spotify approval keeps its own network and proxy settings.
 
-The Web API, artwork, lyrics, update checks and downloads, and MilkDrop preset
-downloads follow that mode. Update downloads retain their release-host redirect
+The Web API, artwork, lyrics, update checks and downloads
+follow that mode. Update downloads retain their release-host redirect
 restrictions and checksum verification. Local receivers on the LAN are never sent through a proxy.
 
 Local playback can only use an unauthenticated, plaintext HTTP proxy: that is

@@ -176,7 +176,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         .max_rect(strip)
                         .layout(egui::Layout::right_to_left(egui::Align::Center)),
                 );
-                for (value, label) in [(4u8, "Spin"), (3, "Swirl"), (2, "Ocean"), (1, "Album"), (0, "Theme")] {
+                for (value, label) in [(3u8, "Swirl"), (2, "Ocean"), (0, "Theme"), (4, "Spin"), (1, "Album")] {
                     if child.selectable_label(app.settings.calm_look == value, label).clicked() {
                         app.settings.calm_look = value;
                         app.mark_settings_dirty();

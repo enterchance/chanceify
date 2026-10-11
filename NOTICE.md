@@ -33,3 +33,7 @@ SOFTWARE.
 Playback comes from [librespot](https://github.com/librespot-org/librespot)
 (MIT). Spotify, Last.fm and Discord are trademarks of their owners; chanceify
 is not affiliated with them.
+
+The language flags in `assets/flags/` are from
+[flag-icons](https://github.com/lipis/flag-icons) by Panayiotis Lipiridis
+(MIT License, Copyright (c) 2013 Panayiotis Lipiridis).

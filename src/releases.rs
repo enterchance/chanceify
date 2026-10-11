@@ -53,6 +53,9 @@ pub struct Store {
     pub found: Vec<Release>,
     #[serde(default)]
     pub playlists: Vec<PlaylistArtists>,
+    /// Albums the reader took off the list: never put back by a later check.
+    #[serde(default)]
+    pub dismissed: Vec<String>,
 }
 
 impl Store {

@@ -41,7 +41,7 @@ impl App {
         let energy = if mode == 1 {
             self.music_bass_level_raw()
         } else {
-            let window = self.winamp.tap.window(1536, 0);
+            let window = self.audio.tap.window(1536, 0);
             if window.is_empty() {
                 return;
             }
@@ -55,18 +55,26 @@ impl App {
             1 => 1.2,
             _ => 1.15,
         };
-        let rested = self.jump_at.is_none_or(|at| at.elapsed().as_secs_f32() > 0.32);
-        if rested && energy > 0.03 && energy > self.jump_avg * ratio + 0.01 {
+        // The reader's reaction settings: more sensitive shrinks the rise
+        // that counts, and the rest, the quiet cutoff and how fast the
+        // average follows the song are theirs too.
+        let sens = self.settings.jump_sens.clamp(0.4, 2.5);
+        let ratio = 1.0 + (ratio - 1.0) / sens;
+        let gap = self.settings.jump_gap.clamp(10.0, 100.0) / 100.0;
+        let floor = self.settings.jump_floor.clamp(0.0, 20.0) / 100.0;
+        let adapt = self.settings.jump_adapt.clamp(1.0, 30.0) / 100.0;
+        let rested = self.jump_at.is_none_or(|at| at.elapsed().as_secs_f32() > gap);
+        if rested && energy > floor && energy > self.jump_avg * ratio + 0.01 {
             self.jump_at = Some(Instant::now());
         }
-        self.jump_avg += (energy - self.jump_avg) * 0.05;
+        self.jump_avg += (energy - self.jump_avg) * adapt;
     }
 
     fn music_bass_level_raw(&self) -> f32 {
         if !self.now_playing().is_some_and(|now| now.playing) {
             return 0.0;
         }
-        let window = self.winamp.tap.window(1536, 0);
+        let window = self.audio.tap.window(1536, 0);
         if window.is_empty() {
             return 0.0;
         }
@@ -168,9 +176,9 @@ impl App {
                 .clone()
                 .filter(|device| !device.trim().is_empty()),
             buffer_ms: self.settings.audio_buffer_ms,
-            tap: Arc::clone(&self.winamp.tap),
-            eq: Arc::clone(&self.winamp.eq),
-            speed: Arc::clone(&self.winamp.speed),
+            tap: Arc::clone(&self.audio.tap),
+            eq: Arc::clone(&self.audio.eq),
+            speed: Arc::clone(&self.audio.speed),
             crossfade_ms: u32::from(self.settings.crossfade_secs) * 1000,
             volume: self.settings.volume,
         }
@@ -273,7 +281,7 @@ impl App {
             }
             // A song from a file changes without the Spotify bookkeeping
             // that normally asks for lyrics, so ask here.
-            if self.show_lyrics_panel || (self.fullscreen_vis && self.settings.vis_lyrics) {
+            if self.show_lyrics_panel || self.lyrics_panel_auto_off || ((self.fullscreen_vis || self.extra_vis) && self.settings.vis_lyrics) {
                 self.request_lyrics();
             }
         }

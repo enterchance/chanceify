@@ -1285,6 +1285,8 @@ pub enum Action {
     CopyLink(String),
     /// Copy a line about the playing song, with its Spotify link, to paste in Discord.
     ShareToDiscord,
+    /// Copy a named chanceify link for a song, for pasting in Discord.
+    CopyForDiscord { uri: String, title: String, artist: String },
     /// Copy picked songs' links, one per line, and remember the songs so a
     /// paste of the same links can show their rows at once.
     CopySongs(Vec<PlayableItem>),
@@ -1439,6 +1441,8 @@ pub enum Action {
     CloseExtraWindows,
     /// Shows, moves, resizes or puts away the pop-out controls.
     SetFloatControls(Option<[f32; 3]>),
+    /// The same, for the extra visualizer window's own panel.
+    SetFloatExtra(Option<[f32; 3]>),
     SaveMyView,
     ApplyMyView,
     /// The Views disc was dragged to this place (or `None`: back to its own).
@@ -1466,6 +1470,8 @@ pub enum Action {
     SetJumpReact(u8),
     ToggleJumpAuto,
     SetJumpShake(f32),
+    /// One of the bass jump's reaction sliders: 0 sensitivity, 1 rest, 2 quiet cutoff, 3 adapting.
+    SetJumpTune(u8, f32),
     /// Opacity of the bars (true) or the flow (false), 0.1 to 1.
     SetVisOpacity(bool, f32),
     SetSwirlArtEdge(f32),
@@ -1479,6 +1485,8 @@ pub enum Action {
     /// Look for albums and singles from the last weeks by the artists in
     /// every playlist (`None`) or in one playlist (its ID).
     CheckNewReleases(Option<String>),
+    /// Take one album off "New from your artists" for good.
+    DismissRelease(String),
     /// Move the play controls (0) or the volume (2) to a new place, in grid steps.
     SetBlockNudge(u8, i16),
     /// Put the play controls and the volume back where their side puts them.
@@ -1501,6 +1509,9 @@ pub enum Action {
     ToggleVisLyrics,
     ToggleVisTextSway,
     ToggleVisSwayBeat,
+    /// What the title sway follows: 0 loudness, 1 bass, 2 beat.
+    SetSwayReact(u8),
+    SetSwaySens(f32),
     SetVisSway(u8),
     SetVisSwayAmount(f32),
     ToggleVisTextOutline,
@@ -1639,64 +1650,28 @@ pub enum Action {
     ClearArtCache,
     /// Clear local play history.
     ClearPlayHistory,
-    /// Open or close the Winamp window.
-    ToggleWinampWindow,
-    /// Select a skin, or the built-in skin for `None`.
-    SetSkin(Option<String>),
-    /// Install and select a skin file.
-    InstallSkin(std::path::PathBuf),
-    /// Screen pixels per skin pixel in the Winamp window.
-    SetSkinScale(u8),
-    ToggleWinampOnTop,
-    SetWinampTaskbar(bool),
     /// Step the playlist icons on every row up to the next size. Right-click
     /// an icon rather than hunt through Settings for something only a row can
     /// judge.
     CycleMembershipIconSize,
-    OpenSkinsFolder,
-    /// Pick a different skin each time the mini player opens.
-    SetRandomSkin(bool),
     /// Cycle bars, scope, and off.
     CycleVisualiser,
     /// A click on the player bar's empty space: spectrum, waveform, off.
     CyclePlayerBarVis,
     /// Set the visualizer mode directly.
     SetVisualiser(crate::settings::VisMode),
-    /// Open or close the playlist window under the mini player.
-    ToggleWinampPlaylist,
-    /// The playlist window's height, in skin pixels.
-    SetPlaylistHeight(u32),
-    /// Open or close the equalizer window under the mini player.
-    ToggleWinampEq,
     /// Switch the equalizer's effect on the sound on or off.
     ToggleEq,
     SetEqBand(usize, f32),
     SetEqPreamp(f32),
-    /// One of Winamp's presets, by its place in the list.
+    /// One of the equalizer's presets, by its place in the list.
     ApplyEqPreset(usize),
     /// The balance, -1 all left to 1 all right.
     SetBalance(f32),
     ToggleMono,
-    /// Roll the playlist window up to its title bar, or down again.
-    ToggleWinampPlaylistShade,
-    /// Roll the equalizer window up to its title bar, or down again.
-    ToggleWinampEqShade,
     /// Close the window the way its close button does: into the tray when
     /// that is on, out of the app otherwise.
     CloseWindow,
-    /// Roll the main window up to its title bar, or down again.
-    ToggleWinampShade,
-    /// Open or close the MilkDrop window.
-    ToggleWinampMilkdrop,
-    /// How long each MilkDrop preset plays, in seconds.
-    SetMilkdropSeconds(u32),
-    SetMilkdropScale(u32),
-    /// How many frames a second the MilkDrop window draws; 0 is uncapped.
-    SetMilkdropFps(u32),
-    OpenMilkdropFolder,
-    /// Fetch one of projectM's preset packs into the folder, by its place
-    /// in the list.
-    DownloadMilkdropPack(usize),
     Quit,
 }
 

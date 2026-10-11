@@ -17,10 +17,15 @@ use serde::{Deserialize, Serialize};
 
 const API_URL: &str = "https://ws.audioscrobbler.com/2.0/";
 
-/// Chance's small Cloudflare Worker (see `worker/lastfm-proxy.js`). It holds
+/// A Cloudflare Worker of your own (see `worker/lastfm-proxy.js`). It holds
 /// the Last.fm key and secret, so they are never inside this program or on
-/// GitHub. Empty means no proxy: Settings then asks for a key of your own.
-pub const PROXY_URL: &str = "https://chanceify-lastfm.chance-a10.workers.dev/";
+/// GitHub. The address is read at build time from the untracked
+/// `lastfm-proxy.txt`; the source ships with none. Empty means no proxy: the
+/// key from `lastfm-keys.txt` is used, or Settings asks for one of your own.
+pub const PROXY_URL: &str = match option_env!("CHANCEIFY_LASTFM_PROXY") {
+    Some(address) => address,
+    None => "",
+};
 
 /// Stands in for the key and secret while the proxy does the signing.
 pub const VIA_PROXY: &str = "via-proxy";

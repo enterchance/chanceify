@@ -15,4 +15,5 @@ docs/.bundle/
 /dist/
 
 /lastfm-keys.txt
+/lastfm-proxy.txt
 /notes/

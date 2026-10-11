@@ -39,6 +39,10 @@ pub struct Activity {
     pub small_text: String,
     /// At most two buttons under the activity: a label and a web address.
     pub buttons: Vec<(String, String)>,
+    /// Where pressing the big picture leads, when Discord allows it.
+    pub large_url: Option<String>,
+    /// Where pressing the small badge leads: chanceify's own page.
+    pub small_url: Option<String>,
     /// Seconds since 1970 the song (would have) started, and ends. Both
     /// `None` while paused.
     pub start: Option<i64>,
@@ -67,6 +71,10 @@ impl Activity {
             && self.small_image == other.small_image
             && self.small_text == other.small_text
             && self.buttons == other.buttons
+            && self.large_url == other.large_url
+            && self.small_url == other.small_url
+            && self.join == other.join
+            && self.small_text == other.small_text
             && near(self.start, other.start)
             && near(self.end, other.end)
     }
@@ -105,15 +113,24 @@ pub fn swirl_url(red: u8, green: u8, blue: u8) -> String {
 pub struct Style {
     /// 0 the song, 1 the artist, 2 chanceify: what the status line says.
     pub status_line: u8,
+    /// Which lines the card says: the song, the artist, chanceify (the third line).
+    pub say: [bool; 3],
     pub cover: bool,
     pub badge: bool,
     /// A swirl picture (web address) in the cover's colour, shown small on the cover.
     pub swirl: Option<String>,
     /// The playlist the song plays from, when the reader wants it said.
     pub playlist: Option<String>,
+    /// The playlist's name, to go after the artist on the second line (and link to it).
+    pub playlist_line: Option<String>,
     /// The reader's Spotify profile address, when they want a button for it.
     pub profile_url: Option<String>,
+    /// The reader's Spotify name, for the profile button ("Larry's profile").
+    pub profile_name: Option<String>,
     pub buttons: bool,
+    /// The two buttons the reader picked, in order: 0 none, 1 open in
+    /// chanceify, 2 open in Spotify, 3 the playlist, 4 their profile, 5 get chanceify.
+    pub picks: [u8; 2],
     /// A button to the playlist the song plays from.
     pub playlist_url: Option<String>,
     /// The song button leads to the chanceify song page, not Spotify.
@@ -144,6 +161,17 @@ fn web_url(uri: &str) -> Option<String> {
     }
 }
 
+/// Discord allows 32 characters on a button; longer names end in "…".
+fn fit_label(text: &str) -> String {
+    if text.chars().count() <= 32 {
+        text.to_string()
+    } else {
+        let mut cut: String = text.chars().take(31).collect();
+        cut.push('…');
+        cut
+    }
+}
+
 /// What to show on the profile for what is playing, or `None` for nothing.
 /// The music is the headline: the song and artist, the cover, a progress bar;
 /// chanceify is the small badge, the hover text and a button.
@@ -169,7 +197,7 @@ pub fn activity_for(
             .first()
             .and_then(|artist| artist.id.as_deref())
             .filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric()))
-            .map(|id| format!("https://open.spotify.com/artist/{id}"))
+            .and_then(|id| page_link('a', id, now.artists.first().map_or("", |a| a.name.as_str()), ""))
     };
     // A cover only this program can show (a file's) cannot be fetched by Discord.
     let cover = if style.cover {
@@ -180,79 +208,119 @@ pub fn activity_for(
     } else {
         None
     };
-    let (large_image, small_image) = match (cover, style.look) {
-        // The swirl big, the album in the corner.
-        (Some(url), 1) if style.swirl.is_some() => (style.swirl.clone(), Some(url)),
-        // Only the chanceify badge.
-        (_, 2) => (Some(BADGE_KEY.to_string()), None),
-        (Some(url), _) => (
-            Some(url),
-            style
-                .swirl
-                .clone()
-                .or_else(|| style.badge.then(|| BADGE_KEY.to_string())),
-        ),
-        (None, _) => (style.badge.then(|| BADGE_KEY.to_string()), None),
+    // The album is the picture; chanceify is only a tiny badge in its corner.
+    let badge = style.badge.then(|| BADGE_KEY.to_string());
+    let (large_image, small_image) = match cover {
+        Some(url) => (Some(url), badge),
+        None => (badge, None),
     };
     let mut buttons: Vec<(String, String)> = Vec::new();
-    if style.buttons {
-        let page = if style.song_page && !is_file {
+    // Discord will not show buttons next to a join (listen along) card.
+    if style.buttons && !(style.listen_along && timed && !is_file && !now.is_episode) {
+        let wants_page = style.picks.contains(&1);
+        let page = if wants_page && !is_file {
             song_link(&now.uri, &now.title, &now.subtitle)
         } else {
             None
         };
-        if let Some(url) = page.as_ref().or(song_url.as_ref()) {
-            buttons.push((
-                if page.is_some() { "Open the song" } else { "Listen on Spotify" }.to_string(),
-                url.clone(),
-            ));
-        }
-        if let Some(url) = &style.playlist_url {
-            buttons.push(("Open the playlist".to_string(), url.clone()));
-        }
-        // Discord shows two at most: the song, then the profile or the app.
-        if let Some(url) = &style.profile_url {
-            buttons.push(("My Spotify profile".to_string(), url.clone()));
-        }
-        if buttons.len() < 2
-            && let Some(url) = &style.app_url
-        {
-            buttons.push((format!("Get {}", crate::build_info::DISPLAY_NAME), url.clone()));
+        for kind in style.picks {
+            let made = match kind {
+                1 => page.clone().map(|url| ("Open in chanceify".to_string(), url)),
+                2 => song_url.clone().map(|url| ("Open in Spotify".to_string(), url)),
+                3 => style.playlist_url.clone().map(|url| {
+                    let label = match style.playlist.as_deref().filter(|name| !name.trim().is_empty()) {
+                        Some(name) => name.trim().to_string(),
+                        None => "Open the playlist".to_string(),
+                    };
+                    (fit_label(&label), url)
+                }),
+                4 => style.profile_url.clone().map(|url| {
+                    let label = match style.profile_name.as_deref().filter(|name| !name.trim().is_empty()) {
+                        Some(name) => format!("{}'s profile", name.trim()),
+                        None => "My Spotify profile".to_string(),
+                    };
+                    (fit_label(&label), url)
+                }),
+                5 => style
+                    .app_url
+                    .clone()
+                    .map(|url| (format!("Get {}", crate::build_info::DISPLAY_NAME), url)),
+                _ => None,
+            };
+            if let Some(button) = made
+                && !buttons.iter().any(|(_, url)| *url == button.1)
+            {
+                buttons.push(button);
+            }
         }
     }
     buttons.truncate(2);
+    let large_url = if is_file {
+        None
+    } else {
+        // Clicking the cover opens chanceify's own song page; never a Spotify address.
+        song_link(&now.uri, &now.title, &now.subtitle)
+    };
+    // The lines the reader wants, in order: song, artist. With neither on,
+    // the card still needs a first line, so it says chanceify.
+    let artist_text = if now.playing || now.subtitle.is_empty() {
+        now.subtitle.clone()
+    } else {
+        format!("{} (paused)", now.subtitle)
+    };
+    let mut lines: Vec<String> = Vec::new();
+    if style.say[0] {
+        lines.push(now.title.clone());
+    }
+    let artist_on = style.say[1] && !artist_text.is_empty();
+    let from_line = style.playlist_line.clone().filter(|_| style.playlist_url.is_some());
+    match (artist_on, &from_line) {
+        (true, Some(playlist)) => lines.push(format!("{artist_text} · from {playlist}")),
+        (true, None) => lines.push(artist_text),
+        (false, Some(playlist)) => lines.push(format!("from {playlist}")),
+        (false, None) => {}
+    }
+    if lines.is_empty() {
+        lines.push(crate::build_info::DISPLAY_NAME.to_string());
+    }
+    let both = style.say[0] && lines.len() >= 2;
+    let artist_only = !style.say[0] && style.say[1];
+    // Under a person's name in Discord's member list: the song they are
+    // listening to (chanceify shows in the activity itself).
+    let status_display = 2;
     Some(Activity {
-        details: now.title.clone(),
-        state: if now.playing || now.subtitle.is_empty() {
-            now.subtitle.clone()
+        details: lines[0].clone(),
+        state: lines.get(1).cloned().unwrap_or_default(),
+        details_url: if style.links && style.say[0] {
+            large_url.clone()
+        } else if style.links && artist_only {
+            artist_url.clone()
         } else {
-            format!("{} (paused)", now.subtitle)
+            None
         },
-        details_url: if style.links { song_url } else { None },
-        state_url: if style.links { artist_url } else { None },
-        status_display: match style.status_line {
-            1 => 1,
-            2 => 0,
-            _ => 2,
+        state_url: if style.links && from_line.is_some() && style.say[0] {
+            style.playlist_url.clone()
+        } else if style.links && both {
+            artist_url
+        } else {
+            None
         },
+        status_display,
         large_image,
-        large_text: {
-            let album = if now.album_name.is_empty() {
-                crate::build_info::DISPLAY_NAME.to_string()
-            } else {
-                now.album_name.clone()
-            };
-            match &style.playlist {
-                Some(playlist) => format!("{album} - from {playlist}"),
-                None => album,
-            }
+        // The third line is the album's name (Discord shows this same text when
+        // the cover is hovered). The playlist has its own button.
+        large_text: if now.album_name.is_empty() {
+            now.title.clone()
+        } else {
+            now.album_name.clone()
         },
         small_image,
-        small_text: match &style.playlist {
-            Some(playlist) => format!("Playing from {playlist}"),
-            None => crate::build_info::DISPLAY_NAME.to_string(),
-        },
+        small_text: format!("Get {}", crate::build_info::DISPLAY_NAME),
         buttons,
+        large_url,
+        small_url: style
+            .say[2]
+            .then(|| SITE_URL.to_string()),
         start: timed.then_some(start),
         end: timed.then_some(start + i64::from(now.duration_ms / 1000)),
         join: (style.listen_along && timed && !is_file && !now.is_episode)
@@ -349,12 +417,17 @@ pub const DEFAULT_APPLICATION_ID: &str = "1557925208906661998";
 static LINK: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 /// The chanceify song page (worker/embed.js). Empty until it is deployed.
+/// Where the badge on the card leads: chanceify's own page.
+pub const SITE_URL: &str = "https://madlygeeked.github.io/chanceify/";
+
 pub const EMBED_URL: &str = "https://chanceify-embed.chance-a10.workers.dev";
 
-/// The link "Copy the song for Discord" gives out for a Spotify track uri.
-pub fn song_link(uri: &str, title: &str, artist: &str) -> Option<String> {
-    let id = uri.strip_prefix("spotify:track:")?;
-    if EMBED_URL.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric()) {
+/// A chanceify page on the worker. `kind`: t song, a artist, p playlist, u profile.
+pub fn page_link(kind: char, id: &str, title: &str, artist: &str) -> Option<String> {
+    if EMBED_URL.is_empty()
+        || id.is_empty()
+        || !id.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+    {
         return None;
     }
     let enc = |text: &str| -> String {
@@ -365,12 +438,65 @@ pub fn song_link(uri: &str, title: &str, artist: &str) -> Option<String> {
             })
             .collect()
     };
-    Some(format!("{}/t/{id}?t={}&a={}", EMBED_URL.trim_end_matches('/'), enc(title), enc(artist)))
+    let mut link = format!("{}/{kind}/{id}", EMBED_URL.trim_end_matches('/'));
+    let mut sep = '?';
+    if !title.is_empty() {
+        link.push_str(&format!("{sep}t={}", enc(title)));
+        sep = '&';
+    }
+    if !artist.is_empty() {
+        link.push_str(&format!("{sep}a={}", enc(artist)));
+    }
+    Some(link)
+}
+
+/// The profile page, with the account's own picture handed over (the worker has no way to look it up).
+pub fn profile_link(id: &str, name: &str, image: Option<&str>) -> Option<String> {
+    let mut link = page_link('u', id, name, "")?;
+    if let Some(image) = image.filter(|image| image.starts_with("https://") && image.len() < 500) {
+        let encoded: String = image
+            .bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+                _ => format!("%{b:02X}"),
+            })
+            .collect();
+        link.push_str(&format!("{}i={encoded}", if link.contains('?') { '&' } else { '?' }));
+    }
+    Some(link)
+}
+
+/// The link "Copy the song for Discord" gives out for a Spotify track uri.
+pub fn song_link(uri: &str, title: &str, artist: &str) -> Option<String> {
+    page_link('t', uri.strip_prefix("spotify:track:")?, title, artist)
 }
 
 /// What Discord last said when it refused the song, or why the pipe failed,
 /// for the Settings page (empty when all is well).
 static LAST_ERROR: Mutex<String> = Mutex::new(String::new());
+
+static LOG_FILE: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
+
+/// Where to write what was last sent and what Discord answered, so a card
+/// that looks wrong can be checked against the facts.
+pub fn set_log_file(path: std::path::PathBuf) {
+    *LOG_FILE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(path);
+}
+
+static LOG_TEXT: Mutex<String> = Mutex::new(String::new());
+static FIRST_REFUSAL: Mutex<Option<String>> = Mutex::new(None);
+
+fn write_log_entry(entry: &str, fresh: bool) {
+    let mut text = LOG_TEXT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if fresh {
+        text.clear();
+    }
+    text.push_str(entry);
+    let path = LOG_FILE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+    if let Some(path) = path {
+        let _ = std::fs::write(path, text.as_str());
+    }
+}
 
 fn note_error(text: String) {
     *LAST_ERROR.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = text;
@@ -480,17 +606,20 @@ fn run(rx: mpsc::Receiver<Message>) {
             LINK.store(0, std::sync::atomic::Ordering::Relaxed);
             continue;
         };
-        let sent = match set_activity(pipe.as_mut(), activity.as_ref(), false) {
-            // Discord did not take the whole thing (an older Discord may not
-            // know a newer field): say it again with only the basics.
-            Ok(false) => set_activity(pipe.as_mut(), activity.as_ref(), true),
-            other => other,
-        };
+        // Discord did not take the whole thing (an older Discord may not
+        // know a newer field): say it again with a little less each time,
+        // so the most that Discord will accept is what shows.
+        let mut level = 0;
+        let mut sent = set_activity(pipe.as_mut(), activity.as_ref(), level);
+        while matches!(sent, Ok(false)) && level < 4 && activity.is_some() {
+            level += 1;
+            sent = set_activity(pipe.as_mut(), activity.as_ref(), level);
+        }
         match sent {
             Ok(taken) => {
                 pending = None;
                 LINK.store(2, std::sync::atomic::Ordering::Relaxed);
-                if taken {
+                if taken && level == 0 {
                     note_error(String::new());
                 }
             }
@@ -603,12 +732,22 @@ fn line(text: &str) -> String {
 /// The activity as Discord's JSON. `plain` leaves out everything but the two
 /// lines, the times and the big picture.
 fn activity_json(activity: &Activity, plain: bool) -> Value {
+    activity_json_level(activity, if plain { 4 } else { 0 })
+}
+
+/// The same, at a level of simplicity: 0 everything; 1 without the newer
+/// fields (links on the lines, the status line choice); 2 also without the
+/// listen-along party; 3 also without the buttons; 4 only the basics.
+fn activity_json_level(activity: &Activity, level: u8) -> Value {
+    let plain = level >= 4;
     let mut value = json!({
         // 2 is "Listening to".
         "type": 2,
         "details": line(&activity.details),
-        "state": line(&activity.state),
     });
+    if !activity.state.is_empty() {
+        value["state"] = json!(line(&activity.state));
+    }
     let mut stamps = serde_json::Map::new();
     if let Some(start) = activity.start {
         stamps.insert("start".into(), json!(start));
@@ -627,26 +766,36 @@ fn activity_json(activity: &Activity, plain: bool) -> Value {
     if !plain && let Some(image) = &activity.small_image {
         assets.insert("small_image".into(), json!(image));
         assets.insert("small_text".into(), json!(line(&activity.small_text)));
+        if level < 1 && let Some(url) = &activity.small_url {
+            assets.insert("small_url".into(), json!(url));
+        }
+    }
+    if level < 1 && !plain && let Some(url) = &activity.large_url {
+        assets.insert("large_url".into(), json!(url));
     }
     if !assets.is_empty() {
         value["assets"] = Value::Object(assets);
     }
     if !plain {
-        value["status_display_type"] = json!(activity.status_display.min(2));
-        if let Some(url) = &activity.details_url {
-            value["details_url"] = json!(url);
+        if level < 1 {
+            value["status_display_type"] = json!(activity.status_display.min(2));
+            if let Some(url) = &activity.details_url {
+                value["details_url"] = json!(url);
+            }
+            if let Some(url) = &activity.state_url {
+                value["state_url"] = json!(url);
+            }
         }
-        if let Some(url) = &activity.state_url {
-            value["state_url"] = json!(url);
-        }
-        if let Some(secret) = &activity.join {
+        // Discord refuses a join secret next to buttons ("secrets cannot
+        // currently be sent with buttons"), so buttons win when both are on.
+        if level < 2 && activity.buttons.is_empty() && let Some(secret) = &activity.join {
             value["party"] = json!({
                 "id": format!("chanceify-{}", std::process::id()),
                 "size": [1, 10],
             });
             value["secrets"] = json!({ "join": secret });
         }
-        if !activity.buttons.is_empty() {
+        if level < 3 && !activity.buttons.is_empty() {
             let buttons: Vec<Value> = activity
                 .buttons
                 .iter()
@@ -669,14 +818,14 @@ fn activity_json(activity: &Activity, plain: bool) -> Value {
 fn set_activity(
     pipe: &mut dyn Pipe,
     activity: Option<&Activity>,
-    plain: bool,
+    level: u8,
 ) -> std::io::Result<bool> {
     let nonce = next_nonce();
     let payload = json!({
         "cmd": "SET_ACTIVITY",
         "args": {
             "pid": std::process::id(),
-            "activity": activity.map(|activity| activity_json(activity, plain)),
+            "activity": activity.map(|activity| activity_json_level(activity, level)),
         },
         "nonce": nonce,
     });
@@ -685,9 +834,40 @@ fn set_activity(
     let nonce = payload["nonce"].as_str().unwrap_or_default().to_string();
     let answer = read_answer(pipe, &nonce)?;
     let refused = answer.get("evt").and_then(Value::as_str) == Some("ERROR");
+    let entry = format!(
+        "--- try {} (0 is the full card, 4 the plainest): {}\nsent:\n{}\nDiscord answered:\n{}\n\n",
+        level + 1,
+        if refused { "REFUSED" } else { "accepted" },
+        serde_json::to_string_pretty(&payload["args"]["activity"]).unwrap_or_default(),
+        serde_json::to_string_pretty(&answer).unwrap_or_default()
+    );
+    // The first try starts the log afresh; the simpler tries add to it.
+    write_log_entry(&entry, level == 0);
+    let reason = answer
+        .get("data")
+        .and_then(|d| d.get("message"))
+        .and_then(Value::as_str)
+        .unwrap_or("no reason given")
+        .to_string();
     if refused {
         log::debug!("discord presence: refused: {answer}");
-        note_error(format!("Discord refused the song: {}", answer.get("data").and_then(|d| d.get("message")).and_then(Value::as_str).unwrap_or("no reason given")));
+        if level == 0 {
+            FIRST_REFUSAL.lock().unwrap_or_else(|p| p.into_inner()).replace(reason.clone());
+        }
+        note_error(format!("Discord refused the song: {reason}"));
+    } else if level > 0 {
+        let first = FIRST_REFUSAL
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+            .unwrap_or_default();
+        let dropped = match level {
+            1 => "the links on the lines and the status choice",
+            2 => "the links, the status choice and listen-along",
+            3 => "the links, listen-along and the buttons",
+            _ => "everything but the song, the cover and the times",
+        };
+        note_error(format!("Discord only took a simpler card, without {dropped}. Discord said: {first}"));
     }
     Ok(!refused)
 }
@@ -708,6 +888,8 @@ mod tests {
             small_image: Some(BADGE_KEY.into()),
             small_text: "chanceify".into(),
             buttons: vec![("Listen on Spotify".into(), "https://open.spotify.com/track/abc".into())],
+            large_url: None,
+            small_url: None,
             start: Some(1_000),
             end: Some(1_200),
             join: None,
@@ -749,13 +931,17 @@ mod tests {
     fn style() -> Style {
         Style {
             status_line: 0,
+            say: [true, true, true],
             cover: true,
             badge: true,
             swirl: None,
             playlist: None,
+            playlist_line: None,
             profile_url: None,
+            profile_name: None,
             playlist_url: None,
             song_page: false,
+            picks: [2, 5],
             look: 0,
             buttons: true,
             links: true,
@@ -771,9 +957,10 @@ mod tests {
         let mut chosen = style();
         chosen.playlist = Some("Road trip".into());
         chosen.profile_url = Some("https://open.spotify.com/user/abc".into());
+        chosen.picks = [2, 4];
         let activity = activity_for(&playing(), &chosen, 0).unwrap();
-        assert!(activity.large_text.ends_with("from Road trip"));
-        assert_eq!(activity.small_text, "Playing from Road trip");
+        assert_eq!(activity.large_text, "Album");
+        assert_eq!(activity.small_text, "Get chanceify™");
         assert_eq!(activity.buttons.len(), 2);
         assert_eq!(activity.buttons[1].0, "My Spotify profile");
     }
@@ -820,10 +1007,7 @@ mod tests {
         assert_eq!(activity.small_image.as_deref(), Some(BADGE_KEY));
         assert_eq!(activity.buttons.len(), 2);
         assert_eq!(activity.buttons[0].1, "https://open.spotify.com/track/abc123");
-        assert_eq!(
-            activity.state_url.as_deref(),
-            Some("https://open.spotify.com/artist/def456")
-        );
+        assert!(activity.state_url.as_deref().unwrap().contains("/a/def456"));
         assert_eq!(activity.start, Some(10_000 - 50));
         assert_eq!(activity.end, Some(10_000 - 50 + 200));
     }
@@ -832,9 +1016,9 @@ mod tests {
     fn the_status_line_follows_the_choice() {
         let mut chosen = style();
         chosen.status_line = 1;
-        assert_eq!(activity_for(&playing(), &chosen, 0).unwrap().status_display, 1);
+        assert_eq!(activity_for(&playing(), &chosen, 0).unwrap().status_display, 2);
         chosen.status_line = 2;
-        assert_eq!(activity_for(&playing(), &chosen, 0).unwrap().status_display, 0);
+        assert_eq!(activity_for(&playing(), &chosen, 0).unwrap().status_display, 2);
     }
 
     #[test]

@@ -207,6 +207,13 @@ fn membership_icons(ui: &Ui, app: &mut App, rect: Rect, right: f32, row: &TrackR
         .unwrap_or(false);
     let total = shown.len();
     let (height, gap) = membership_metrics(app.settings.membership_icon_scale);
+    // In the playlists column too many icons shrink to fit rather than
+    // being dropped one at a time.
+    let shrink = ui
+        .data(|data| data.get_temp::<f32>(egui::Id::new("membership-shrink")))
+        .unwrap_or(1.0)
+        .clamp(0.2, 1.0);
+    let (height, gap) = (height * shrink, gap * shrink);
     let art = app.backend.art().clone();
     // Anchored to the right of the title column and growing leftwards, so the
     // first playlist always sits against the album column and each further
@@ -228,48 +235,7 @@ fn membership_icons(ui: &Ui, app: &mut App, rect: Rect, right: f32, row: &TrackR
             Vec2::splat(height),
         );
         cursor -= gap;
-        // A playlist with no cover of its own falls back to the first letter
-        // of its name, so every membership still reads as something.
-        let response = ui.interact(icon, ui.id().with(("membership", &id)), Sense::click());
-        // The icon carries no text of its own, so its playlist's name is what
-        // a screen reader announces and what the hover tooltip repeats.
-        response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), &name)
-        });
-        if image.is_some() {
-            super::widgets::paint_cover(
-                ui,
-                &app.palette,
-                image.as_deref(),
-                icon,
-                height * 0.18,
-                Icon::ListMusic,
-                Some(&art),
-            );
-        } else {
-            ui.painter().rect_filled(
-                icon,
-                CornerRadius::same((height * 0.18).round() as u8),
-                app.palette.surface_hover,
-            );
-            ui.painter().text(
-                icon.center(),
-                egui::Align2::CENTER_CENTER,
-                initial.to_string(),
-                theme::semibold(height * 0.44),
-                app.palette.secondary,
-            );
-        }
-        if response.clicked() {
-            app.actions.push(Action::Open(Page::Playlist(id)));
-        }
-        // Right-click steps the size for every row at once. It lives here
-        // rather than in Settings because the only useful judge of an icon's
-        // size is another icon beside it.
-        if response.secondary_clicked() {
-            app.actions.push(Action::CycleMembershipIconSize);
-        }
-        response.on_hover_text(&name);
+        paint_membership_icon(ui, app, icon, height, id, name, image, initial, &art);
     }
     if total > drawn {
         cursor -= height;
@@ -287,6 +253,123 @@ fn membership_icons(ui: &Ui, app: &mut App, rect: Rect, right: f32, row: &TrackR
             egui::Align2::CENTER_CENTER,
             format!("+{}", total - drawn),
             theme::semibold(height * 0.36),
+            app.palette.secondary,
+        );
+        let response = ui.interact(chip, ui.id().with("membership-more"), Sense::hover());
+        response.on_hover_text(format!("{} more playlists", total - drawn));
+    }
+}
+
+/// One playlist's little cover (or its first letter), clickable, with its name
+/// on hover. Shared by the row of icons and the playlists column's grid.
+#[allow(clippy::too_many_arguments)]
+fn paint_membership_icon(
+    ui: &Ui,
+    app: &mut App,
+    icon: Rect,
+    height: f32,
+    id: String,
+    name: String,
+    image: Option<String>,
+    initial: char,
+    art: &crate::images::ArtLoader,
+) {
+    // A playlist with no cover of its own falls back to the first letter
+    // of its name, so every membership still reads as something.
+    let response = ui.interact(icon, ui.id().with(("membership", &id)), Sense::click());
+    // The icon carries no text of its own, so its playlist's name is what
+    // a screen reader announces and what the hover tooltip repeats.
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), &name)
+    });
+    if image.is_some() {
+        super::widgets::paint_cover(
+            ui,
+            &app.palette,
+            image.as_deref(),
+            icon,
+            height * 0.18,
+            Icon::ListMusic,
+            Some(art),
+        );
+    } else {
+        ui.painter().rect_filled(
+            icon,
+            CornerRadius::same((height * 0.18).round() as u8),
+            app.palette.surface_hover,
+        );
+        ui.painter().text(
+            icon.center(),
+            egui::Align2::CENTER_CENTER,
+            initial.to_string(),
+            theme::semibold(height * 0.44),
+            app.palette.secondary,
+        );
+    }
+    if response.clicked() {
+        app.actions.push(Action::Open(Page::Playlist(id)));
+    }
+    // Right-click steps the size for every row at once. It lives here
+    // rather than in Settings because the only useful judge of an icon's
+    // size is another icon beside it.
+    if response.secondary_clicked() {
+        app.actions.push(Action::CycleMembershipIconSize);
+    }
+    response.on_hover_text(&name);
+}
+
+/// The playlists column: the song's playlists as a small grid from the cell's
+/// left (one, two side by side, four as two by two, six as three by two),
+/// scaled to the cell, so the column can stay narrow.
+fn membership_grid(ui: &Ui, app: &mut App, cell: Rect, row: &TrackRow<'_>) {
+    if !row.item.is_track() {
+        return;
+    }
+    let shown: Vec<(String, String, Option<String>, char)> = membership_shown(app, row)
+        .into_iter()
+        .map(|membership| (membership.id.clone(), membership.name.clone(), membership.image.clone(), membership.initial()))
+        .collect();
+    let total = shown.len();
+    if total == 0 {
+        return;
+    }
+    // One square the size of the single cover: a lone playlist fills it, two
+    // sit side by side at half the size, three or four make two by two, up to
+    // nine in three by three, and so on, each cover smaller than the last.
+    const CAP: usize = 16;
+    let (base, _) = membership_metrics(app.settings.membership_icon_scale);
+    let slots = total.min(CAP);
+    let cols = match slots {
+        1 => 1,
+        2..=4 => 2,
+        5..=9 => 3,
+        _ => 4,
+    };
+    let rows = slots.div_ceil(cols);
+    let gap = if cols >= 3 { 1.5_f32 } else { 2.0 };
+    let side = (cell.width() - 12.0).min(cell.height() - 10.0).max(10.0);
+    let size = base.min((side - (cols as f32 - 1.0) * gap) / cols as f32).max(6.0);
+    let grid_w = cols as f32 * size + (cols as f32 - 1.0) * gap;
+    let grid_h = rows as f32 * size + (rows as f32 - 1.0) * gap;
+    let left = cell.left() + (cell.width() - 12.0 - grid_w).max(0.0) / 2.0;
+    let top = cell.center().y - grid_h / 2.0;
+    let art = app.backend.art().clone();
+    let drawn = if total > CAP { CAP - 1 } else { total };
+    let spot = |index: usize| {
+        let (r, c) = (index / cols, index % cols);
+        Rect::from_min_size(pos2(left + c as f32 * (size + gap), top + r as f32 * (size + gap)), Vec2::splat(size))
+    };
+    for (index, (id, name, image, initial)) in shown.into_iter().take(drawn).enumerate() {
+        paint_membership_icon(ui, app, spot(index), size, id, name, image, initial, &art);
+    }
+    if total > drawn {
+        let chip = spot(drawn);
+        ui.painter().rect_filled(chip, CornerRadius::same((size * 0.18).round() as u8), app.palette.surface_hover);
+        ui.painter().text(
+            chip.center(),
+            egui::Align2::CENTER_CENTER,
+            format!("+{}", total - drawn),
+            theme::semibold(size * 0.36),
             app.palette.secondary,
         );
         let response = ui.interact(chip, ui.id().with("membership-more"), Sense::hover());
@@ -338,6 +421,41 @@ pub fn paint_cover(
         fallback,
         art,
     );
+}
+
+/// A cover for the playing song that never blinks to the placeholder: while
+/// the next song's picture loads, the last one that was drawn under `key`
+/// stays on screen, and the new one replaces it the moment it is ready.
+pub fn paint_sticky_cover(
+    ui: &Ui,
+    palette: &Palette,
+    key: &str,
+    url: Option<&str>,
+    rect: Rect,
+    radius: f32,
+    fallback: Icon,
+    art: &crate::images::ArtLoader,
+) {
+    let id = egui::Id::new(("sticky-cover", key));
+    let corner = CornerRadius::same(radius.min(127.0) as u8);
+    if let Some(url) = url {
+        art.touch(url);
+        let image = egui::Image::new(url).show_loading_spinner(false);
+        if let Ok(egui::load::TexturePoll::Ready { texture }) = image.load_for_size(ui.ctx(), rect.size()) {
+            art.release_bytes(url);
+            art.note_decoded(url, texture.size.x.round() as usize, texture.size.y.round() as usize);
+            ui.ctx().data_mut(|data| data.insert_temp(id, (texture.id, texture.size)));
+            paint_cover_texture(ui, texture, rect, corner, false);
+            return;
+        }
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+    }
+    let last: Option<(egui::TextureId, Vec2)> = ui.ctx().data(|data| data.get_temp(id));
+    if let Some((id, size)) = last {
+        paint_cover_texture(ui, egui::load::SizedTexture { id, size }, rect, corner, false);
+    } else {
+        paint_cover(ui, palette, None, rect, radius, fallback, None);
+    }
 }
 
 /// Paints the requested cover, keeping a softened thumbnail visible until it
@@ -740,7 +858,21 @@ fn submenu<R>(
     close_behavior: Option<egui::PopupCloseBehavior>,
     add_contents: impl FnOnce(&mut Ui) -> R,
 ) -> Option<egui::InnerResponse<R>> {
-    let width = ui.available_width();
+    // Only as wide as its label and arrow, like the plain rows, so the arrow
+    // sits close to the words instead of far off at the menu's edge.
+    let need = {
+        let wanted = crate::bidi::layout(
+            ui.painter(),
+            label,
+            theme::regular(13.5),
+            palette.text,
+            f32::INFINITY,
+            1,
+            None,
+        );
+        10.0 + if icon.is_some() { 26.0 } else { 0.0 } + wanted.size().x + 6.0 + 16.0 + 10.0
+    };
+    let width = fit_width(ui, need);
     let (rect, response) = ui.allocate_exact_size(vec2(width, 28.0), Sense::click());
     let is_in_menu = egui::menu::is_in_menu(ui);
     let submenu_id = egui::menu::SubMenu::id_from_widget_id(response.id);
@@ -897,7 +1029,7 @@ pub fn picked_menu(
 ) {
     let palette = app.palette;
     let locale = app.locale;
-    ui.set_min_width(220.0);
+    ui.set_min_width(150.0);
     ui.set_max_width(300.0);
     let count = songs.len();
     let uris: Vec<String> = songs.iter().map(|item| item.uri().to_string()).collect();
@@ -1150,8 +1282,60 @@ pub fn item_menu(
 ) {
     let palette = app.palette;
     let locale = app.locale;
-    ui.set_min_width(220.0);
-    ui.set_max_width(300.0);
+    // The menu is exactly as wide as its widest row: no empty space.
+    {
+        let mut labels: Vec<(String, f32)> = vec![
+            (gettext(locale, "Add to queue").into_owned(), 0.0),
+            (gettext(locale, "Copy link").into_owned(), 0.0),
+            (gettext(locale, "Open in Spotify").into_owned(), 0.0),
+        ];
+        if item.is_track() {
+            let saved = app.is_saved(item.uri()).unwrap_or(false);
+            labels.push((
+                gettext(locale, if saved { "Remove from Liked Songs" } else { "Save to Liked Songs" }).into_owned(),
+                0.0,
+            ));
+            labels.push((gettext(locale, "Add to playlist").into_owned(), 22.0));
+            labels.push((gettext(locale, "Go to song radio").into_owned(), 0.0));
+            labels.push((gettext(locale, "Go to artist").into_owned(), 22.0));
+            labels.push((gettext(locale, "Go to album").into_owned(), 0.0));
+            labels.push(("Open in Last.fm".to_string(), 0.0));
+            labels.push((format!("open in {}", crate::build_info::DISPLAY_NAME), 0.0));
+            labels.push(("copy for Discord".to_string(), 0.0));
+            if !app.settings.lastfm_session.is_empty() {
+                labels.push(("love on Last.fm".to_string(), 0.0));
+            }
+        } else {
+            labels.push((gettext(locale, "Save episode").into_owned(), 0.0));
+            labels.push((gettext(locale, "Go to podcast").into_owned(), 0.0));
+        }
+        if matches!(
+            context,
+            Some(RowContext::Context { editable_playlist: Some(_), .. })
+                | Some(RowContext::View { editable_playlist: Some(_), .. })
+        ) {
+            labels.push((gettext(locale, "Remove from this playlist").into_owned(), 0.0));
+            labels.push((gettext(locale, "Move down").into_owned(), 0.0));
+        }
+        let widest = labels
+            .iter()
+            .map(|(text, extra)| {
+                let galley = crate::bidi::layout(
+                    ui.painter(),
+                    text,
+                    theme::regular(13.5),
+                    palette.text,
+                    f32::INFINITY,
+                    1,
+                    None,
+                );
+                10.0 + 26.0 + galley.size().x + 10.0 + extra
+            })
+            .fold(0.0_f32, f32::max)
+            .clamp(160.0, 340.0);
+        ui.set_min_width(widest);
+        ui.set_max_width(widest);
+    }
     let uri = item.uri().to_string();
     let label = item.name().to_string();
     if menu_item(
@@ -1167,7 +1351,7 @@ pub fn item_menu(
     }
     if let PlayableItem::Track(track) = item
         && !app.settings.lastfm_session.is_empty()
-        && menu_item(ui, &palette, Some(Icon::Heart), "Love on Last.fm")
+        && menu_item(ui, &palette, Some(Icon::Heart), "love on Last.fm")
     {
         app.actions.push(Action::LastfmLoveSong {
             artist: track
@@ -1363,6 +1547,26 @@ pub fn item_menu(
                 super::settings::last_fm_part(&artist),
                 super::settings::last_fm_part(&track.name)
             )));
+        }
+        // The very bottom: chanceify's own page for the song, and the same
+        // link as a named one for pasting in Discord.
+        let artist = track.artists.first().map(|artist| artist.name.clone()).unwrap_or_default();
+        if let Some(url) = crate::discord::song_link(item.uri(), &track.name, &artist) {
+            if menu_item(
+                ui,
+                &palette,
+                Some(Icon::ExternalLink),
+                &format!("open in {}", crate::build_info::DISPLAY_NAME),
+            ) {
+                app.actions.push(Action::OpenUrl(url));
+            }
+            if menu_item(ui, &palette, Some(Icon::Copy), "copy for Discord") {
+                app.actions.push(Action::CopyForDiscord {
+                    uri: item.uri().to_string(),
+                    title: track.name.clone(),
+                    artist,
+                });
+            }
         }
     }
 }
@@ -1647,7 +1851,7 @@ fn fitted_galley(
 /// ellipsis rather than running into the next column.
 fn paint_cell(painter: &egui::Painter, left: f32, right: f32, cy: f32, text: &str, size: f32, color: Color32) {
     let avail = (right - left - 8.0).max(10.0);
-    let galley = fitted_galley(painter, text, &theme::regular(size), 8.0, avail, color);
+    let galley = fitted_galley(painter, text, &theme::regular(size), 5.0, avail, color);
     painter.galley(pos2(left, cy - galley.size().y / 2.0), galley, color);
 }
 
@@ -1697,13 +1901,13 @@ pub(crate) fn table_layout(
     compact: bool,
 ) -> Columns {
     let number = if compact { 0.0 } else { 44.0 };
-    let cover = if shown.cover {
-        if compact { 44.0 } else { 52.0 }
+    let cover = if shown.cover && !columns.hide_cover {
+        if compact { 44.0 } else { columns.cover_width() }
     } else {
         0.0
     };
     let heart = if compact { 0.0 } else { columns.buttons_width() };
-    let duration = if compact { 44.0 } else { 56.0 };
+    let duration = if compact { 44.0 } else { columns.length_width() };
     // The three dots are gone: right-click a song instead.
     let more = 0.0;
     use crate::model::SortColumn as Sc;
@@ -1781,7 +1985,7 @@ const TITLE_MIN: f32 = 150.0;
 /// Lets the shown columns share `region` between them: the song names count
 /// double, every other column once, so a wide window fills out evenly.
 pub(crate) fn spread_columns(laid: &mut Columns, region: f32) {
-    let shown = [laid.playlists, laid.album, laid.added, laid.release, laid.bpm]
+    let shown = [laid.playlists, laid.album, laid.added, laid.release]
         .iter()
         .filter(|w| **w > 0.0)
         .count();
@@ -1794,7 +1998,6 @@ pub(crate) fn spread_columns(laid: &mut Columns, region: f32) {
         &mut laid.album,
         &mut laid.added,
         &mut laid.release,
-        &mut laid.bpm,
     ] {
         if *width > 0.0 {
             *width = each;
@@ -1803,15 +2006,17 @@ pub(crate) fn spread_columns(laid: &mut Columns, region: f32) {
 }
 
 /// How far the whole table moves right to sit in the middle of the list: the
-/// song name keeps a fixed 460 and everything grows out from the centre.
+/// song name never grows past 460 (longer names are cut short) and the
+/// whole table always sits in the middle, growing out from the centre.
 /// Nothing moves when the table is locked to the left, spread evenly, or
 /// too narrow to have room to spare.
 fn centred_shift(room: f32, others: f32, columns: &crate::settings::TrackColumns) -> f32 {
     let title = room - others;
-    if columns.lock_left || (columns.spread && others > 0.0) || title <= 520.0 {
+    let cap = columns.title_cap();
+    if columns.lock_left || (columns.spread && others > 0.0) || title <= cap {
         0.0
     } else {
-        (title - 460.0) / 2.0
+        (title - cap) / 2.0
     }
 }
 
@@ -1823,12 +2028,15 @@ pub(crate) fn column_slots(
     end: f32,
     order: [u8; 6],
     laid: &Columns,
+    number: Option<(usize, f32)>,
+    length: Option<(usize, f32)>,
+    cover: Option<(usize, f32)>,
 ) -> Vec<(crate::model::SortColumn, f32, f32)> {
     use crate::model::SortColumn as Sc;
     let others = laid.playlists + laid.album + laid.added + laid.release + laid.bpm;
-    let title = (end - start - others).max(0.0);
-    let mut x = start;
-    let mut out = Vec::new();
+    let extra = number.map_or(0.0, |(_, w)| w) + length.map_or(0.0, |(_, w)| w) + cover.map_or(0.0, |(_, w)| w);
+    let title = (end - start - others - extra).max(0.0);
+    let mut cells: Vec<(Sc, f32)> = Vec::new();
     for code in order {
         let (column, width) = match code {
             0 => (Sc::Title, title),
@@ -1839,9 +2047,25 @@ pub(crate) fn column_slots(
             _ => (Sc::Bpm, laid.bpm),
         };
         if width > 0.0 || column == Sc::Title {
-            out.push((column, x, width));
-            x += width;
+            cells.push((column, width));
         }
+    }
+    // The length first, then the cover (the cover picture's column, marked
+    // by `AddedBy`, which has no column of its own any more), then the #.
+    if let Some((at, width)) = length {
+        cells.insert(at.min(cells.len()), (Sc::Duration, width));
+    }
+    if let Some((at, width)) = cover {
+        cells.insert(at.min(cells.len()), (Sc::AddedBy, width));
+    }
+    if let Some((at, width)) = number {
+        cells.insert(at.min(cells.len()), (Sc::Index, width));
+    }
+    let mut x = start;
+    let mut out = Vec::new();
+    for (column, width) in cells {
+        out.push((column, x, width));
+        x += width;
     }
     out
 }
@@ -1856,12 +2080,22 @@ fn columns(
     // hides the length (the queue panel, on request) must give that width
     // back, or the columns are placed as though it were there and a gap the
     // width of a time is left at the right end of every row.
+    // Queue-style rows keep their own plain sizes: the song list's cover and
+    // length choices are not theirs.
+    let mut plain = *settings;
+    if bare {
+        plain.cover_w = 0.0;
+        plain.length_w = 0.0;
+        plain.hide_cover = false;
+        plain.title_w = 0.0;
+    }
+    let settings = &plain;
     let freed = if row.show_time {
         0.0
     } else if row.compact {
         44.0
     } else {
-        56.0
+        settings.length_width()
     } + if bare && !row.compact { 72.0 } else { 0.0 };
     let mut cols = table_layout(
         width + freed,
@@ -2065,6 +2299,26 @@ fn track_row_contents(
     } else if bare && row.compact && cols.number == 0.0 && row.number.is_some() {
         cols.number = 30.0;
     }
+    // The # and the length can be dragged in among the other columns; then
+    // they are drawn at their place there, not at the row's ends.
+    let tcols = app.settings.track_columns;
+    let number_w = cols.number;
+    let length_w = cols.duration;
+    let number_embedded = if bare || cols.number <= 0.0 { None } else { tcols.number_at.map(usize::from) };
+    let length_embedded = if bare || !row.show_time || cols.duration <= 0.0 { None } else { tcols.length_at.map(usize::from) };
+    let cover_w = cols.cover;
+    let cover_embedded = if bare || cols.cover <= 0.0 { None } else { tcols.cover_at.map(usize::from) };
+    if number_embedded.is_some() {
+        cols.number = 0.0;
+    }
+    if cover_embedded.is_some() {
+        cols.cover = 0.0;
+    }
+    let embedded_w = number_embedded.map_or(0.0, |_| number_w)
+        + length_embedded.map_or(0.0, |_| length_w)
+        + cover_embedded.map_or(0.0, |_| cover_w);
+    // Without a number column the cover carries the play control.
+    let cover_plays = cols.number == 0.0;
     let painter = ui.painter().clone();
     // A faint vertical rule at the left edge of each optional column.
     let rule = |at: f32| {
@@ -2077,17 +2331,17 @@ fn track_row_contents(
     // The song name alone in a wide list sits in the middle, and the number
     // and cover go with it, so the cover stays next to the name.
     let lone_shift = {
-        let others = cols.playlists + cols.album + cols.added + cols.release + cols.bpm;
-        let right_fixed = cols.heart + if row.show_time { cols.duration } else { 0.0 } + cols.more + 8.0;
+        let others = cols.playlists + cols.album + cols.added + cols.release + cols.bpm + embedded_w;
+        let right_fixed = cols.heart + if row.show_time && length_embedded.is_none() { cols.duration } else { 0.0 } + cols.more + 8.0;
         let region = rect.right() - right_fixed - (rect.left() + 8.0 + cols.number + cols.cover);
         if bare { 0.0 } else { centred_shift(region, others, &app.settings.track_columns) }
     };
     let mut x = rect.left() + 8.0 + lone_shift;
 
     // Number / play.
-    if cols.number > 0.0 {
-        let cell = Rect::from_min_size(pos2(x, rect.top()), vec2(cols.number, row_height));
-        if app.play_pending(row.item.uri()) {
+    let pending = app.play_pending(row.item.uri());
+    let draw_number = |ui: &mut Ui, cell: Rect| {
+        if pending {
             let mut child = ui.new_child(
                 UiBuilder::new()
                     .max_rect(cell)
@@ -2110,7 +2364,7 @@ fn track_row_contents(
                 palette.secondary
             };
             let label = row.number.unwrap_or(row.index + 1).to_string();
-            painter.text(
+            ui.painter().text(
                 cell.center(),
                 egui::Align2::CENTER_CENTER,
                 label,
@@ -2118,13 +2372,20 @@ fn track_row_contents(
                 color,
             );
         }
+    };
+    let mut number_cell: Option<Rect> = None;
+    if cols.number > 0.0 {
+        let cell = Rect::from_min_size(pos2(x, rect.top()), vec2(cols.number, row_height));
+        draw_number(ui, cell);
+        number_cell = Some(cell);
         x += cols.number;
     }
-    // Cover.
-    if cols.cover > 0.0 {
+    // Cover: drawn where the song name starts, or in its own column when it
+    // has been dragged in among the others.
+    let draw_cover = |ui: &mut Ui, app: &mut App, left: f32| {
         let size = if row.compact { 36.0 } else { 40.0 };
         let cover_rect = Rect::from_center_size(
-            pos2(x + size / 2.0 + 2.0, rect.center().y),
+            pos2(left + size / 2.0 + 2.0, rect.center().y),
             Vec2::splat(size),
         );
         paint_cover(
@@ -2140,9 +2401,7 @@ fn track_row_contents(
             },
             Some(app.backend.art()),
         );
-        // Without a number column the cover carries the play control:
-        // hover shows it, a click uses it, and what plays shows there.
-        if cols.number == 0.0 {
+        if cover_plays {
             let scrim = |alpha: u8| {
                 painter.rect_filled(
                     cover_rect,
@@ -2171,10 +2430,15 @@ fn track_row_contents(
                 theme::paint_icon(ui, Icon::AudioLines, cover_rect, 16.0, palette.accent);
             }
         }
+    };
+    if cols.cover > 0.0 {
+        draw_cover(ui, app, x);
         x += cols.cover;
     }
-    let right_fixed =
-        cols.heart + if row.show_time { cols.duration } else { 0.0 } + cols.more + 8.0;
+    let right_fixed = cols.heart
+        + if row.show_time && length_embedded.is_none() { cols.duration } else { 0.0 }
+        + cols.more
+        + 8.0;
     // "3 min ago" and the like, when there is no date column to hold them:
     // a column of their own, at the same spot on every row, instead of
     // trailing after each artist name wherever that happens to end.
@@ -2185,11 +2449,43 @@ fn track_row_contents(
         .map(|added| util::format_relative_date(app.locale, added, jiff::Timestamp::now()));
     let ago_w = if ago_label.is_some() { 78.0 } else { 0.0 };
     // The reader's arrangement: every column, the title too, has a slot.
-    let region_right = rect.right() - right_fixed;
+    // The like button, plus, length and the menu button travel with the
+    // centred block, so they sit right after the last column, not at the edge.
+    let region_right = rect.right() - right_fixed - lone_shift;
     if app.settings.track_columns.spread && !bare {
-        spread_columns(&mut cols, region_right - x);
+        spread_columns(&mut cols, region_right - x - embedded_w);
     }
-    let slots = column_slots(x, region_right - lone_shift, app.settings.track_columns.order(), &cols);
+    let slots = column_slots(
+        x,
+        region_right,
+        app.settings.track_columns.order(),
+        &cols,
+        number_embedded.map(|at| (at, number_w)),
+        length_embedded.map(|at| (at, length_w)),
+        cover_embedded.map(|at| (at, cover_w)),
+    );
+    for (column, at, width) in &slots {
+        match column {
+            crate::model::SortColumn::AddedBy => {
+                draw_cover(ui, app, *at);
+            }
+            crate::model::SortColumn::Index => {
+                let cell = Rect::from_min_size(pos2(*at, rect.top()), vec2(*width, row_height));
+                draw_number(ui, cell);
+                number_cell = Some(cell);
+            }
+            crate::model::SortColumn::Duration => {
+                painter.text(
+                    pos2(at + 10.0, rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    util::format_duration_ms(row.item.duration_ms()),
+                    theme::regular(13.0),
+                    palette.secondary,
+                );
+            }
+            _ => {}
+        }
+    }
     let slot_at = |column: crate::model::SortColumn| {
         slots.iter().find(|(c, _, _)| *c == column).map(|(_, at, _)| *at)
     };
@@ -2481,15 +2777,7 @@ fn track_row_contents(
         x = slot_at(crate::model::SortColumn::Playlists).unwrap_or(x);
         rule(x);
         let cell = Rect::from_min_size(pos2(x, rect.top()), vec2(cols.playlists, row_height));
-        let (height, gap) = membership_metrics(app.settings.membership_icon_scale);
-        let fit = (((cell.width() - 12.0 + gap) / (height + gap)).floor() as usize).max(1);
-        // `membership_icons` grows leftwards from `right`, so hand it the
-        // right edge of exactly as many icons as fit.
-        let wanted = membership_shown(app, &row).len().min(fit);
-        if wanted > 0 {
-            let right = cell.left() + wanted as f32 * height + (wanted as f32 - 1.0) * gap;
-            membership_icons(ui, app, cell, right, &row);
-        }
+        membership_grid(ui, app, cell, &row);
         x += cols.playlists;
     }
     if cols.album > 0.0 {
@@ -2603,18 +2891,6 @@ fn track_row_contents(
         x = slot_at(crate::model::SortColumn::Bpm).unwrap_or(x);
         rule(x);
         let cell = Rect::from_min_size(pos2(x, rect.top()), vec2(cols.bpm, row_height));
-        let measured_key = app.live_key_for(row.item);
-        if app.bpm_for(row.item).is_none()
-            && let Some(key) = &measured_key
-        {
-            painter.text(
-                pos2(cell.left(), cell.center().y),
-                egui::Align2::LEFT_CENTER,
-                key,
-                theme::regular(12.0),
-                palette.dim,
-            );
-        }
         if let Some(tempo) = app.bpm_for(row.item) {
             // Whole beats per minute, always. Deezer answers with a
             // tempo it measured, so 103.9 is a real reading of a record
@@ -2623,25 +2899,9 @@ fn track_row_contents(
             // column read at a glance while scrolling. 104 is what the
             // record is.
             let label = format!("{}", tempo.round());
-            let drawn = {
-                let galley = fitted_galley(&painter, &label, &theme::regular(13.0), 8.0, (cell.width() - 8.0).max(10.0), palette.secondary);
-                let at = pos2(cell.left(), cell.center().y - galley.size().y / 2.0);
-                let shape_rect = Rect::from_min_size(at, galley.size());
-                painter.galley(at, galley, palette.secondary);
-                shape_rect
-            };
-            // The key from the sound, when the column is wide enough.
-            if let Some(key) = &measured_key
-                && cell.right() - drawn.right() > 36.0
-            {
-                painter.text(
-                    pos2(drawn.right() + 8.0, cell.center().y),
-                    egui::Align2::LEFT_CENTER,
-                    key,
-                    theme::regular(12.0),
-                    palette.dim,
-                );
-            }
+            let galley = fitted_galley(&painter, &label, &theme::regular(13.0), 5.0, (cell.width() - 8.0).max(10.0), palette.secondary);
+            let at = pos2(cell.left(), cell.center().y - galley.size().y / 2.0);
+            painter.galley(at, galley, palette.secondary);
         }
         x += cols.bpm;
     }
@@ -2717,12 +2977,12 @@ fn track_row_contents(
 
     // Duration. Off in the queue panel when the reader has traded it for the
     // song name, which is what that panel is for.
-    if row.show_time && cols.duration > 0.0 {
+    if row.show_time && cols.duration > 0.0 && length_embedded.is_none() {
         let duration_rect =
             Rect::from_min_size(pos2(x, rect.top()), vec2(cols.duration, row_height));
         painter.text(
-            pos2(duration_rect.right() - 6.0, duration_rect.center().y),
-            egui::Align2::RIGHT_CENTER,
+            pos2(duration_rect.left() + 10.0, duration_rect.center().y),
+            egui::Align2::LEFT_CENTER,
             util::format_duration_ms(row.item.duration_ms()),
             theme::regular(13.0),
             palette.secondary,
@@ -2799,6 +3059,8 @@ fn track_row_contents(
             response
                 .interact_pointer_pos()
                 .is_some_and(|pos| control_rect.contains(pos))
+        }) || number_cell.is_some_and(|cell| {
+            response.interact_pointer_pos().is_some_and(|pos| cell.contains(pos))
         });
         if on_control && !unavailable {
             if is_current {
@@ -3018,6 +3280,9 @@ pub(crate) fn columns_menu(ui: &mut Ui, palette: &Palette, locale: crate::i18n::
                         !widths.hide_duration,
                     ) {
                         widths.hide_duration = !widths.hide_duration;
+                    }
+                    if checkbox_row(ui, palette, &gettext(locale, "COVER"), !widths.hide_cover) {
+                        widths.hide_cover = !widths.hide_cover;
                     }
                     if checkbox_row(ui, palette, &gettext(locale, "ARTIST"), !widths.hide_artist) {
                         widths.hide_artist = !widths.hide_artist;
@@ -3288,6 +3553,13 @@ fn column_divider(
     // the topmost always takes the click.
     placed: &mut Vec<f32>,
 ) -> Option<egui::Response> {
+    // The length and the tempo are always the same width.
+    if matches!(
+        column,
+        crate::model::SortColumn::Duration | crate::model::SortColumn::Bpm | crate::model::SortColumn::Playlists
+    ) {
+        return None;
+    }
     if x <= rect.left() + 20.0 || x >= rect.right() - 20.0 {
         return None;
     }
@@ -3323,15 +3595,34 @@ fn column_divider(
         // the names to its left, so a wider column is a smaller delta.
         let delta = ui.input(|input| input.pointer.delta()).x;
         if delta != 0.0 {
-            let width = columns.width(column) + if grows_right { delta } else { -delta };
+            let sign = if grows_right { delta } else { -delta };
             // A drag stops at the minimum rather than hiding the column.
             // Hiding is a menu choice: a column that vanishes mid-drag
             // takes its handle with it, and there is then no way to drag it
             // back — the divider used to get stuck there for good.
-            let width = width.max(crate::settings::TrackColumns::MIN);
-            columns.set(column, width);
+            let width = match column {
+                crate::model::SortColumn::Title => {
+                    // The song name's left edge: the table sits in the middle
+                    // and grows from there, so twice the pointer's travel
+                    // keeps the edge under it.
+                    let factor = if columns.lock_left { 1.0 } else { 2.0 };
+                    columns.title_w = (columns.title_cap() + sign * factor).clamp(200.0, 1400.0);
+                    columns.title_w
+                }
+                crate::model::SortColumn::Duration => {
+                    columns.length_w = (columns.length_width() + sign).clamp(44.0, 200.0);
+                    columns.length_w
+                }
+                _ => {
+                    let width = (columns.width(column) + sign).max(crate::settings::TrackColumns::min_width(column));
+                    columns.set(column, width);
+                    width
+                }
+            };
             // Shift held: every shown column takes the same width.
-            if ui.input(|input| input.modifiers.shift) {
+            if ui.input(|input| input.modifiers.shift)
+                && !matches!(column, crate::model::SortColumn::Title | crate::model::SortColumn::Duration)
+            {
                 use crate::model::SortColumn;
                 for other in [
                     SortColumn::Album,
@@ -3348,7 +3639,11 @@ fn column_divider(
         }
     }
     if response.double_clicked() {
-        columns.set(column, crate::settings::TrackColumns::default_width(column));
+        match column {
+            crate::model::SortColumn::Title => columns.title_w = 0.0,
+            crate::model::SortColumn::Duration => columns.length_w = 0.0,
+            _ => columns.set(column, crate::settings::TrackColumns::default_width(column)),
+        }
     }
     if ui.is_rect_visible(grab) {
         // Drawn as a grab handle rather than a plain rule: a line on its
@@ -3362,7 +3657,7 @@ fn column_divider(
         } else if response.hovered() {
             palette.secondary
         } else {
-            palette.outline.gamma_multiply(0.85)
+            palette.outline
         };
         // A soft band behind the grip on hover gives the pointer somewhere
         // obvious to land, wider than the two dots and the rule.
@@ -3398,10 +3693,6 @@ fn column_divider(
     // A right-click on the handle is a right-click on the header: the
     // handle sits on top of it and would otherwise swallow the menu.
     let right_clicked = response.secondary_clicked();
-    let response = response.on_hover_text(gettext(
-        locale,
-        "Drag to resize (hold Shift to make every column the same width), double-click to reset, drag to the far left to hide",
-    ));
     right_clicked.then_some(response)
 }
 
@@ -3427,6 +3718,7 @@ pub fn table_header(
     grid: bool,
 ) -> HeaderAction {
     use crate::model::{SortColumn, TableSort};
+    let show_cover = show_cover && !columns.hide_cover;
     let mut action = HeaderAction::default();
     let width = ui.available_width();
     let (rect, row) = ui.allocate_exact_size(vec2(width, 34.0), Sense::click());
@@ -3442,14 +3734,16 @@ pub fn table_header(
     // A heading dragged sideways and let go: which one, and where the pointer was.
     let mut dropped: Option<(SortColumn, f32)> = None;
     let mut heading =
-        |ui: &mut Ui, x: f32, text: &str, column: SortColumn, room: f32, anchors: &mut Vec<egui::Response>| {
-            let active = sort.and_then(|sort| sort.direction(column));
+        |ui: &mut Ui, x: f32, text: &str, column: SortColumn, room: f32, glyph: Option<Icon>, lit: Option<bool>, anchors: &mut Vec<egui::Response>| {
+            let active = sort.and_then(|sort| sort.direction(column)).or(lit);
             let arrow_room = if active.is_some() { 13.0 } else { 0.0 };
             // In a squeezed column the heading shrinks to fit, then is cut
             // with an ellipsis, instead of running into the next one.
             let avail = (room - 12.0 - arrow_room).max(12.0);
-            let galley = fitted_galley(ui.painter(), text, &font, 8.0, avail, egui::Color32::PLACEHOLDER);
-            let size = galley.size();
+            let galley = glyph
+                .is_none()
+                .then(|| fitted_galley(ui.painter(), text, &font, 5.0, avail, egui::Color32::PLACEHOLDER));
+            let size = galley.as_ref().map_or(vec2(15.0, 15.0), |galley| galley.size());
             let top_left = pos2(x, rect.center().y - size.y / 2.0);
             let head =
                 Rect::from_min_size(top_left, size + vec2(arrow_room, 0.0)).expand2(vec2(4.0, 8.0));
@@ -3486,7 +3780,15 @@ pub fn table_header(
             } else {
                 color
             };
-            ui.painter().galley(top_left, galley, color);
+            match (galley, glyph) {
+                (Some(galley), _) => {
+                    ui.painter().galley(top_left, galley, color);
+                }
+                (None, Some(icon)) => {
+                    icon.image(color, 15.0).paint_at(ui, Rect::from_min_size(top_left, size));
+                }
+                (None, None) => {}
+            }
             if let Some(ascending) = active {
                 // Drawn, not typed: an arrow glyph relies on the loaded fonts
                 // and rendered as a hollow box on some machines.
@@ -3525,85 +3827,81 @@ pub fn table_header(
         &widths,
         false,
     );
-    let right_fixed = columns.buttons_width() + if columns.hide_duration { 0.0 } else { 56.0 } + 8.0;
+    // The # and the length can be dragged in among the other columns.
+    let show_number = !columns.hide_number && !grid;
+    let show_length = !columns.hide_duration;
+    let number_embedded = if show_number { columns.number_at.map(usize::from) } else { None };
+    let length_embedded = if show_length { columns.length_at.map(usize::from) } else { None };
+    let cover_embedded = if show_cover { columns.cover_at.map(usize::from) } else { None };
+    let cover_w = columns.cover_width();
+    let length_w = columns.length_width();
+    let embedded_w = number_embedded.map_or(0.0, |_| 44.0)
+        + length_embedded.map_or(0.0, |_| length_w)
+        + cover_embedded.map_or(0.0, |_| cover_w);
+    let right_fixed = columns.buttons_width() + if show_length && length_embedded.is_none() { length_w } else { 0.0 } + 8.0;
     // Unless it is locked to the left, the whole table sits in the middle:
     // the number, cover, song name and columns move together and grow out
     // from the centre as columns are added.
-    let prefix = if !columns.hide_number && !grid { 44.0 } else { 0.0 } + if show_cover { 52.0 } else { 0.0 };
+    let prefix = if show_number && number_embedded.is_none() { 44.0 } else { 0.0 } + if show_cover { cover_w } else { 0.0 };
     let shift = centred_shift(
         rect.right() - right_fixed - (rect.left() + 8.0 + prefix),
-        laid.playlists + laid.album + laid.added + laid.release + laid.bpm,
+        laid.playlists + laid.album + laid.added + laid.release + laid.bpm + embedded_w,
         columns,
     );
-    let mut number_clicked = false;
     let mut x = rect.left() + 8.0 + shift;
-    // In the grid the songs carry their numbers on their covers, so there
-    // is no # heading.
-    let show_number = !columns.hide_number && !grid;
-    if show_number {
-        let number = Rect::from_center_size(pos2(x + 22.0, rect.center().y), vec2(30.0, 22.0));
-        // With no sort chosen the list already plays its own order, and
-        // the # says so: lit, arrow pointing down the list.
-        let natural = sort.is_none_or(|sort| sort.is_empty());
-        let active = sort.and_then(|sort| sort.direction(SortColumn::Index));
-        let response = ui.interact(number, ui.id().with("table-header-number"), Sense::click());
-        response.widget_info(|| {
-            egui::WidgetInfo::labeled(
-                egui::WidgetType::Button,
-                ui.is_enabled(),
-                gettext(locale, "Sort by playlist order"),
-            )
-        });
-        theme::focus_ring(ui, &response);
-        let number_color = if natural || active.is_some() {
-            palette.accent
-        } else if response.hovered() {
-            palette.text
-        } else {
-            color
-        };
-        ui.painter().text(
-            number.center(),
-            egui::Align2::CENTER_CENTER,
-            "#",
-            font.clone(),
-            number_color,
-        );
-        if let Some(ascending) = active.or(natural.then_some(true)) {
-            let center = pos2(number.center().x + 12.0, rect.center().y);
-            let (wing, tip) = if ascending { (2.8, -3.2) } else { (-2.8, 3.2) };
-            ui.painter().add(egui::Shape::convex_polygon(
-                vec![
-                    center + vec2(-4.0, wing),
-                    center + vec2(4.0, wing),
-                    center + vec2(0.0, tip),
-                ],
-                number_color,
-                egui::Stroke::NONE,
-            ));
-        }
-        let hover = response.on_hover_text(gettext(locale, "Original order, reversed"));
-        if hover.clicked() {
-            number_clicked = true;
-        }
-        anchors.push(hover);
-    }
-    if show_number {
+    // With no sort chosen the list already plays its own order, and the #
+    // says so: lit, arrow pointing down the list.
+    let natural = sort.is_none_or(|sort| sort.is_empty());
+    if show_number && number_embedded.is_none() {
+        heading(ui, x + 18.0, "#", SortColumn::Index, 44.0, None, natural.then_some(true), &mut anchors);
         x += 44.0;
     }
-    if show_cover {
-        x += 52.0;
+    if show_cover && cover_embedded.is_none() {
+        // The cover's handle: drag it to move the cover among the columns.
+        heading(ui, x + 14.0, "cover", SortColumn::AddedBy, cover_w, Some(Icon::Disc), None, &mut anchors);
+        x += cover_w;
     }
     if columns.spread {
-        spread_columns(&mut laid, rect.right() - right_fixed - x);
+        spread_columns(&mut laid, rect.right() - right_fixed - x - embedded_w);
     }
     // The headings must be drawn in exactly the order `track_row` draws the
     // cells (both use `column_slots`), or every heading sits over the wrong data.
-    let slots = column_slots(x, rect.right() - right_fixed - shift, columns.order(), &laid);
+    let slots = column_slots(
+        x,
+        rect.right() - right_fixed - shift,
+        columns.order(),
+        &laid,
+        number_embedded.map(|at| (at, 44.0)),
+        length_embedded.map(|at| (at, length_w)),
+        cover_embedded.map(|at| (at, cover_w)),
+    );
     let title_at = slots.iter().position(|(c, _, _)| *c == SortColumn::Title);
     // (edge, column, whether dragging right makes the column wider)
     let mut edges: Vec<(f32, SortColumn, bool)> = Vec::new();
+    if show_length && length_embedded.is_none() {
+        edges.push((rect.right() - shift - 8.0 - length_w, SortColumn::Duration, false));
+    }
     for (index, (column, at, room)) in slots.iter().enumerate() {
+        if *column == SortColumn::Index {
+            heading(ui, at + 18.0, "#", SortColumn::Index, *room, None, natural.then_some(true), &mut anchors);
+            continue;
+        }
+        if *column == SortColumn::Duration || *column == SortColumn::AddedBy {
+            if *column == SortColumn::Duration {
+                heading(ui, at + 10.0, "length", SortColumn::Duration, *room, Some(Icon::Clock), None, &mut anchors);
+            } else {
+                heading(ui, at + 14.0, "cover", SortColumn::AddedBy, *room, Some(Icon::Disc), None, &mut anchors);
+            }
+            // Only the length is resized (from the edge the title gives way
+            // at); the cover picture is a fixed square.
+            if *column == SortColumn::Duration {
+                match title_at {
+                    Some(title) if index < title => edges.push((at + room, *column, true)),
+                    _ => edges.push((*at - 7.0, *column, false)),
+                }
+            }
+            continue;
+        }
         let label = match column {
             SortColumn::Title => pgettext(locale, "column heading", "TITLE"),
             SortColumn::Playlists => pgettext(locale, "column heading", "PLAYLISTS"),
@@ -3613,72 +3911,56 @@ pub fn table_header(
             _ => pgettext(locale, "column heading", "BPM"),
         };
         let room = if *column == SortColumn::Title { f32::INFINITY } else { *room };
-        heading(ui, *at, &label, *column, room, &mut anchors);
+        heading(ui, *at, &label, *column, room, None, None, &mut anchors);
+        if *column == SortColumn::Title {
+            // The song name's own handle, on its left edge.
+            edges.push((*at - 7.0, SortColumn::Title, false));
+        }
         if *column != SortColumn::Title {
             // The title gives way to its neighbours: a column after it is
             // resized from its left edge, one before it from its right edge.
             match title_at {
                 Some(title) if index < title => edges.push((at + room, *column, true)),
-                _ => edges.push((*at, *column, false)),
+                _ => edges.push((*at - 7.0, *column, false)),
             }
         }
     }
+    if show_length && length_embedded.is_none() {
+        heading(ui, rect.right() - shift - 8.0 - length_w + 10.0, "length", SortColumn::Duration, 56.0, Some(Icon::Clock), None, &mut anchors);
+    }
     if let Some((column, at)) = dropped {
-        let shown: Vec<SortColumn> = slots.iter().map(|(c, _, _)| *c).collect();
-        let target = slots
-            .iter()
-            .filter(|(c, x, w)| *c != column && x + w / 2.0 < at)
-            .count();
-        widths.move_column(column, &shown, target);
-    }
-    if number_clicked {
-        clicked = Some(SortColumn::Index);
-    }
-    if !columns.hide_duration {
-    let clock = Rect::from_center_size(
-        pos2(rect.right() - 56.0 / 2.0 - 6.0, rect.center().y),
-        Vec2::splat(15.0),
-    );
-    let duration_active = sort.and_then(|sort| sort.direction(SortColumn::Duration));
-    let response = ui.interact(
-        clock.expand(8.0),
-        ui.id().with("table-header-duration"),
-        Sense::click(),
-    );
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(
-            egui::WidgetType::Button,
-            ui.is_enabled(),
-            gettext(locale, "Sort by duration"),
-        )
-    });
-    theme::focus_ring(ui, &response);
-    let clock_color = if duration_active.is_some() {
-        palette.accent
-    } else if response.hovered() {
-        palette.text
-    } else {
-        color
-    };
-    Icon::Clock.image(clock_color, 15.0).paint_at(ui, clock);
-    if let Some(ascending) = duration_active {
-        let center = pos2(clock.right() + 9.0, rect.center().y);
-        let (wing, tip) = if ascending { (2.8, -3.2) } else { (-2.8, 3.2) };
-        ui.painter().add(egui::Shape::convex_polygon(
-            vec![
-                center + vec2(-4.0, wing),
-                center + vec2(4.0, wing),
-                center + vec2(0.0, tip),
-            ],
-            clock_color,
-            egui::Stroke::NONE,
-        ));
-    }
-    let hover = response.on_hover_text(gettext(locale, "Sort by duration"));
-    if hover.clicked() {
-        clicked = Some(SortColumn::Duration);
-    }
-    anchors.push(hover);
+        let before = |x: f32, w: f32| x + w / 2.0 < at;
+        match column {
+            SortColumn::Index => {
+                let places = slots.iter().filter(|(c, x, w)| *c != SortColumn::Index && before(*x, *w)).count();
+                widths.number_at = (places > 0).then_some(places.min(250) as u8);
+            }
+            SortColumn::AddedBy => {
+                let places = slots
+                    .iter()
+                    .filter(|(c, x, w)| *c != SortColumn::AddedBy && *c != SortColumn::Index && before(*x, *w))
+                    .count();
+                widths.cover_at = (places > 0).then_some(places.min(250) as u8);
+            }
+            SortColumn::Duration => {
+                let others: Vec<_> = slots
+                    .iter()
+                    .filter(|(c, _, _)| *c != SortColumn::Duration && *c != SortColumn::Index)
+                    .collect();
+                let places = others.iter().filter(|(_, x, w)| before(*x, *w)).count();
+                widths.length_at = (places < others.len()).then_some(places.min(250) as u8);
+            }
+            _ => {
+                let shown: Vec<SortColumn> = slots.iter().map(|(c, _, _)| *c).collect();
+                let target = slots
+                    .iter()
+                    .filter(|(c, x, w)| {
+                        *c != column && crate::settings::TrackColumns::code(*c).is_some() && before(*x, *w)
+                    })
+                    .count();
+                widths.move_column(column, &shown, target);
+            }
+        }
     }
     // Drawn after the headings, so a handle sits over the column edge
     // rather than under its text. A right-click on a handle opens the same
@@ -3732,7 +4014,8 @@ pub fn table_header(
         Stroke::new(1.0, palette.outline),
     );
     ui.add_space(6.0);
-    action.sorted = clicked;
+    // The cover's handle only drags; it is not something to sort by.
+    action.sorted = clicked.filter(|column| *column != SortColumn::AddedBy);
     if widths != *columns {
         action.columns = Some(widths);
     }
@@ -4097,23 +4380,32 @@ pub fn thin_slider_scaled(
     let scale = scale.clamp(0.7, 2.5);
     let (_, rect) = ui.allocate_space(vec2(width, 26.0 * scale));
     let response = ui.interact(rect, id, Sense::click_and_drag());
+    // Where the bar really is, for anything that needs to turn a pointer
+    // position into a value (the pop-out controls' right-click and
+    // double-click).
+    ui.data_mut(|data| data.insert_temp(id.with("rect"), rect));
+    // In the pop-out controls a press or a drag on the bar only moves the
+    // panel: the bar answers a right-click or a double-click instead.
+    let locked = ui.data(|data| data.get_temp::<bool>(egui::Id::new("sliders-locked"))).unwrap_or(false);
     let dragging_value = ui.data(|data| data.get_temp::<f32>(id));
     let pointer_value = response
         .interact_pointer_pos()
         .map(|pos| ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0));
     let mut event = SliderEvent::None;
     // Preview on press, before egui's click-or-drag movement threshold.
-    if (response.is_pointer_button_down_on() || response.drag_started() || response.dragged())
+    if !locked
+        && (response.is_pointer_button_down_on() || response.drag_started() || response.dragged())
         && let Some(v) = pointer_value
     {
         ui.data_mut(|data| data.insert_temp(id, v));
         event = SliderEvent::Dragging(v);
     }
-    if response.drag_stopped() {
+    if !locked && response.drag_stopped() {
         let v = dragging_value.or(pointer_value).unwrap_or(value);
         ui.data_mut(|data| data.remove::<f32>(id));
         event = SliderEvent::Committed(v);
-    } else if response.clicked()
+    } else if !locked
+        && response.clicked()
         && let Some(v) = pointer_value
     {
         ui.data_mut(|data| data.remove::<f32>(id));
@@ -4121,6 +4413,7 @@ pub fn thin_slider_scaled(
     }
     if let Some(step) = wheel_step
         && response.enabled()
+        && !locked
     {
         let notches = wheel_notches(ui, &response);
         if notches != 0 {
@@ -4378,7 +4671,7 @@ pub fn search_field(
         locale,
         egui::TextEdit::singleline(text)
             .id(id)
-            .hint_text(egui::RichText::new(hint).color(palette.dim))
+            .hint_text(egui::RichText::new(crate::i18n::ui_text(hint).into_owned()).color(palette.dim))
             .font(theme::regular(14.0))
             .text_color(palette.text)
             .frame(egui::Frame::NONE)
@@ -4486,9 +4779,38 @@ pub fn credit(ui: &mut Ui, palette: &Palette, locale: Locale) -> bool {
         if !after.is_empty() {
             theme::text(ui, after, theme::regular(13.0), palette.secondary);
         }
+        // One of chance's little pictures after the name, a different one
+        // each time chanceify starts.
+        let (uri, bytes) = credit_icon();
+        ui.add_space(6.0);
+        ui.add(egui::Image::from_bytes(uri, bytes).fit_to_exact_size(vec2(20.0, 20.0)));
     });
     theme::subtle(ui, palette, "Inspired by Spotify, Spotifast and Spicetify");
     clicked
+}
+
+/// The little pictures that go beside "chance" in the credit line.
+const CREDIT_ICONS: [&[u8]; 8] = [
+    include_bytes!("../../assets/credit-icons/c0.png"),
+    include_bytes!("../../assets/credit-icons/c1.png"),
+    include_bytes!("../../assets/credit-icons/c2.png"),
+    include_bytes!("../../assets/credit-icons/c3.png"),
+    include_bytes!("../../assets/credit-icons/c4.png"),
+    include_bytes!("../../assets/credit-icons/c5.png"),
+    include_bytes!("../../assets/credit-icons/c6.png"),
+    include_bytes!("../../assets/credit-icons/c7.png"),
+];
+
+/// This run's credit picture: chosen once at random, so it does not flicker.
+fn credit_icon() -> (String, &'static [u8]) {
+    static PICK: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let pick = *PICK.get_or_init(|| {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.subsec_nanos() as usize);
+        nanos % CREDIT_ICONS.len()
+    });
+    (format!("bytes://credit-icon-{pick}.png"), CREDIT_ICONS[pick])
 }
 
 /// The width a settings row keeps for its control: switches, fields and

@@ -63,7 +63,7 @@ the story from before the user's action is stale, so hold the shown
 state and ask again rather than let the lagging answer undo what the
 user just did. Nothing the user did may ever flicker away and come back.
 
-Every visualiser, the spectrum analyser, the oscilloscope, and MilkDrop,
+Every visualiser, the spectrum analyser and the oscilloscope,
 shows the signal post-equalizer and pre-volume: the EQ shapes what is
 heard so the picture follows it, and the volume knob never moves the
 picture. Zero volume still dances.

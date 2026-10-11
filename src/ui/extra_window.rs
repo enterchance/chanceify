@@ -62,7 +62,9 @@ pub fn show(app: &mut App, ctx: &Context) {
         if ctx.input(|input| input.key_pressed(egui::Key::F11)) {
             ctx.send_viewport_cmd(ViewportCommand::Fullscreen(!full));
         }
-        let lyrics_mode = app.extra_mode == 1;
+        // This window is only ever the visualizer. Its lyrics button shows the
+        // lyrics beside the cover, like the full screen visualizer's.
+        let lyrics_mode = false;
         let rect = ctx.content_rect();
         // The page: the visualizer, or the full-screen lyrics page.
         if lyrics_mode {
@@ -86,13 +88,51 @@ pub fn show(app: &mut App, ctx: &Context) {
             if had.is_none() {
                 app.lyrics_fullscreen = None;
             }
+            // The song, the artist and the heart, in a corner of the page.
+            if let Some(song) = now.as_ref() {
+                let (title_on, artist_on, heart_on) = (
+                    app.settings.extra_show_title,
+                    app.settings.extra_show_artist && !song.subtitle.is_empty(),
+                    app.settings.extra_show_heart && !song.uri.is_empty(),
+                );
+                if title_on || artist_on || heart_on {
+                    let painter = ui.painter().clone();
+                    let mut y = rect.bottom() - 28.0;
+                    let left = rect.left() + 28.0;
+                    let mut width = 0.0_f32;
+                    if artist_on {
+                        let g = painter.layout_no_wrap(song.subtitle.clone(), theme::regular(14.0), Color32::from_white_alpha(190));
+                        y -= g.size().y;
+                        width = width.max(g.size().x);
+                        painter.rect_filled(egui::Rect::from_min_size(pos2(left - 8.0, y - 2.0), g.size() + egui::vec2(16.0, 4.0)), 6.0, Color32::from_black_alpha(120));
+                        painter.galley(pos2(left, y), g, Color32::WHITE);
+                        y -= 4.0;
+                    }
+                    let mut title_top = y;
+                    if title_on {
+                        let g = painter.layout_no_wrap(song.title.clone(), theme::semibold(20.0), Color32::WHITE);
+                        y -= g.size().y;
+                        title_top = y;
+                        width = width.max(g.size().x);
+                        painter.rect_filled(egui::Rect::from_min_size(pos2(left - 8.0, y - 2.0), g.size() + egui::vec2(16.0, 4.0)), 6.0, Color32::from_black_alpha(120));
+                        painter.galley(pos2(left, y), g, Color32::WHITE);
+                    }
+                    if heart_on {
+                        let centre = pos2(left + width + 34.0, (title_top + rect.bottom() - 28.0) / 2.0);
+                        super::player_bar::like_heart(app, ui, "extra-window", centre, 22.0, &song.uri);
+                    }
+                }
+            }
         } else {
             egui::CentralPanel::default()
                 .frame(Frame::new().fill(Color32::BLACK))
                 .show(ui, |ui| {
                     // The visualizer paints as it does full screen.
                     app.fullscreen_vis = true;
+                    ctx.data_mut(|data| data.insert_temp(egui::Id::new("in-extra-window"), true));
                     let moving = super::player_bar::lyrics_backdrop(app, ui, rect, now.as_ref(), 3);
+                    super::lyrics::vis_overlay(app, ui);
+                    ctx.data_mut(|data| data.insert_temp(egui::Id::new("in-extra-window"), false));
                     app.fullscreen_vis = was_full;
                     if !moving {
                         ui.painter().text(
@@ -134,6 +174,18 @@ pub fn show(app: &mut App, ctx: &Context) {
         app.extra_vis_panel = app.vis_panel;
         app.vis_panel = saved_panel;
         app.fullscreen_vis = saved_full;
+        // The controls, with the song's little cover and name above them, as in
+        // the main window's full screen visualizer. They stay in this window.
+        {
+            let detached = app.settings.float_detached;
+            app.settings.float_detached = false;
+            app.fullscreen_vis = true;
+            app.extra_drawing = true;
+            super::views_panel::floating_controls(app, &ctx);
+            app.extra_drawing = false;
+            app.fullscreen_vis = saved_full;
+            app.settings.float_detached = detached;
+        }
         // Three small buttons: settings, visualizer or lyrics, and close.
         let (pointer, pressed) = ctx.input(|input| (input.pointer.hover_pos(), input.pointer.primary_pressed()));
         let near = pointer.is_some_and(|p| rect.contains(p) && p.y < rect.top() + 70.0);
@@ -142,7 +194,7 @@ pub fn show(app: &mut App, ctx: &Context) {
         let wave = egui::Rect::from_min_size(pos2(rect.left() + 10.0, rect.top() + 10.0), size);
         let swap = egui::Rect::from_min_size(pos2(rect.left() + 48.0, rect.top() + 10.0), size);
         let exit = egui::Rect::from_min_size(pos2(rect.right() - 42.0, rect.top() + 10.0), size);
-        let swap_icon = if lyrics_mode { theme::Icon::AudioLines } else { theme::Icon::Mic };
+        let swap_icon = theme::Icon::Mic;
         let painter = ui.painter().clone();
         for (button, icon) in [(wave, theme::Icon::Settings), (swap, swap_icon), (exit, theme::Icon::X)] {
             let hot = pointer.is_some_and(|p| button.contains(p));
@@ -157,7 +209,7 @@ pub fn show(app: &mut App, ctx: &Context) {
             if wave.contains(p) {
                 app.extra_vis_panel = !was_open;
             } else if swap.contains(p) {
-                app.extra_mode = if lyrics_mode { 0 } else { 1 };
+                app.actions.push(crate::model::Action::ToggleVisLyrics);
             } else if exit.contains(p) {
                 close = true;
             }

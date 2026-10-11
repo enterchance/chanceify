@@ -139,7 +139,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                             let card = widgets::card(
                                 ui,
                                 app,
-                                pick_image(&album.images, 640),
+                                pick_image(&album.images, 300),
                                 &album.name,
                                 subtitle.trim_start_matches(" • "),
                                 widgets::CardCover::square(playing_here),
@@ -214,7 +214,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                         let card = widgets::card(
                             ui,
                             app,
-                            pick_image(&artist.images, 640),
+                            pick_image(&artist.images, 300),
                             &artist.name,
                             &artist_label,
                             widgets::CardCover::portrait(playing_here),

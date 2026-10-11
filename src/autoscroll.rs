@@ -10,7 +10,7 @@
 )]
 mod platform;
 
-pub use platform::{Autoscroll, Outcome, lyrics, playlist, row, show};
+pub use platform::{Autoscroll, Outcome, lyrics, row, show};
 
 /// Whether middle-click scrolling is on: always on Windows, on Linux only by
 /// choice because a middle click there usually pastes, and never on macOS.

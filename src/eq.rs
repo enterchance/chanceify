@@ -220,11 +220,7 @@ pub struct Preset {
     pub bands_db: [f32; 10],
 }
 
-/// Winamp's presets, in its order.
-/// How many of `PRESETS` are Winamp's own, in its order; what follows
-/// are scenario presets of this app's, shown behind a separator.
-pub const WINAMP_PRESET_COUNT: usize = 18;
-
+/// The equalizer's presets, in the order they are listed.
 pub const PRESETS: &[Preset] = &[
     Preset {
         name: "Flat",

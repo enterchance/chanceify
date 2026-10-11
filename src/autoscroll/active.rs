@@ -43,7 +43,6 @@ impl Input {
 enum Kind {
     Ordinary,
     Lyrics,
-    Playlist { row_points: f32 },
 }
 
 #[derive(Clone, Copy)]
@@ -84,7 +83,6 @@ struct Active {
 pub struct Outcome {
     pub scrolling: bool,
     pub stop_following_lyrics: bool,
-    pub playlist_scroll: Option<usize>,
 }
 
 impl Outcome {
@@ -173,7 +171,7 @@ impl Autoscroll {
                 self.active = None;
                 return Outcome::owned();
             }
-            let mut outcome = Outcome::owned();
+            let outcome = Outcome::owned();
             if let Some(pointer) = owner.input.pointer {
                 let mut distance = pointer - active.anchor;
                 if owner.max.x <= 0.0 {
@@ -191,15 +189,10 @@ impl Autoscroll {
                 let offset = (active.offset + delta).clamp(Vec2::ZERO, owner.max);
                 let mut state = owner.state;
                 state.offset = offset;
-                match owner.kind {
-                    Kind::Ordinary | Kind::Lyrics => state.store(ctx, owner.id),
-                    Kind::Playlist { row_points } => {
-                        outcome.playlist_scroll = Some((offset.y / row_points).floor() as usize)
-                    }
-                }
+                state.store(ctx, owner.id);
                 if offset != active.offset {
                     // egui subtracts one predicted frame from this delay. Ask
-                    // for two frames, as the skinned visualiser does, so the
+                    // for two frames, so the
                     // app's uncapped renderer does not spin while scrolling.
                     ctx.request_repaint_after(std::time::Duration::from_micros(33_334));
                 }
@@ -231,7 +224,6 @@ impl Autoscroll {
                 return Outcome {
                     scrolling: true,
                     stop_following_lyrics: matches!(owner.kind, Kind::Lyrics),
-                    playlist_scroll: None,
                 };
             }
         }
@@ -345,38 +337,6 @@ pub fn lyrics(ui: &Ui, id: Id) {
         {
             area.kind = Kind::Lyrics;
         }
-    });
-}
-
-/// The skinned playlist scrolls in whole rows instead of using ScrollArea.
-/// It still participates in the same ownership and cancellation rules.
-pub fn playlist(ui: &mut Ui, rect: Rect, offset: usize, maximum: usize, row_points: f32) {
-    let enabled = ui.ctx().data_mut(|data| {
-        data.get_temp_mut_or_default::<Observations>(Id::new(FRAME_ID))
-            .enabled
-    });
-    if !enabled || row_points <= 0.0 {
-        return;
-    }
-    let rect = rect.intersect(ui.clip_rect());
-    let id = ui.id().with("autoscroll-winamp-playlist");
-    let background = ui.interact(rect, id.with("background"), egui::Sense::click());
-    row(ui, &background);
-    let mut state = egui::scroll_area::State::default();
-    state.offset = egui::vec2(0.0, offset as f32 * row_points);
-    let area = Area {
-        kind: Kind::Playlist { row_points },
-        id,
-        layer: ui.layer_id(),
-        rect,
-        max: egui::vec2(0.0, maximum as f32 * row_points),
-        input: Input::read(ui.ctx()),
-        state,
-    };
-    ui.ctx().data_mut(|data| {
-        data.get_temp_mut_or_default::<Observations>(Id::new(FRAME_ID))
-            .areas
-            .push(area)
     });
 }
 

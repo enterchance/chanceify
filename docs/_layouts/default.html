@@ -6,24 +6,29 @@
 <title>{% if page.title and page.title != site.title %}{{ page.title }} · {% endif %}{{ site.title }}</title>
 <meta name="description" content="{{ site.description }}">
 <meta name="theme-color" content="#0a0914">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="chanceify™">
+<meta property="og:title" content="chanceify™">
+<meta property="og:description" content="music reimagined">
+<meta property="og:url" content="https://madlygeeked.github.io/chanceify/">
+<meta property="og:image" content="https://madlygeeked.github.io/chanceify/social-preview.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="chanceify™">
+<meta name="twitter:description" content="music reimagined">
+<meta name="twitter:image" content="https://madlygeeked.github.io/chanceify/social-preview.png">
 <link rel="icon" type="image/png" href="https://madlygeeked.github.io/assets/favicon.png">
-<link rel="stylesheet" href="https://madlygeeked.github.io/style.css">
-<link rel="stylesheet" href="https://madlygeeked.github.io/docs.css">
+<style>html{background:#2a1850}</style>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&display=swap">
+<link rel="stylesheet" href="https://madlygeeked.github.io/style.css?v=23">
+<link rel="stylesheet" href="https://madlygeeked.github.io/docs.css?v=23">
 </head>
-<body class="hdr-left">
+<body class="hdr-right scenic-docs">
 <canvas id="flow" aria-hidden="true"></canvas>
 <div class="wrap">
   <div class="top bar">
     <a class="brand" data-brand-link href="https://madlygeeked.github.io/"><img data-brand-logo hidden alt=""><span class="brandname" data-brand-name>madgeeked</span></a>
-    <nav class="nav" aria-label="chanceify docs">
-      <a href="{{ '/' | relative_url }}"{% if page.url == '/' %} class="on"{% endif %}>home</a>
-      <a href="{{ '/features' | relative_url }}"{% if page.url contains 'features' %} class="on"{% endif %}>what it does</a>
-      <a href="{{ '/setup' | relative_url }}"{% if page.url contains 'setup' %} class="on"{% endif %}>setup</a>
-      <a href="{{ '/settings' | relative_url }}"{% if page.url contains 'settings' %} class="on"{% endif %}>settings</a>
-      <a href="{{ '/keys' | relative_url }}"{% if page.url contains 'keys' %} class="on"{% endif %}>keys</a>
-      <a href="{{ '/files' | relative_url }}"{% if page.url contains 'files' %} class="on"{% endif %}>files</a>
-      <a href="{{ '/faq' | relative_url }}"{% if page.url contains 'faq' %} class="on"{% endif %}>questions</a>
-    </nav>
   </div>
   <div class="spacer" style="height:clamp(12px,5vh,48px)"></div>
   <main class="doc">
@@ -42,13 +47,9 @@
     {% endif %}
     {{ content }}
   </main>
-  <p class="foot">
-    built with love by <a href="https://github.com/madlygeeked">chance</a>.
-    inspired by <a href="https://www.spotify.com">spotify</a>, <a href="https://github.com/crmne/spotifast">spotifast</a> and <a href="https://spicetify.app">spicetify</a>.
-    · <a href="https://github.com/madlygeeked/chanceify/blob/main/PRIVACY.md">privacy</a>
-    · <a href="https://github.com/madlygeeked/chanceify/blob/main/TERMS.md">terms</a>
-  </p>
+  <p class="foot"><span style="display:inline-block;padding:7px 18px;border-radius:999px;background:rgba(10,9,20,.72);border:1px solid rgba(255,255,255,.12);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)">built with love by <a href="https://github.com/madlygeeked" data-bear="chance">chance</a></span></p>
 </div>
-<script src="https://madlygeeked.github.io/chrome.js" data-site="https://madlygeeked.github.io/"></script>
+<script src="https://madlygeeked.github.io/chrome.js?v=23" data-site="https://madlygeeked.github.io/"></script>
+<script src="https://madlygeeked.github.io/themes.js?v=23" data-site="https://madlygeeked.github.io/" data-theme="chanceify"></script>
 </body>
 </html>

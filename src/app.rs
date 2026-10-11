@@ -316,9 +316,6 @@ pub struct App {
     pub hide_intent: bool,
     /// The outer loop should recreate the hidden window.
     pub wants_show: bool,
-    /// The window should close and reopen at once as the other kind: the
-    /// big window or the Winamp mini player.
-    pub switch_intent: bool,
     /// Commands from control clients (a second `chanceify <verb>` launch,
     /// a Raycast script), on the platforms where they do not arrive through
     /// MPRIS. Drained every frame.
@@ -351,6 +348,11 @@ pub struct App {
     pub calm_mode: bool,
     /// Songs played this run, for refreshing the Last.fm numbers every 10.
     lastfm_song_count: u32,
+    /// Which view's visualizer settings are loaded: 0 normal, 1 full screen
+    /// visualizer, 2 full screen lyrics. None until the first frame.
+    pub vis_view_now: Option<u8>,
+    /// True only while the extra visualizer window is being drawn.
+    pub extra_drawing: bool,
     /// The extra visualizer window is open.
     pub extra_vis: bool,
     /// The visualizer settings panel open inside the extra window.
@@ -404,11 +406,6 @@ pub struct App {
     last_session_save: Instant,
     /// The saved zoom has been applied to the context once.
     zoom_applied: bool,
-    /// Frames left to re-send the Winamp window's always-on-top level after the
-    /// window opens. X11 window managers drop `_NET_WM_STATE_ABOVE` set before
-    /// the window is mapped, so the creation-time level does not stick; a level
-    /// pushed on the first frames after mapping does.
-    winamp_level_reassert: u8,
     pub devices: Vec<Device>,
     /// Receivers seen on the local network. Spotify lists a receiver only
     /// once it has an account, so these are the ones it cannot see yet.
@@ -508,6 +505,9 @@ pub struct App {
 
     pub history: Vec<Page>,
     pub history_index: usize,
+    /// Every page opened lately, newest first, never cut when going back and
+    /// opening something else (so no page is ever lost from the list).
+    pub visited: Vec<Page>,
 
     pub saved: HashMap<String, bool>,
     saved_pending: HashSet<String>,
@@ -603,6 +603,9 @@ pub struct App {
     uploaded_covers: std::collections::HashMap<String, crate::playlist_cover::PendingCover>,
     pub show_queue_panel: bool,
     pub show_lyrics_panel: bool,
+    /// The side lyrics were put away because the song has none; they come
+    /// back by themselves for the next song that does.
+    pub lyrics_panel_auto_off: bool,
     pub lyrics_fullscreen: Option<bool>,
     pub lyrics_fullscreen_seen: bool,
     lyrics_fullscreen_restoring: Option<bool>,
@@ -695,12 +698,6 @@ pub struct App {
     /// to the window it has to fit inside.
     pub dialog_rect: Option<egui::Rect>,
     last_window_pos: Option<[f32; 2]>,
-    /// Where the MilkDrop window last was, as it reported, for restoring it.
-    pub milkdrop_pos: Option<[f32; 2]>,
-    /// The MilkDrop child process; `None` until it is first opened. Its
-    /// `Drop` stops the child when the app does.
-    #[cfg(feature = "milkdrop")]
-    milkdrop_host: Option<crate::milkdrop::host::Host>,
     last_eviction: Instant,
     /// Playback snapshot for the current frame, built once per redraw.
     frame_now: Option<NowPlaying>,
@@ -811,8 +808,8 @@ pub struct App {
     pub update_support: Option<Result<crate::updates::Installation, String>>,
     pub update_restart_arguments: Vec<String>,
     pub update_receipt: Option<fastframe_update::Receipt>,
-    /// Winamp window state and active skin.
-    pub winamp: crate::winamp::WinampState,
+    /// The sound on its way out, the equalizer, and the playback speed.
+    pub audio: crate::audio_shared::AudioShared,
     /// The spectrum behind the player bar, when that is chosen.
     pub player_bar_analyser: crate::vis::WideAnalyser,
     /// How far the flow's sheets have drifted, in cycles. Kept here rather
@@ -862,14 +859,11 @@ const TRAY_QUIT: &str = "quit";
 /// What the shell around `eframe::run_native` does with the app between
 /// windows.
 impl fastframe_shell::Resident for App {
-    /// Quit wins; switching between the main window and the mini player
-    /// opens the other at once; closing to the tray runs without a window.
+    /// Quit wins; closing to the tray runs without a window.
     fn closed(&self) -> fastframe_shell::Closed {
         use fastframe_shell::Closed;
         if self.quit_requested {
             Closed::Quit
-        } else if self.switch_intent {
-            Closed::Reopen
         } else if self.hide_intent {
             Closed::Hide
         } else {
@@ -1047,7 +1041,6 @@ impl App {
             window_hidden: false,
             hide_intent: false,
             wants_show: false,
-            switch_intent: false,
             control_commands: None,
             control_now_playing: None,
             control_devices: None,
@@ -1061,6 +1054,8 @@ impl App {
             hovered_track: None,
             calm_mode: false,
             lastfm_song_count: 0,
+            vis_view_now: None,
+            extra_drawing: false,
             extra_vis: false,
             extra_vis_panel: false,
             extra_mode: 0,
@@ -1093,7 +1088,6 @@ impl App {
             session_dirty: false,
             last_session_save: Instant::now(),
             zoom_applied: false,
-            winamp_level_reassert: 0,
             devices: Vec::new(),
             receivers: Vec::new(),
             activating_receiver: None,
@@ -1171,6 +1165,7 @@ impl App {
             track_used: HashMap::new(),
             history: vec![first_page],
             history_index: 0,
+            visited: Vec::new(),
             saved: HashMap::new(),
             saved_pending: HashSet::new(),
             // Nothing is known before the account is: the file is named for it, and
@@ -1224,6 +1219,7 @@ impl App {
             uploaded_covers: Default::default(),
             show_queue_panel: session.queue_open.unwrap_or(false),
             show_lyrics_panel: false,
+            lyrics_panel_auto_off: false,
             lyrics_fullscreen: None,
             lyrics_fullscreen_seen: false,
             lyrics_fullscreen_restoring: None,
@@ -1273,9 +1269,6 @@ impl App {
             join_seek: None,
             dialog_rect: None,
             last_window_pos: None,
-            milkdrop_pos: session.milkdrop_pos,
-            #[cfg(feature = "milkdrop")]
-            milkdrop_host: None,
             last_eviction: Instant::now(),
             frame_now: None,
             sign_in_url: None,
@@ -1344,7 +1337,7 @@ impl App {
             update_support: None,
             update_restart_arguments: Vec::new(),
             update_receipt: None,
-            winamp: crate::winamp::WinampState::new(session.winamp_pos, tap, eq, speed),
+            audio: crate::audio_shared::AudioShared::new(tap, eq, speed),
             player_bar_analyser: crate::vis::WideAnalyser::default(),
             player_bar_vis_flow: 0.0,
         };
@@ -1379,12 +1372,9 @@ impl App {
         ctx.add_bytes_loader(std::sync::Arc::new(self.backend.art().clone()));
         ctx.set_theme(self.theme_preference());
         self.applied_dark = None;
-        self.winamp.forget_textures();
         self.window_hidden = false;
         self.hide_intent = false;
         self.wants_show = false;
-        self.switch_intent = false;
-        self.winamp_level_reassert = 0;
         // A new window starts titled "Chanceify"; name the playing song
         // again rather than trust what the replaced window was told.
         self.window_title.clear();
@@ -1397,27 +1387,6 @@ impl App {
         // the frameless main window full screen and nothing else could
         // leave it, it was an ordinary window.
         let lyrics_left = self.session_lyrics_fullscreen_from.take();
-        if self.settings.winamp_window {
-            // The mini player sizes itself; the big window's geometry
-            // waits here for its return. eframe may have restored the big
-            // window's fullscreen/maximized state before creating this one.
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
-            if let Some(pos) = self.winamp.restore_pos
-                && crate::window::can_restore(pos, ctx.pixels_per_point())
-            {
-                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
-                    pos[0], pos[1],
-                )));
-            }
-            // Re-assert the on-top level over the
-            // first frames, once the window is mapped, because the level set
-            // at creation does not stick on X11.
-            if self.settings.winamp_on_top && self.window_level_supported {
-                self.winamp_level_reassert = 3;
-            }
-            return;
-        }
         let restored_full_screen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
         let lyrics_left = lyrics_left.or_else(|| {
             (cfg!(windows) && restored_full_screen).then(crate::settings::WindowMode::default)
@@ -1467,9 +1436,6 @@ impl App {
     /// The window is gone but the process stays: audio, the tray, and the
     /// media controls keep running until Show or Quit.
     pub fn window_gone(&mut self) {
-        // The Winamp window went with it; it comes back where it was.
-        self.winamp.remember_position();
-        self.winamp.forget_textures();
         self.window_hidden = true;
         self.hide_intent = false;
         self.wants_show = false;
@@ -2596,6 +2562,8 @@ impl App {
                         .map(|playlist| playlist.name.clone())
                 });
                 self.releases_scan = None;
+                let mut found = found;
+                found.retain(|release| !self.releases.dismissed.contains(&release.album_id));
                 let count = found.len();
                 self.releases.found = found;
                 self.releases.scope = scope_name;
@@ -2619,7 +2587,9 @@ impl App {
             Ok(albums) => {
                 scan.queue.retain(|(queued, _)| queued != &id);
                 for album in &albums {
-                    if let Some(release) = crate::releases::release_from(album, &scan.cutoff) {
+                    if let Some(release) = crate::releases::release_from(album, &scan.cutoff)
+                        && !self.releases.dismissed.contains(&release.album_id)
+                    {
                         crate::releases::add(&mut scan.found, release);
                     }
                 }
@@ -2735,13 +2705,13 @@ impl App {
         };
         if self.beat_for.as_deref() != Some(isrc.as_str()) {
             self.beat_for = Some(isrc);
-            self.winamp.tap.beat_reset();
+            self.audio.tap.beat_reset();
             return;
         }
         if matches!(self.bpm_store.get(&isrc), Some(Some(_))) {
             return;
         }
-        if let Some(tempo) = self.winamp.tap.beat_bpm() {
+        if let Some(tempo) = self.audio.tap.beat_bpm() {
             self.bpm_store.remember(&isrc, Some(tempo));
             self.bpm_dirty = true;
             self.bpms.insert(isrc, Some(tempo));
@@ -3689,11 +3659,10 @@ impl App {
         }
         if matches!(self.page(), Page::Queue)
             || self.show_queue_panel
-            || (self.settings.winamp_window && self.settings.playlist_open)
         {
             self.refresh_queue(true);
         }
-        if self.show_lyrics_panel || (self.fullscreen_vis && self.settings.vis_lyrics) {
+        if self.show_lyrics_panel || self.lyrics_panel_auto_off || ((self.fullscreen_vis || self.extra_vis) && self.settings.vis_lyrics) {
             self.request_lyrics();
         }
     }
@@ -3831,6 +3800,29 @@ impl App {
 
     /// Asks for the playing track's lyrics unless they are here or on the
     /// way. Podcasts have no lyrics to ask for.
+    /// The side lyrics step aside for a song with no words (or an
+    /// instrumental) and return for the next one that has some.
+    fn settle_lyrics_panel(&mut self) {
+        let now_uri = self.now_playing().map(|now| now.uri);
+        let current = now_uri.is_some() && self.lyrics_uri == now_uri;
+        if !current {
+            return;
+        }
+        let none = match &self.lyrics {
+            Loadable::Loaded(None) => true,
+            Loadable::Loaded(Some(lyrics)) => lyrics.instrumental,
+            _ => false,
+        };
+        let some = matches!(&self.lyrics, Loadable::Loaded(Some(lyrics)) if !lyrics.instrumental);
+        if self.show_lyrics_panel && none && self.lyrics_fullscreen.is_none() {
+            self.show_lyrics_panel = false;
+            self.lyrics_panel_auto_off = true;
+        } else if self.lyrics_panel_auto_off && some {
+            self.show_lyrics_panel = true;
+            self.lyrics_panel_auto_off = false;
+        }
+    }
+
     pub fn request_lyrics(&mut self) {
         let Some(now) = self.now_playing() else {
             return;
@@ -3865,16 +3857,6 @@ impl App {
                 duration_ms: now.duration_ms,
             },
         })));
-    }
-
-    /// Pushes the Winamp window's always-on-top level to the live window.
-    fn push_winamp_level(&self, ctx: &egui::Context) {
-        if self.window_level_supported
-            && let Some(level) =
-                winamp_on_top_level(self.settings.winamp_window, self.settings.winamp_on_top)
-        {
-            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
-        }
     }
 
     /// Puts the chosen app icon on the window and taskbar button, once for
@@ -3985,15 +3967,6 @@ impl App {
         self.drive_releases(ctx);
         self.drive_lastfm_art(ctx);
         let now = Instant::now();
-        if self.winamp_level_reassert > 0 {
-            self.winamp_level_reassert -= 1;
-            self.push_winamp_level(ctx);
-            // The window can be idle right after opening, so drive the next
-            // frame to make sure the re-assert actually runs.
-            if self.winamp_level_reassert > 0 {
-                ctx.request_repaint();
-            }
-        }
         if !self.zoom_applied {
             self.zoom_applied = true;
             let zoom = self.settings.zoom.clamp(0.5, 2.5);
@@ -4050,8 +4023,7 @@ impl App {
             {
                 self.refresh_devices();
             }
-            let playlist_open = self.settings.winamp_window && self.settings.playlist_open;
-            if (self.show_queue_panel || matches!(self.page(), Page::Queue) || playlist_open)
+            if (self.show_queue_panel || matches!(self.page(), Page::Queue))
                 && !self.queue.is_loading()
                 && self
                     .queue_fetched_at
@@ -4108,9 +4080,9 @@ impl App {
         if self.last_eviction.elapsed() > Duration::from_secs(20) {
             self.last_eviction = now;
             self.backend.art().evict(ctx);
+            self.swirl_art.release_if_idle();
             self.evict_stale_pages();
         }
-        self.sync_skin(ctx);
         if self.settings_dirty && self.last_settings_save.elapsed() > Duration::from_secs(2) {
             self.save_settings();
         }
@@ -4120,150 +4092,6 @@ impl App {
         // Library answers are written in their own time, so a scroll through
         // a long list writes once rather than once per row.
         self.library_cache.checkpoint(&self.dirs);
-    }
-
-    /// Loads and applies the skin selected in settings.
-    /// On failure, restores the active skin setting to avoid repeated retries.
-    fn sync_skin(&mut self, ctx: &egui::Context) {
-        if self.settings.winamp_window
-            && !self.winamp.is_loading()
-            && self.winamp.worn != self.settings.skin
-        {
-            match self.settings.skin.clone() {
-                None => self.winamp.wear(None, crate::skin::Skin::builtin()),
-                Some(name) => self.winamp.load(name, &self.dirs.skins_dir(), ctx),
-            }
-        }
-        if let Some(loaded) = self.winamp.poll() {
-            self.skin_loaded(loaded);
-        }
-        let fetched = self.winamp.presets.poll();
-        if let Some(fetched) = fetched {
-            match fetched {
-                Ok(count) => {
-                    self.toast(
-                        ngettext(
-                            self.locale,
-                            // Translators: {count} is the number of visualizer presets added.
-                            "Added {count} MilkDrop preset",
-                            "Added {count} MilkDrop presets",
-                            count as u32,
-                        )
-                        .replace("{count}", &count.to_string()),
-                    );
-                    // Restart the child so it loads the new preset list.
-                    #[cfg(feature = "milkdrop")]
-                    if let Some(host) = self.milkdrop_host.as_mut()
-                        && host.is_running()
-                    {
-                        host.close();
-                    }
-                }
-                Err(error) => self.toast_error(
-                    // Translators: {error} is an error message.
-                    gettext(self.locale, "Couldn't fetch presets: {error}")
-                        .replace("{error}", &error.to_string()),
-                ),
-            }
-        }
-    }
-
-    /// Syncs MilkDrop settings and receives window state and commands.
-    #[cfg(feature = "milkdrop")]
-    fn sync_milkdrop(&mut self, ctx: &egui::Context) {
-        let presets = self.dirs.milkdrop_dir();
-        let open = self.settings.milkdrop_open;
-        let size = self.settings.milkdrop_size;
-        let pos = self.milkdrop_pos;
-        let fullscreen = self.settings.milkdrop_fullscreen;
-        let fps = self.settings.milkdrop_fps;
-        let seconds = self.settings.milkdrop_seconds;
-        let scale = self.settings.milkdrop_scale.max(1);
-        // Track metadata shown when the song changes.
-        let song = self.now_playing().filter(|now| !now.resuming).map(|now| {
-            // Title, artist, and album.
-            vec![
-                now.title.clone(),
-                now.subtitle.clone(),
-                now.album_name.clone(),
-            ]
-        });
-        if self.milkdrop_host.is_none() {
-            let tap = std::sync::Arc::clone(&self.winamp.tap);
-            self.milkdrop_host = Some(crate::milkdrop::host::Host::new(tap));
-        }
-        let poll = {
-            let host = self.milkdrop_host.as_mut().expect("the host was just made");
-            if open {
-                if !host.is_running() {
-                    host.open(&presets, size, pos, fullscreen, fps, seconds, scale);
-                }
-                host.update(fps, seconds, scale);
-                host.song(song);
-            } else if host.is_running() {
-                host.close();
-            }
-            host.poll()
-        };
-        if poll.closed {
-            self.settings.milkdrop_open = false;
-            self.mark_settings_dirty();
-        }
-        if let Some(size) = poll.size
-            && self.settings.milkdrop_size != size
-        {
-            self.settings.milkdrop_size = size;
-            self.mark_settings_dirty();
-        }
-        if let Some(pos) = poll.pos {
-            self.milkdrop_pos = Some(pos);
-        }
-        for command in poll.commands {
-            self.milkdrop_command(&command);
-        }
-        if let Some(hz) = poll.screen_hz {
-            self.learn_screen_hz(hz);
-        }
-        // Poll the child while the main window is otherwise idle.
-        if self.settings.milkdrop_open {
-            ctx.request_repaint_after(std::time::Duration::from_millis(300));
-        }
-    }
-
-    /// Records the MilkDrop screen refresh rate and uses it as the initial FPS.
-    /// Later screen changes do not override a configured FPS.
-    #[cfg(feature = "milkdrop")]
-    fn learn_screen_hz(&mut self, hz: u32) {
-        if hz == 0 || self.settings.milkdrop_screen_hz == hz {
-            return;
-        }
-        let first = self.settings.milkdrop_screen_hz == 0
-            && self.settings.milkdrop_fps == crate::milkdrop::DEFAULT_FPS;
-        self.settings.milkdrop_screen_hz = hz;
-        if first {
-            self.settings.milkdrop_fps = hz;
-        }
-        self.mark_settings_dirty();
-    }
-
-    /// Applies playback commands received from the MilkDrop window.
-    #[cfg(feature = "milkdrop")]
-    fn milkdrop_command(&mut self, command: &str) {
-        match command {
-            "previous" => self.actions.push(Action::Previous),
-            "next" => self.actions.push(Action::Next),
-            "play-pause" => self.actions.push(Action::TogglePlay),
-            "mute" => self.actions.push(Action::ToggleMute),
-            "save-toggle" => {
-                if let Some(now) = self.now_playing().filter(|now| !now.is_episode) {
-                    self.actions.push(Action::ToggleSaved(now.uri));
-                }
-            }
-            "shuffle" => self.actions.push(Action::ToggleShuffle),
-            "volume-up" => self.actions.push(Action::VolumeBy(5)),
-            "volume-down" => self.actions.push(Action::VolumeBy(-5)),
-            _ => {}
-        }
     }
 
     /// Creates a config folder if needed and opens it in the file manager.
@@ -4279,36 +4107,9 @@ impl App {
         }
     }
 
-    /// Applies a loaded skin. Installed files become the selected skin.
-    fn skin_loaded(&mut self, loaded: crate::winamp::Loaded) {
-        match loaded.result {
-            Ok(skin) => {
-                self.winamp
-                    .wear(Some(loaded.name.clone()), std::sync::Arc::new(skin));
-                if loaded.installed {
-                    self.toast(
-                        // Translators: {skin} is the name of a Winamp skin.
-                        gettext(self.locale, "Added {skin} skin")
-                            .replace("{skin}", crate::winamp::label(&loaded.name)),
-                    );
-                    self.winamp.list_choices(&self.dirs.skins_dir());
-                    self.settings.skin = Some(loaded.name);
-                    self.settings_dirty = true;
-                }
-            }
-            Err(error) => {
-                self.toast_error(format!("{}: {error}", crate::winamp::label(&loaded.name)));
-                if !loaded.installed {
-                    self.settings.skin = self.winamp.worn.clone();
-                    self.settings_dirty = true;
-                }
-            }
-        }
-    }
-
     /// Sends equalizer settings to the player and marks them for saving.
     fn push_eq(&mut self) {
-        if let Ok(mut shared) = self.winamp.eq.lock() {
+        if let Ok(mut shared) = self.audio.eq.lock() {
             *shared = eq_settings(&self.settings);
         }
         self.settings_dirty = true;
@@ -4414,6 +4215,9 @@ impl App {
         if self.offline {
             // Demo data must never overwrite the person's real preferences.
             return;
+        }
+        if let Some(view) = self.vis_view_now {
+            self.settings.store_view(view);
         }
         let mut saved = self.settings.clone();
         self.applied_proxy_preferences.apply_to(&mut saved);
@@ -4572,15 +4376,13 @@ impl App {
         };
         let palette = palette.fade(self.settings.window_solidity());
         if self.applied_dark != Some(dark) || self.palette != palette {
-            // The first colours need no reveal, and the mini player's window
-            // is drawn by its skin. A cover-driven change happens every song
-            // and is not worth a reveal.
+            // The first colours need no reveal. A cover-driven change
+            // happens every song and is not worth a reveal.
             if self.reveal_theme_changes
                 && !preview.is_some()
                 && !was_previewing
                 && !self.settings.theme_from_cover
                 && self.applied_dark.is_some()
-                && !self.settings.winamp_window
             {
                 self.theme_transition.begin(ctx);
                 if self.theme_transition.holding(ctx) {
@@ -7065,6 +6867,7 @@ impl App {
                         if let Some(Dialog::CreatePlaylist { add_uris, .. }) = self.dialog.take()
                             && !add_uris.is_empty()
                         {
+                            self.library.membership.add_song(&playlist, add_uris.clone());
                             self.backend.api(ApiRequest::AddToPlaylist {
                                 playlist_id: playlist.id.clone(),
                                 playlist_name: playlist.name.clone(),
@@ -7853,6 +7656,7 @@ impl App {
 
     pub fn open(&mut self, page: Page) {
         self.touch_page(&page);
+        self.note_visited(&page);
         if *self.page() == page {
             self.ensure_loaded(page.clone());
             self.retain_table_rows(&page);
@@ -7937,6 +7741,51 @@ impl App {
                     "chanceify™ cannot open this kind of Spotify link",
                 ));
             }
+        }
+    }
+
+    /// Puts a page at the top of the visited list (once), keeping 40.
+    fn note_visited(&mut self, page: &Page) {
+        let was = self.page().clone();
+        for p in [was, page.clone()] {
+            self.visited.retain(|seen| *seen != p);
+            self.visited.insert(0, p);
+        }
+        self.visited.truncate(40);
+    }
+
+    /// A short name for a page, for the history menu.
+    pub fn page_name(&self, page: &Page) -> String {
+        let text = |name: Option<&str>, fallback: &str| name.filter(|n| !n.is_empty()).unwrap_or(fallback).to_string();
+        match page {
+            Page::Home => "home".into(),
+            Page::TopSongs => "top songs".into(),
+            Page::Search => "search".into(),
+            Page::LikedSongs => "liked songs".into(),
+            Page::Albums => "albums".into(),
+            Page::Artists => "artists".into(),
+            Page::Podcasts => "podcasts".into(),
+            Page::Episodes => "episodes".into(),
+            Page::Queue => "queue".into(),
+            Page::Settings => "settings".into(),
+            Page::Local => "on this computer".into(),
+            Page::Playlist(id) => {
+                let name = self.playlist_pages.get(id).and_then(|p| p.playlist.get()).or_else(|| self.known_playlist(id)).map(|p| p.name.as_str());
+                text(name, "playlist")
+            }
+            Page::Album(id) => {
+                let name = self.album_pages.get(id).and_then(|p| p.album.get()).or_else(|| self.known_album(id)).map(|p| p.name.as_str());
+                text(name, "album")
+            }
+            Page::Artist(id) => {
+                let name = self.artist_pages.get(id).and_then(|p| p.artist.get()).or_else(|| self.known_artist(id)).map(|p| p.name.as_str());
+                text(name, "artist")
+            }
+            Page::Show(id) => {
+                let name = self.show_pages.get(id).and_then(|p| p.show.get()).or_else(|| self.known_show(id)).map(|p| p.name.as_str());
+                text(name, "show")
+            }
+            Page::Radio(_) => "radio".into(),
         }
     }
 
@@ -9690,12 +9539,30 @@ impl App {
             increase_playlist_total(playlist, added);
         }
 
+        // The playlists column shows it now, not after the next walk.
+        self.note_membership_added(&playlist_id, items.iter().map(|item| item.uri().to_string()).collect());
         self.backend.api(ApiRequest::AddToPlaylist {
             playlist_id,
             playlist_name,
             uris: items.iter().map(|item| item.uri().to_string()).collect(),
             position,
         });
+    }
+
+    /// Records in the membership index that these songs are now in a
+    /// playlist, and keeps the saved copy in step.
+    fn note_membership_added(&mut self, playlist_id: &str, uris: Vec<String>) {
+        let Some(playlist) = self
+            .library
+            .playlists
+            .get()
+            .and_then(|playlists| playlists.iter().find(|playlist| playlist.id == playlist_id))
+            .cloned()
+        else {
+            return;
+        };
+        self.library.membership.add_song(&playlist, uris);
+        self.library.membership.save(&self.membership_path());
     }
 
     /// Appends the songs linked in pasted text to an editable playlist.
@@ -9875,6 +9742,9 @@ impl App {
         // everywhere: changing the view never rescales it.
         let width = self.settings.float_controls.map_or(default[2], |slot| slot[2]);
         let sized = |slot: [f32; 3]| [slot[0], slot[1], width];
+        if self.extra_drawing {
+            return Some(sized(self.settings.float_extra.unwrap_or(default)));
+        }
         match self.float_mode() {
             2 => Some(sized(self.settings.float_lyrics.unwrap_or(default))),
             1 => Some(sized(self.settings.float_big.unwrap_or(default))),
@@ -9923,7 +9793,6 @@ impl App {
                 | Action::Back
                 | Action::Forward
                 | Action::SignOut
-                | Action::ToggleWinampWindow
                 | Action::ToggleQueuePanel
         ) {
             self.leave_lyrics_fullscreen(ctx);
@@ -10447,6 +10316,8 @@ impl App {
                         count.total = count.total.saturating_sub(removed);
                     }
                 }
+                self.library.membership.remove_songs(&playlist_id, &uris);
+                self.library.membership.save(&self.membership_path());
                 self.playlist_busy = true;
                 self.backend.api(ApiRequest::RemoveFromPlaylist {
                     playlist_id,
@@ -10634,8 +10505,9 @@ impl App {
                     self.toast("Copied. Paste it in Discord (files have no Spotify link)");
                 }
                 Some(now) => {
-                    let line = match crate::discord::song_link(&now.uri, &now.title, &now.subtitle).or_else(|| util::open_spotify_url(&now.uri)) {
-                        Some(url) => format!("Listening to {} by {} on {} {}", now.title, now.subtitle, crate::build_info::DISPLAY_NAME, url),
+                    let line = match crate::discord::song_link(&now.uri, &now.title, &now.subtitle) {
+                        // A named link: Discord shows "chanceify™", not the long address.
+                        Some(url) => format!("Listening to {} by {} on [{}]({})", now.title, now.subtitle, crate::build_info::DISPLAY_NAME, url),
                         None => format!("Listening to {} by {} on {}", now.title, now.subtitle, crate::build_info::DISPLAY_NAME),
                     };
                     ctx.copy_text(line);
@@ -10643,6 +10515,14 @@ impl App {
                 }
                 None => self.toast("Nothing is playing"),
             },
+            Action::CopyForDiscord { uri, title, artist } => {
+                let line = match crate::discord::song_link(&uri, &title, &artist) {
+                    Some(url) => format!("Listening to {} by {} on [{}]({})", title, artist, crate::build_info::DISPLAY_NAME, url),
+                    None => format!("Listening to {} by {} on {}", title, artist, crate::build_info::DISPLAY_NAME),
+                };
+                ctx.copy_text(line);
+                self.toast("Copied. Paste it in Discord and it shows a player");
+            }
             Action::CopyLink(uri) => {
                 if let Some(url) = util::open_spotify_url(&uri) {
                     ctx.copy_text(url);
@@ -10781,6 +10661,7 @@ impl App {
                 }
             }
             Action::ToggleLyricsPanel => {
+                self.lyrics_panel_auto_off = false;
                 self.leave_lyrics_fullscreen(ctx);
                 self.show_lyrics_panel = !self.show_lyrics_panel;
                 if self.show_lyrics_panel {
@@ -10921,6 +10802,13 @@ impl App {
             }
             Action::ToggleVisShape(bit) => {
                 let now = self.settings.vis_shapes_value() ^ (bit & 7);
+                // The full screen visualizer is the visualizer: the last shape
+                // cannot be switched off while it is open.
+                let now = if (self.fullscreen_vis || self.lyrics_fullscreen.is_some()) && now == 0 {
+                    self.settings.vis_shapes_value()
+                } else {
+                    now
+                };
                 self.settings.vis_shapes = now;
                 self.settings.vis_shapes_set = true;
                 // Keep the single mode in step for the code that still reads it.
@@ -10938,7 +10826,9 @@ impl App {
             }
             Action::ToggleVisShapes => {
                 let now = self.settings.vis_shapes_value();
-                let next = if now != 0 {
+                let next = if (self.fullscreen_vis || self.lyrics_fullscreen.is_some()) && now != 0 {
+                    now
+                } else if now != 0 {
                     self.settings.vis_shapes_last = now;
                     0
                 } else if self.settings.vis_shapes_last != 0 {
@@ -11035,6 +10925,17 @@ impl App {
                     _ => self.settings.float_controls = place,
                 }
                 // One size for every view: the new width goes to all of them.
+                if let Some([_, _, width]) = place {
+                    for slot in [&mut self.settings.float_controls, &mut self.settings.float_big, &mut self.settings.float_lyrics] {
+                        if let Some(slot) = slot.as_mut() {
+                            slot[2] = width;
+                        }
+                    }
+                }
+                self.mark_settings_dirty();
+            }
+            Action::SetFloatExtra(place) => {
+                self.settings.float_extra = place;
                 if let Some([_, _, width]) = place {
                     for slot in [&mut self.settings.float_controls, &mut self.settings.float_big, &mut self.settings.float_lyrics] {
                         if let Some(slot) = slot.as_mut() {
@@ -11252,6 +11153,13 @@ impl App {
                     }
                     Err(error) => self.toast_error(format!("Could not save the list: {error}")),
                 }
+            }
+            Action::DismissRelease(album_id) => {
+                self.releases.found.retain(|release| release.album_id != album_id);
+                if !self.releases.dismissed.contains(&album_id) {
+                    self.releases.dismissed.push(album_id);
+                }
+                self.releases.save(&self.dirs.cache.join("releases.json"));
             }
             Action::CheckNewReleases(scope) => {
                 if scope.is_some() {
@@ -11486,6 +11394,17 @@ impl App {
                     self.mark_settings_dirty();
                 }
             }
+            Action::SetJumpTune(which, value) => {
+                if value.is_finite() {
+                    match which {
+                        0 => self.settings.jump_sens = value.clamp(0.4, 2.5),
+                        1 => self.settings.jump_gap = value.clamp(10.0, 100.0),
+                        2 => self.settings.jump_floor = value.clamp(0.0, 20.0),
+                        _ => self.settings.jump_adapt = value.clamp(1.0, 30.0),
+                    }
+                    self.mark_settings_dirty();
+                }
+            }
             Action::ToggleJumpAuto => {
                 self.settings.vis_jump_on = !self.settings.vis_jump_on;
                 let text = if self.settings.vis_jump_on { "Bass jump on" } else { "Bass jump off" };
@@ -11516,7 +11435,8 @@ impl App {
                 self.mark_settings_dirty();
             }
             Action::SetLyricsAlign(align) => {
-                self.settings.lyrics_align = align.min(5);
+                self.settings.settle_lyrics_focus();
+                self.settings.lyrics_align = if align == 2 { 2 } else { 0 };
                 self.mark_settings_dirty();
             }
             Action::ToggleSideLyricsFlag(bit) => {
@@ -11528,7 +11448,16 @@ impl App {
                 self.mark_settings_dirty();
             }
             Action::ToggleLyricsFlag(bit) => {
-                self.settings.lyrics_flags ^= bit;
+                if bit == crate::settings::Settings::LYRICS_FOCUS {
+                    let was = self.settings.lyrics_focus();
+                    self.settings.settle_lyrics_focus();
+                    self.settings.lyrics_flags &= !bit;
+                    if !was {
+                        self.settings.lyrics_flags |= bit;
+                    }
+                } else {
+                    self.settings.lyrics_flags ^= bit;
+                }
                 self.mark_settings_dirty();
             }
             Action::SetSwirlWaves(waves) => {
@@ -11585,6 +11514,16 @@ impl App {
             }
             Action::ToggleVisTextSway => {
                 self.settings.vis_text_still = !self.settings.vis_text_still;
+                self.mark_settings_dirty();
+            }
+            Action::SetSwayReact(mode) => {
+                self.settings.vis_sway_react = mode.min(2);
+                self.settings.vis_sway_beat = true;
+                self.settings.vis_text_still = false;
+                self.mark_settings_dirty();
+            }
+            Action::SetSwaySens(value) => {
+                self.settings.sway_sens = value.clamp(0.4, 2.5);
                 self.mark_settings_dirty();
             }
             Action::ToggleVisSwayBeat => {
@@ -11781,8 +11720,11 @@ impl App {
                 self.mark_settings_dirty();
             }
             Action::SetVolumePresets(list) => {
-                self.settings.volume_presets = Some(list.into_iter().map(|v| v.min(100)).take(4).collect());
-                self.mark_settings_dirty();
+                // Never save an empty list: there is always one button.
+                if !list.is_empty() {
+                    self.settings.volume_presets = Some(list.into_iter().map(|v| v.min(100)).take(4).collect());
+                    self.mark_settings_dirty();
+                }
             }
             Action::CycleSeekWidth => {
                 self.settings.seek_custom_width = 0.0;
@@ -12089,9 +12031,9 @@ impl App {
                     &self.dirs,
                     &self.settings,
                     self.applied_proxy.clone(),
-                    std::sync::Arc::clone(&self.winamp.tap),
-                    std::sync::Arc::clone(&self.winamp.eq),
-                    std::sync::Arc::clone(&self.winamp.speed),
+                    std::sync::Arc::clone(&self.audio.tap),
+                    std::sync::Arc::clone(&self.audio.eq),
+                    std::sync::Arc::clone(&self.audio.speed),
                 );
                 self.backend.send(Command::RestartEngine(config));
                 if self.local_ready {
@@ -12174,57 +12116,6 @@ impl App {
                         .replace("{error}", &error.to_string()),
                 ),
             },
-            Action::ToggleWinampWindow => {
-                // One window at a time: this one closes and the loop in
-                // `main` opens the other kind where each was last.
-                if self.settings.winamp_window {
-                    self.winamp.remember_position();
-                } else if self.settings.random_skin {
-                    self.winamp.refresh_choices(&self.dirs.skins_dir());
-                    let candidates: Vec<Option<String>> = std::iter::once(None)
-                        .chain(
-                            self.winamp
-                                .choices
-                                .iter()
-                                .map(|choice| Some(choice.name.clone())),
-                        )
-                        .collect();
-                    self.settings.skin = crate::winamp::pick_another(
-                        &candidates,
-                        &self.settings.skin,
-                        &mut rand::rng(),
-                    );
-                }
-                self.session_window_size = self.last_window_size.or(self.session_window_size);
-                self.session_window_pos = self.last_window_pos.or(self.session_window_pos);
-                self.settings.winamp_window = !self.settings.winamp_window;
-                self.settings_dirty = true;
-                self.switch_intent = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-            Action::SetSkin(name) => {
-                self.settings.skin = name;
-                self.settings.random_skin = false;
-                self.settings_dirty = true;
-            }
-            Action::SetRandomSkin(random) => {
-                self.settings.random_skin = random;
-                self.settings_dirty = true;
-            }
-            Action::InstallSkin(path) => {
-                self.winamp.install(path, &self.dirs.skins_dir(), ctx);
-            }
-            Action::SetSkinScale(scale) => {
-                self.settings.skin_scale = Some(scale);
-                self.settings_dirty = true;
-            }
-            Action::ToggleWinampOnTop => {
-                if self.window_level_supported {
-                    self.settings.winamp_on_top = !self.settings.winamp_on_top;
-                    self.settings_dirty = true;
-                    self.push_winamp_level(ctx);
-                }
-            }
             Action::CycleMembershipIconSize => {
                 let sizes = crate::ui::widgets::MEMBERSHIP_SCALES;
                 let current = self.settings.membership_icon_scale;
@@ -12237,38 +12128,6 @@ impl App {
                     .unwrap_or(sizes[0]);
                 self.settings.membership_icon_scale = next;
                 self.mark_settings_dirty();
-            }
-            Action::SetWinampTaskbar(visible) => {
-                if self.settings.winamp_show_taskbar != visible {
-                    self.settings.winamp_show_taskbar = visible;
-                    self.mark_settings_dirty();
-                    if self.settings.winamp_window {
-                        // This window attribute is fixed at creation. Keep
-                        // the visible mini player, its position, and playback
-                        // while replacing only its native window.
-                        self.winamp.remember_position();
-                        self.switch_intent = true;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                }
-            }
-            Action::ToggleWinampPlaylist => {
-                self.settings.playlist_open = !self.settings.playlist_open;
-                self.settings_dirty = true;
-                if self.settings.playlist_open {
-                    self.refresh_queue(false);
-                }
-            }
-            Action::SetPlaylistHeight(height) => {
-                self.settings.playlist_height = height.clamp(
-                    crate::skin::layout::PLAYLIST_MIN_HEIGHT,
-                    crate::skin::layout::PLAYLIST_MAX_HEIGHT,
-                );
-                self.settings_dirty = true;
-            }
-            Action::ToggleWinampEq => {
-                self.settings.eq_open = !self.settings.eq_open;
-                self.settings_dirty = true;
             }
             Action::ToggleEq => {
                 self.settings.eq_on = !self.settings.eq_on;
@@ -12300,18 +12159,6 @@ impl App {
                 self.settings.mono = !self.settings.mono;
                 self.push_eq();
             }
-            Action::ToggleWinampShade => {
-                self.settings.winamp_shaded = !self.settings.winamp_shaded;
-                self.settings_dirty = true;
-            }
-            Action::ToggleWinampPlaylistShade => {
-                self.settings.playlist_shaded = !self.settings.playlist_shaded;
-                self.settings_dirty = true;
-            }
-            Action::ToggleWinampEqShade => {
-                self.settings.eq_shaded = !self.settings.eq_shaded;
-                self.settings_dirty = true;
-            }
             // The same request the window's own close button makes, so the
             // close-to-tray setting decides what follows.
             Action::CloseWindow => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
@@ -12323,71 +12170,11 @@ impl App {
             Action::CycleVisualiser => {
                 self.settings.vis = self.settings.vis.next();
                 self.settings_dirty = true;
-                self.winamp.analyser.reset();
             }
             Action::SetVisualiser(mode) => {
                 if self.settings.vis != mode {
                     self.settings.vis = mode;
                     self.settings_dirty = true;
-                    self.winamp.analyser.reset();
-                }
-            }
-            Action::OpenSkinsFolder => self.open_folder(self.dirs.skins_dir()),
-            Action::ToggleWinampMilkdrop => {
-                self.settings.milkdrop_open = !self.settings.milkdrop_open;
-                self.settings_dirty = true;
-                #[cfg(feature = "milkdrop")]
-                if self.settings.milkdrop_open {
-                    // A first open has nothing to draw but the idle preset,
-                    // which hardly answers the music; fetch the packs in the
-                    // background and the window fills up on its own.
-                    let folder = self.dirs.milkdrop_dir();
-                    self.winamp.presets.refresh(&folder);
-                    if self.winamp.presets.count() == 0
-                        && self.winamp.presets.downloading().is_none()
-                    {
-                        self.winamp.presets.download_missing(
-                            folder,
-                            ctx.clone(),
-                            self.applied_proxy.clone(),
-                        );
-                        self.toast(gettext(self.locale, "Downloading MilkDrop preset packs"));
-                    }
-                }
-            }
-            Action::SetMilkdropSeconds(seconds) => {
-                self.settings.milkdrop_seconds = seconds.clamp(1, 3600);
-                self.settings_dirty = true;
-            }
-            Action::SetMilkdropFps(fps) => {
-                self.settings.milkdrop_fps = if fps == 0 {
-                    0
-                } else {
-                    fps.clamp(
-                        *crate::milkdrop::FPS_RANGE.start(),
-                        *crate::milkdrop::FPS_RANGE.end(),
-                    )
-                };
-                self.settings_dirty = true;
-            }
-            Action::SetMilkdropScale(scale) => {
-                self.settings.milkdrop_scale = scale.clamp(1, 4);
-                self.settings_dirty = true;
-            }
-            Action::OpenMilkdropFolder => self.open_folder(self.dirs.milkdrop_dir()),
-            Action::DownloadMilkdropPack(index) => {
-                if let Some(pack) = crate::milkdrop::PACKS.get(index) {
-                    self.winamp.presets.download(
-                        pack,
-                        self.dirs.milkdrop_dir(),
-                        ctx.clone(),
-                        self.applied_proxy.clone(),
-                    );
-                    self.toast(
-                        // Translators: {name} is the name of a visualizer preset pack.
-                        gettext(self.locale, "Downloading {name} presets")
-                            .replace("{name}", pack.name),
-                    );
                 }
             }
             Action::Quit => {
@@ -12505,7 +12292,6 @@ impl App {
             || self.user.as_ref().and_then(|user| user.product.as_deref()) != Some("premium")
             || self.dialog.is_some()
             || self.show_devices
-            || self.settings.winamp_window
             || self.page() == &Page::Settings
         {
             return;
@@ -12666,10 +12452,6 @@ impl App {
         self.handle_dock_menu();
         self.tick(ctx);
         self.note_listening();
-        // MilkDrop runs in a child process and can outlive the main window.
-        // Poll it before applying actions because its keys produce actions.
-        #[cfg(feature = "milkdrop")]
-        self.sync_milkdrop(ctx);
         self.apply_actions(ctx);
         self.sync_media_controls(ctx);
         self.sync_window_title(ctx);
@@ -12782,17 +12564,8 @@ impl App {
 
     /// How the Discord profile is to look, from the settings and what plays.
     pub fn discord_style(&mut self) -> crate::discord::Style {
-        // The swirl takes the colour the app has already worked out for the cover.
-        let swirl = if self.settings.discord_swirl && self.settings.discord_cover {
-            let cover = self
-                .now_playing()
-                .and_then(|now| now.art_url.clone().or_else(|| now.art_small.clone()));
-            self.tint_for(cover.as_deref())
-                .map(|color| crate::discord::swirl_url(color.r(), color.g(), color.b()))
-        } else {
-            None
-        };
-        let playlist = if self.settings.discord_playlist {
+        let swirl = None;
+        let playlist_name = {
             self.playing_context_uri()
                 .filter(|uri| uri.starts_with("spotify:playlist:"))
                 .and_then(|uri| util::uri_id(&uri).map(str::to_string))
@@ -12802,40 +12575,60 @@ impl App {
                         .map(|playlist| playlist.name.clone())
                 })
                 .filter(|name| !name.trim().is_empty())
-        } else {
-            None
         };
-        let playlist_url = if self.settings.discord_playlist_button {
-            self.playing_context_uri()
-                .filter(|uri| uri.starts_with("spotify:playlist:"))
-                .and_then(|uri| util::uri_id(&uri).map(str::to_string))
-                .filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric()))
-                .map(|id| format!("https://open.spotify.com/playlist/{id}"))
-        } else {
-            None
-        };
-        let profile_url = self
-            .settings
-            .discord_profile
+        // Fixed on: the playlist being played from shows, with a profile and a
+        // playlist button.
+        let playlist = playlist_name.clone();
+        // Discord cannot link the third line, so the playlist has its button instead.
+        let playlist_line: Option<String> = None;
+        let _ = playlist_name;
+        let picks = [4u8, 3u8];
+        let playlist_url = self
+            .playing_context_uri()
+            .filter(|uri| uri.starts_with("spotify:playlist:"))
+            .and_then(|uri| util::uri_id(&uri).map(str::to_string))
+            .filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric()))
+            .and_then(|id| crate::discord::page_link('p', &id, playlist.as_deref().unwrap_or(""), ""));
+        // Their Spotify name, whatever their Discord name is.
+        let profile_name = self
+            .user
+            .as_ref()
+            .and_then(|user| user.display_name.clone())
+            .filter(|name| !name.trim().is_empty());
+        let profile_url = picks
+            .contains(&4)
             .then(|| self.user_id().map(str::to_string))
             .flatten()
             .filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)))
-            .map(|id| format!("https://open.spotify.com/user/{id}"));
+            .and_then(|id| {
+                let image = self
+                    .user
+                    .as_ref()
+                    .and_then(|user| crate::api::models::pick_image(&user.images, 300))
+                    .map(str::to_string);
+                crate::discord::profile_link(&id, &profile_name.clone().unwrap_or_default(), image.as_deref())
+            });
         let style = crate::discord::Style {
-            status_line: self.settings.discord_status_line,
-            cover: self.settings.discord_cover,
-            badge: self.settings.discord_badge,
+            // The name under "Listening to" is the first line that is on.
+            status_line: 0,
+            say: [true, true, true],
+            cover: true,
+            badge: true,
             swirl,
             playlist,
+            playlist_line,
             profile_url,
-            buttons: self.settings.discord_buttons,
+            profile_name,
+            buttons: true,
             playlist_url,
-            song_page: self.settings.discord_song_page,
+            song_page: picks.contains(&1),
+            picks,
             look: self.settings.discord_look,
-            links: self.settings.discord_links,
-            hide_paused: self.settings.discord_hide_paused,
-            files: self.settings.discord_files,
-            listen_along: self.settings.discord_listen_along,
+            links: true,
+            // Always shown, even paused (the clock reads "paused").
+            hide_paused: false,
+            files: true,
+            listen_along: false,
             // Only once there is a real GitHub page to send people to.
             app_url: (crate::build_info::GITHUB_URL.trim_end_matches('/').len()
                 > "https://github.com".len())
@@ -12846,16 +12639,16 @@ impl App {
 
     /// Keeps the Discord profile showing what is playing, when asked to.
     fn sync_discord(&mut self) {
-        let mut id = self.settings.discord_client_id.trim().to_string();
-        if id.is_empty() {
-            id = crate::discord::DEFAULT_APPLICATION_ID.to_string();
-        }
+        // chanceify's own Discord application, built in: nothing to fill in.
+        let id = crate::discord::DEFAULT_APPLICATION_ID.to_string();
         if !self.settings.discord_presence {
             crate::discord::set_listen(false);
             crate::discord::update("", None);
             return;
         }
-        crate::discord::set_listen(self.settings.discord_listen_along);
+        // Listen along is off for good: Discord will not show buttons beside it.
+        crate::discord::set_listen(false);
+        crate::discord::set_log_file(self.dirs.index_dir().join("discord-last.txt"));
         self.poll_discord_join();
         // The swirl takes the colour the app has already worked out for the cover.
         let style = self.discord_style();
@@ -12907,13 +12700,6 @@ impl App {
     }
 
     pub fn frame_ui(&mut self, ui: &mut egui::Ui) {
-        // The native close can take another frame. Settings already describe
-        // the replacement window, but drawing it here would resize this one
-        // before eframe saves its geometry. attach clears the switch intent
-        // only once the replacement exists.
-        if self.switch_intent {
-            return;
-        }
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
         self.refresh_frame_now();
@@ -12945,21 +12731,29 @@ impl App {
                 self.leave_lyrics_fullscreen(ctx);
             }
         }
-        // Switch to the main window when sign-in is required.
-        let needs_sign_in = !(self.is_connected() && self.user.is_some())
-            && !matches!(self.auth, AuthStatus::Connecting | AuthStatus::Starting)
-            && !(self.is_connected() && self.user.is_none());
-        if self.settings.winamp_window && needs_sign_in && !self.switch_intent {
-            self.actions.push(Action::ToggleWinampWindow);
+        // Each view (normal, full screen visualizer, full screen lyrics) has
+        // its own visualizer and lyrics settings: moving to another view puts
+        // that view's in place, and what is changed there stays there.
+        let view = if self.lyrics_fullscreen.is_some() {
+            2
+        } else if self.fullscreen_vis {
+            1
+        } else {
+            0
+        };
+        if self.vis_view_now != Some(view) {
+            let from = self.vis_view_now;
+            self.settings.switch_view(from, view);
+            self.vis_view_now = Some(view);
+            if from.is_some() {
+                self.mark_settings_dirty();
+            }
         }
         crate::i18n::set_english(self.locale == crate::i18n::Locale::English);
-        if self.settings.winamp_window {
-            crate::ui::winamp::show(self, ui);
-        } else {
-            crate::ui::show(self, ui);
-        }
+        crate::ui::show(self, ui);
         // The bass jump: everything drawn this frame shakes for a moment.
         self.auto_jump();
+        self.settle_lyrics_panel();
         let jump = self.jump_level();
         if jump > 0.0 {
             let t = ctx.input(|input| input.time) as f32;
@@ -12984,15 +12778,10 @@ impl App {
         if autoscroll.stop_following_lyrics {
             self.lyrics_following = false;
         }
-        if let Some(offset) = autoscroll.playlist_scroll {
-            self.winamp.playlist_scroll = offset;
-        }
         self.refresh_frame_now();
         self.sync_media_controls(ctx);
 
-        if !self.settings.winamp_window
-            && !self.switch_intent
-            && self.lyrics_fullscreen.is_none()
+        if self.lyrics_fullscreen.is_none()
             && self.lyrics_fullscreen_restoring.is_none()
         {
             if let Some(rect) = ctx.input(|input| input.viewport().inner_rect) {
@@ -13008,7 +12797,6 @@ impl App {
         }
         if ctx.input(|input| input.viewport().close_requested())
             && !self.quit_requested
-            && !self.switch_intent
         {
             // X closes the app. Upstream hid to the tray here and left the
             // process playing in the background, which reads as a failed
@@ -13221,8 +13009,6 @@ impl App {
                 window_pos: self.last_window_pos.or(self.session_window_pos),
                 queue_open: Some(self.show_queue_panel),
                 queue_tab: Some(self.queue_tab.encode().to_string()),
-                winamp_pos: self.winamp.last_pos.or(self.winamp.restore_pos),
-                milkdrop_pos: self.milkdrop_pos,
                 lyrics_fullscreen_from: self.lyrics_fullscreen.map(|fullscreen| {
                     crate::settings::WindowMode {
                         fullscreen,
@@ -13459,7 +13245,7 @@ impl App {
         self.settings.eq_on = true;
         self.settings.eq_bands_db = preset.bands_db;
         self.settings.eq_base = preset.name.to_string();
-        if let Ok(mut shared) = self.winamp.eq.lock() {
+        if let Ok(mut shared) = self.audio.eq.lock() {
             *shared = crate::app::eq_settings(&self.settings);
         }
         self.mark_settings_dirty();
@@ -13468,7 +13254,7 @@ impl App {
     /// Hands the audio thread a new rate. Read once per packet there, so a
     /// change lands within a frame rather than needing a restart.
     fn set_playback_speed(&mut self, speed: f32) {
-        if let Ok(mut shared) = self.winamp.speed.lock() {
+        if let Ok(mut shared) = self.audio.speed.lock() {
             *shared = speed;
         }
         self.mark_settings_dirty();
@@ -13525,22 +13311,14 @@ pub fn percent_to_volume(percent: u8) -> u16 {
     ((u32::from(percent.min(100)) * u32::from(u16::MAX)) / 100) as u16
 }
 
-/// The window level for the Winamp window's always-on-top setting. Shared by
-/// window creation and the live window, so the mapping is owned in one place.
+/// The window level for an always-on-top setting. Shared by window creation
+/// and the live window, so the mapping is owned in one place.
 pub fn on_top_window_level(on_top: bool) -> egui::WindowLevel {
     if on_top {
         egui::WindowLevel::AlwaysOnTop
     } else {
         egui::WindowLevel::Normal
     }
-}
-
-/// The window level to push to the live window, or `None` when there is no
-/// Winamp window to change. The big window (where Settings lives) keeps its
-/// normal level, so toggling the setting there only takes effect once the
-/// Winamp window opens.
-fn winamp_on_top_level(winamp_window: bool, on_top: bool) -> Option<egui::WindowLevel> {
-    winamp_window.then_some(on_top_window_level(on_top))
 }
 
 fn page_related_needs_load(pages: &HashMap<String, ArtistPage>, id: &str) -> bool {
@@ -14001,24 +13779,20 @@ mod tests {
     }
 
     #[test]
-    fn autoscroll_updates_the_real_lyrics_and_skinned_playlist_without_changing_playback() {
-        for (skinned, chosen) in [(false, false), (true, false), (false, true), (true, true)] {
+    fn autoscroll_updates_the_real_lyrics_without_changing_playback() {
+        for chosen in [false, true] {
             let on = crate::autoscroll::enabled(chosen);
             let ctx = egui::Context::default();
-            let mut app = test_app(match (skinned, chosen) {
-                (false, false) => "autoscroll-lyrics",
-                (true, false) => "autoscroll-skin",
-                (false, true) => "autoscroll-lyrics-chosen",
-                (true, true) => "autoscroll-skin-chosen",
+            let mut app = test_app(if chosen {
+                "autoscroll-lyrics-chosen"
+            } else {
+                "autoscroll-lyrics"
             });
             app.attach(&ctx);
             crate::demo::populate(&mut app);
             app.settings.middle_click_autoscroll = chosen;
             app.show_queue_panel = false;
-            app.show_lyrics_panel = !skinned;
-            app.settings.winamp_window = skinned;
-            app.settings.playlist_open = skinned;
-            app.settings.skin_scale = Some(2);
+            app.show_lyrics_panel = true;
             if let Loadable::Loaded(queue) = &mut app.queue {
                 queue.queue = queue.queue.iter().cycle().take(80).cloned().collect();
             }
@@ -14044,11 +13818,7 @@ mod tests {
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
-                            if skinned {
-                                egui::vec2(550.0, 580.0)
-                            } else {
-                                egui::vec2(1280.0, 800.0)
-                            },
+                            egui::vec2(1280.0, 800.0),
                         )),
                         time: Some(frame as f64 / 60.0),
                         events,
@@ -14060,14 +13830,7 @@ mod tests {
             };
             draw(&mut app, vec![]);
             draw(&mut app, vec![]);
-            let anchor = if skinned {
-                ctx.read_response(egui::Id::new(("playlist-row", 0_usize)))
-                    .unwrap()
-                    .rect
-                    .center()
-            } else {
-                egui::pos2(1120.0, 100.0)
-            };
+            let anchor = egui::pos2(1120.0, 100.0);
             let press = |button, pressed| egui::Event::PointerButton {
                 pos: anchor,
                 button,
@@ -14081,14 +13844,8 @@ mod tests {
                     press(egui::PointerButton::Middle, true),
                 ],
             );
-            assert_eq!(
-                app.autoscroll.active(),
-                on,
-                "real surface, skinned={skinned}"
-            );
-            if !skinned {
-                assert_eq!(app.lyrics_following, !on);
-            }
+            assert_eq!(app.autoscroll.active(), on, "real surface");
+            assert_eq!(app.lyrics_following, !on);
             draw(&mut app, vec![press(egui::PointerButton::Middle, false)]);
             for _ in 0..5 {
                 draw(
@@ -14096,34 +13853,11 @@ mod tests {
                     vec![egui::Event::PointerMoved(anchor + egui::vec2(0.0, 120.0))],
                 );
             }
-            if skinned {
-                if on {
-                    assert!(app.winamp.playlist_scroll > 0);
-                } else {
-                    assert_eq!(app.winamp.playlist_scroll, 0);
-                }
-                assert!(
-                    app.winamp.playlist_selection.is_empty(),
-                    "middle-click must not select a row"
-                );
-            } else {
-                assert_eq!(app.lyrics_following, !on);
-            }
+            assert_eq!(app.lyrics_following, !on);
             assert_eq!(app.now_playing().unwrap().uri, playing);
             draw(&mut app, vec![press(egui::PointerButton::Primary, true)]);
             assert!(!app.autoscroll.active());
             draw(&mut app, vec![press(egui::PointerButton::Primary, false)]);
-            if skinned {
-                // After cancelling, a normal click selects the visible row.
-                draw(&mut app, vec![egui::Event::PointerMoved(anchor)]);
-                draw(&mut app, vec![press(egui::PointerButton::Primary, true)]);
-                draw(&mut app, vec![press(egui::PointerButton::Primary, false)]);
-                assert_eq!(
-                    app.winamp.playlist_selection.len(),
-                    1,
-                    "ordinary row selection must still work after cancellation"
-                );
-            }
             app.backend.shutdown();
         }
     }
@@ -15163,109 +14897,6 @@ mod tests {
         assert_eq!(volume_to_percent(0), 0);
         assert_eq!(volume_to_percent(percent_to_volume(70)), 70);
         assert_eq!(percent_to_volume(200), u16::MAX);
-    }
-
-    /// Toggling always-on-top pushes the matching level to the live Winamp
-    /// window, so the change takes effect without recreating the window.
-    #[test]
-    fn the_winamp_window_follows_the_on_top_toggle_live() {
-        assert_eq!(
-            winamp_on_top_level(true, true),
-            Some(egui::WindowLevel::AlwaysOnTop)
-        );
-        assert_eq!(
-            winamp_on_top_level(true, false),
-            Some(egui::WindowLevel::Normal)
-        );
-    }
-
-    /// The setting lives in the big window's Settings page. Toggling it there
-    /// must never force the big window on top, so no level command is sent.
-    #[test]
-    fn the_big_window_never_follows_the_on_top_toggle() {
-        assert_eq!(winamp_on_top_level(false, true), None);
-        assert_eq!(winamp_on_top_level(false, false), None);
-    }
-
-    /// The level set at window creation does not stick on X11, so opening the
-    /// Winamp window with always-on-top saved must schedule a re-assert.
-    #[test]
-    fn opening_the_winamp_window_on_top_schedules_a_reassert() {
-        let ctx = egui::Context::default();
-        let mut app = headless_app();
-        app.settings.winamp_window = true;
-        app.settings.winamp_on_top = true;
-        app.attach(&ctx);
-        assert_eq!(app.winamp_level_reassert, 3);
-    }
-
-    /// Opening the Winamp window without always-on-top re-asserts nothing.
-    #[test]
-    fn opening_the_winamp_window_without_on_top_schedules_no_reassert() {
-        let ctx = egui::Context::default();
-        let mut app = headless_app();
-        app.settings.winamp_window = true;
-        app.settings.winamp_on_top = false;
-        app.attach(&ctx);
-        assert_eq!(app.winamp_level_reassert, 0);
-    }
-
-    #[test]
-    fn unsupported_on_top_controls_keep_the_saved_preference_without_commands() {
-        for saved in [false, true] {
-            let ctx = egui::Context::default();
-            let mut app = headless_app();
-            app.settings.winamp_window = true;
-            app.settings.winamp_on_top = saved;
-            app.window_level_supported = false;
-            app.attach(&ctx);
-            assert_eq!(app.winamp_level_reassert, 0);
-            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                app.apply(Action::ToggleWinampOnTop, ui.ctx());
-                app.push_winamp_level(ui.ctx());
-            });
-            output.textures_delta.clear();
-            assert_eq!(app.settings.winamp_on_top, saved);
-            assert!(!app.settings_dirty);
-            assert!(
-                !output.viewport_output[&egui::ViewportId::ROOT]
-                    .commands
-                    .iter()
-                    .any(|command| matches!(command, egui::ViewportCommand::WindowLevel(_)))
-            );
-            app.backend.shutdown();
-        }
-    }
-
-    #[test]
-    fn returning_to_the_mini_player_restores_its_position_and_shade() {
-        let mut app = headless_app();
-        app.settings.winamp_window = true;
-        app.settings.winamp_shaded = true;
-        app.winamp.last_pos = Some([300.0, 200.0]);
-        app.last_window_size = Some([1024.0, 768.0]);
-        app.last_window_pos = Some([100.0, 100.0]);
-
-        let main_ctx = egui::Context::default();
-        app.apply(Action::ToggleWinampWindow, &main_ctx);
-        app.attach(&main_ctx);
-        app.apply(Action::ToggleWinampWindow, &main_ctx);
-
-        let mini_ctx = egui::Context::default();
-        let mut output = mini_ctx.run_ui(Default::default(), |_ui| app.attach(&mini_ctx));
-        output.textures_delta.clear();
-        let commands = &output.viewport_output[&egui::ViewportId::ROOT].commands;
-        assert!(app.settings.winamp_window);
-        assert!(app.settings.winamp_shaded);
-        assert!(commands.contains(&egui::ViewportCommand::Fullscreen(false)));
-        assert!(commands.contains(&egui::ViewportCommand::Maximized(false)));
-        assert!(
-            commands.contains(&egui::ViewportCommand::OuterPosition(egui::pos2(
-                300.0, 200.0
-            )))
-        );
-        assert_eq!(app.session_window_size, Some([1024.0, 768.0]));
-        assert_eq!(app.session_window_pos, Some([100.0, 100.0]));
     }
 
     /// A window left maximized or full screen comes back that way, instead of
@@ -18601,37 +18232,6 @@ mod tests {
         app
     }
 
-    /// With Random on, each switch to the mini player shows a skin other
-    /// than the last one, and choosing a skin turns Random off.
-    #[test]
-    fn a_random_skin_changes_each_time_the_mini_player_opens() {
-        let ctx = egui::Context::default();
-        let mut app = test_app("random-skin");
-        let skins = app.dirs.skins_dir();
-        std::fs::create_dir_all(&skins).unwrap();
-        for name in ["A.wsz", "B.wsz"] {
-            std::fs::write(skins.join(name), b"skin").unwrap();
-        }
-        app.apply(Action::SetRandomSkin(true), &ctx);
-        for _ in 0..6 {
-            let before = app.settings.skin.clone();
-            app.settings.winamp_window = false;
-            app.switch_intent = false;
-            app.apply(Action::ToggleWinampWindow, &ctx);
-            assert!(app.settings.winamp_window);
-            assert_ne!(app.settings.skin, before, "never the same twice in a row");
-        }
-        app.apply(Action::SetSkin(Some("B.wsz".into())), &ctx);
-        assert!(!app.settings.random_skin);
-        app.settings.winamp_window = false;
-        app.apply(Action::ToggleWinampWindow, &ctx);
-        assert_eq!(
-            app.settings.skin.as_deref(),
-            Some("B.wsz"),
-            "a chosen skin stays"
-        );
-    }
-
     /// A change of colours keeps the old ones until the window's picture of
     /// them arrives, or a short wait passes without one, then applies.
     #[test]
@@ -18868,8 +18468,6 @@ mod tests {
         assert_eq!(app.closed(), Closed::Quit);
         app.hide_intent = true;
         assert_eq!(app.closed(), Closed::Hide);
-        app.switch_intent = true;
-        assert_eq!(app.closed(), Closed::Reopen);
         app.quit_requested = true;
         assert_eq!(app.closed(), Closed::Quit);
         app.quit_requested = false;
@@ -19184,10 +18782,6 @@ mod tests {
         app.maybe_suggest_personal_app();
         assert!(app.dialog.is_none());
         app.show_devices = false;
-        app.settings.winamp_window = true;
-        app.maybe_suggest_personal_app();
-        assert!(app.dialog.is_none());
-        app.settings.winamp_window = false;
         app.open(Page::Settings);
         app.maybe_suggest_personal_app();
         assert!(app.dialog.is_none());
@@ -20220,78 +19814,6 @@ mod tests {
         app.backend.shutdown();
     }
 
-    /// MilkDrop playback keys produce the same actions as the main window.
-    #[cfg(feature = "milkdrop")]
-    #[test]
-    fn the_milkdrop_window_drives_playback() {
-        let mut app = headless_app();
-        app.local.track = Some(crate::player::LocalTrack {
-            uri: "spotify:track:a".into(),
-            ..Default::default()
-        });
-        app.local.playback = Playback::Playing;
-
-        for command in [
-            "play-pause",
-            "next",
-            "previous",
-            "mute",
-            "save-toggle",
-            "shuffle",
-            "volume-up",
-            "volume-down",
-        ] {
-            app.actions.clear();
-            app.milkdrop_command(command);
-            assert_eq!(
-                app.actions.len(),
-                1,
-                "{command} asks the player for one thing"
-            );
-        }
-
-        app.actions.clear();
-        app.milkdrop_command("save-toggle");
-        assert!(matches!(
-            app.actions.first(),
-            Some(Action::ToggleSaved(uri)) if uri == "spotify:track:a"
-        ));
-        app.actions.clear();
-        app.milkdrop_command("next");
-        assert!(matches!(app.actions.first(), Some(Action::Next)));
-        app.actions.clear();
-        app.milkdrop_command("volume-down");
-        assert!(matches!(app.actions.first(), Some(Action::VolumeBy(-5))));
-
-        // Ignore unknown commands.
-        app.actions.clear();
-        app.milkdrop_command("teleport");
-        assert!(app.actions.is_empty());
-    }
-
-    /// The first reported screen rate sets the default FPS, but later reports
-    /// do not override a configured value.
-    #[cfg(feature = "milkdrop")]
-    #[test]
-    fn the_frame_rate_matches_the_screen_the_first_time_it_is_known() {
-        let mut app = headless_app();
-        assert_eq!(app.settings.milkdrop_screen_hz, 0, "no screen has spoken");
-        assert_eq!(app.settings.milkdrop_fps, crate::milkdrop::DEFAULT_FPS);
-
-        app.learn_screen_hz(144);
-        assert_eq!(app.settings.milkdrop_screen_hz, 144);
-        assert_eq!(app.settings.milkdrop_fps, 144, "smooth without being asked");
-
-        // Keep the configured FPS when the screen changes.
-        app.settings.milkdrop_fps = 30;
-        app.learn_screen_hz(60);
-        assert_eq!(
-            app.settings.milkdrop_screen_hz, 60,
-            "the new screen is noted"
-        );
-        assert_eq!(app.settings.milkdrop_fps, 30, "their number stands");
-    }
-
     /// A window in the Dock is drawn no frames, so the one frame a Show
     /// request buys has to be the frame that brings it back. Focus alone
     /// leaves it down there, and nothing asks again.
@@ -20456,57 +19978,6 @@ mod tests {
         app.attach(&ctx);
         assert_eq!(buttons(&app.thumb_state(false))[1].icon, Icon::Play);
         assert!(!app.thumb_state(false).dark);
-        app.backend.shutdown();
-    }
-
-    #[test]
-    fn changing_mini_taskbar_visibility_recreates_only_an_open_mini_window() {
-        let mut app = headless_app();
-        app.backend.set_offline(true);
-        let ctx = egui::Context::default();
-        app.apply(Action::SetWinampTaskbar(false), &ctx);
-        assert!(!app.settings.winamp_show_taskbar);
-        assert!(!app.switch_intent, "settings do not close the main window");
-        app.settings.winamp_window = true;
-        app.local.track = Some(crate::player::LocalTrack {
-            uri: "spotify:track:continues".into(),
-            ..Default::default()
-        });
-        app.local.playback = Playback::Playing;
-        let mut output = ctx.run_ui(egui::RawInput::default(), |_ui| {
-            app.apply(Action::SetWinampTaskbar(true), &ctx);
-        });
-        output.textures_delta.clear();
-        assert!(app.settings.winamp_window && app.switch_intent);
-        assert!(!app.hide_intent && !app.quit_requested);
-        assert!(
-            output.viewport_output[&egui::ViewportId::ROOT]
-                .commands
-                .iter()
-                .any(|command| matches!(command, egui::ViewportCommand::Close))
-        );
-        assert_eq!(app.local.playback, Playback::Playing);
-        assert_eq!(
-            app.local.track.as_ref().unwrap().uri,
-            "spotify:track:continues"
-        );
-        app.switch_intent = false;
-        let mut output = ctx.run_ui(egui::RawInput::default(), |_ui| {
-            app.apply(Action::SetWinampTaskbar(true), &ctx);
-        });
-        output.textures_delta.clear();
-        assert!(!app.switch_intent);
-        assert!(
-            !output.viewport_output[&egui::ViewportId::ROOT]
-                .commands
-                .iter()
-                .any(|command| matches!(command, egui::ViewportCommand::Close))
-        );
-        app.apply(Action::ToggleWinampWindow, &ctx);
-        assert!(
-            !app.settings.winamp_window,
-            "returning to the main interface remains available"
-        );
         app.backend.shutdown();
     }
 
@@ -25766,61 +25237,6 @@ mod tests {
         );
     }
 
-    /// A skin with a bitmap in it, for pretending one was read.
-    fn some_skin(name: &str) -> crate::skin::Skin {
-        let image = image::RgbImage::from_pixel(275, 116, image::Rgb([9, 9, 9]));
-        let mut png = std::io::Cursor::new(Vec::new());
-        image.write_to(&mut png, image::ImageFormat::Png).unwrap();
-        let archive = crate::skin::zip::write(&[("main.bmp", png.get_ref(), false)]);
-        crate::skin::Skin::from_archive(name, &archive).unwrap()
-    }
-
-    #[test]
-    fn a_skin_read_late_does_not_override_a_newer_choice() {
-        let mut app = headless_app();
-        app.settings.winamp_window = true;
-        app.settings.skin = Some("B.wsz".into());
-        app.skin_loaded(crate::winamp::Loaded {
-            name: "A.wsz".into(),
-            result: Ok(some_skin("A")),
-            installed: false,
-        });
-        assert_eq!(app.winamp.worn.as_deref(), Some("A.wsz"));
-        assert_eq!(app.settings.skin.as_deref(), Some("B.wsz"));
-    }
-
-    #[test]
-    fn a_dropped_skin_becomes_the_choice_and_a_failed_one_is_forgotten() {
-        let mut app = headless_app();
-        app.settings.winamp_window = true;
-        app.skin_loaded(crate::winamp::Loaded {
-            name: "Dropped.wsz".into(),
-            result: Ok(some_skin("Dropped")),
-            installed: true,
-        });
-        assert_eq!(app.settings.skin.as_deref(), Some("Dropped.wsz"));
-        assert_eq!(app.winamp.worn.as_deref(), Some("Dropped.wsz"));
-        assert!(
-            app.toasts
-                .iter()
-                .any(|toast| toast.message == "Added Dropped skin")
-        );
-
-        app.settings.skin = Some("Gone.wsz".into());
-        app.skin_loaded(crate::winamp::Loaded {
-            name: "Gone.wsz".into(),
-            result: Err(crate::skin::SkinError::Empty),
-            installed: false,
-        });
-        assert_eq!(app.settings.skin.as_deref(), Some("Dropped.wsz"));
-        assert_eq!(app.winamp.worn.as_deref(), Some("Dropped.wsz"));
-        assert!(
-            app.toasts
-                .iter()
-                .any(|toast| toast.message.starts_with("Gone: "))
-        );
-    }
-
     /// A link from outside waits for the account and then opens its page;
     /// a song's link opens the album the song is on.
     #[test]
@@ -26293,108 +25709,6 @@ mod tests {
         );
         drop(restored);
         let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn a_closing_main_window_never_takes_the_mini_players_size() {
-        let mut app = headless_app();
-        let ctx = egui::Context::default();
-        app.attach(&ctx);
-        app.actions.push(Action::ToggleWinampWindow);
-        app.apply_actions(&ctx);
-        assert!(app.switch_intent && app.settings.winamp_window);
-
-        // Native close events may leave another UI frame to draw. It still
-        // belongs to the main window, whose geometry eframe will save.
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.frame_ui(ui));
-        output.textures_delta.clear();
-        let commands = &output.viewport_output[&egui::ViewportId::ROOT].commands;
-        assert!(
-            !commands.iter().any(|command| matches!(
-                command,
-                egui::ViewportCommand::InnerSize(_)
-                    | egui::ViewportCommand::MinInnerSize(_)
-                    | egui::ViewportCommand::MaxInnerSize(_)
-                    | egui::ViewportCommand::Maximized(_)
-            )),
-            "the retiring main window must keep its geometry: {commands:?}"
-        );
-    }
-
-    /// Switching from Winamp back to the main window preserves the main
-    /// window's size and position across the closing mini-window frame.
-    #[test]
-    fn closing_winamp_frame_does_not_overwrite_main_window_geometry() {
-        let mut app = headless_app();
-        app.last_window_size = Some([1024.0, 768.0]);
-        app.last_window_pos = Some([100.0, 150.0]);
-
-        // Toggle from main window to Winamp window
-        let ctx = egui::Context::default();
-        app.actions.push(Action::ToggleWinampWindow);
-        app.apply_actions(&ctx);
-
-        assert!(app.settings.winamp_window);
-        assert!(app.switch_intent);
-        assert_eq!(app.session_window_size, Some([1024.0, 768.0]));
-        assert_eq!(app.session_window_pos, Some([100.0, 150.0]));
-
-        // Attach the Winamp window (clears switch_intent, keeps session geometry)
-        app.attach(&ctx);
-        assert!(!app.switch_intent);
-        assert_eq!(app.session_window_size, Some([1024.0, 768.0]));
-
-        // Trigger switch back to the main window
-        app.actions.push(Action::ToggleWinampWindow);
-
-        // Run the closing frame of the mini-window with its tiny viewport geometry
-        let mut raw_input = egui::RawInput::default();
-        let mini_rect = egui::Rect::from_min_size(egui::pos2(50.0, 50.0), egui::vec2(275.0, 116.0));
-        let viewport = raw_input
-            .viewports
-            .entry(egui::ViewportId::ROOT)
-            .or_default();
-        viewport.inner_rect = Some(mini_rect);
-        viewport.outer_rect = Some(mini_rect);
-
-        let mut closing_output = ctx.run_ui(raw_input, |ui| {
-            app.frame_ui(ui);
-        });
-        closing_output.textures_delta.clear();
-
-        // The closing frame switched window mode and armed switch_intent...
-        assert!(!app.settings.winamp_window);
-        assert!(app.switch_intent);
-
-        // ...but switch_intent prevented the closing mini-window rect from
-        // overwriting the saved main window size and position.
-        assert_eq!(app.last_window_size, Some([1024.0, 768.0]));
-        assert_eq!(app.last_window_pos, Some([100.0, 150.0]));
-        assert_eq!(app.session_window_size, Some([1024.0, 768.0]));
-        assert_eq!(app.session_window_pos, Some([100.0, 150.0]));
-
-        // Attaching the new main window restores the saved geometry via viewport commands
-        let main_ctx = egui::Context::default();
-        let mut output = main_ctx.run_ui(Default::default(), |_ui| {
-            app.attach(&main_ctx);
-        });
-        output.textures_delta.clear();
-
-        let commands = &output
-            .viewport_output
-            .get(&egui::ViewportId::ROOT)
-            .expect("the root viewport")
-            .commands;
-        assert!(
-            commands.contains(&egui::ViewportCommand::InnerSize(egui::vec2(1024.0, 768.0))),
-            "attach restored the main window size: {commands:?}"
-        );
-        assert!(
-            commands.contains(&egui::ViewportCommand::OuterPosition(egui::pos2(
-                100.0, 150.0
-            ))),
-            "attach restored the main window position: {commands:?}"
-        );
     }
 
     fn cached_liked_app() -> App {

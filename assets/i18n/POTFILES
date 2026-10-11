@@ -8,7 +8,6 @@ src/app.rs
 src/ui/settings.rs
 src/api/models.rs
 src/app/radio.rs
-src/milkdrop.rs
 src/model.rs
 src/settings.rs
 src/theme.rs
@@ -26,8 +25,5 @@ src/ui/search.rs
 src/ui/show.rs
 src/ui/topbar.rs
 src/ui/update.rs
-src/ui/winamp/equalizer.rs
-src/ui/winamp/mod.rs
-src/ui/winamp/playlist.rs
 src/util.rs
 src/window.rs

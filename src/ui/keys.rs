@@ -13,8 +13,6 @@ pub(super) const fn platform_shortcut<'a>(ctrl: &'a str, cmd: &'a str) -> &'a st
 }
 
 pub(super) const QUIT_SHORTCUT: &str = platform_shortcut("Ctrl+Q", "Cmd+Q");
-pub(super) const WINAMP_SHORTCUT: &str = platform_shortcut("Ctrl+M", "Cmd+Shift+M");
-pub(super) const MILKDROP_SHORTCUT: &str = platform_shortcut("Ctrl+Shift+K", "Cmd+Shift+K");
 
 /// A shortcut the user may move to another plain key.
 pub struct Bindable {
@@ -111,7 +109,7 @@ pub const BINDABLE: &[Bindable] = &[
     Bindable { id: "visualizer", label: "Visualizer settings", default: Key::B, action: || Action::ToggleVisPanel },
     Bindable { id: "art", label: "Big album art", default: UNSET, action: || Action::ToggleArtExpanded },
     Bindable { id: "normalview", label: "Normal view", default: UNSET, action: || Action::NormalView },
-    Bindable { id: "views", label: "Open the Views panel", default: Key::Z, action: || Action::OpenViewsPanel },
+    Bindable { id: "views", label: "Open the Views panel", default: Key::Y, action: || Action::OpenViewsPanel },
     Bindable { id: "mini", label: "Mini player", default: Key::M, action: || Action::ToggleMiniPlayer },
     // Fullscreen.
     Bindable { id: "fullscreen", label: "Full-screen visualizer", default: Key::V, action: || Action::ToggleFullscreenVis },
@@ -126,27 +124,24 @@ pub const BINDABLE: &[Bindable] = &[
     Bindable { id: "mute", label: "Mute", default: UNSET, action: || Action::ToggleMute },
     Bindable { id: "back10", label: "Seek back 10 seconds", default: UNSET, action: || Action::SeekBy(-10_000) },
     Bindable { id: "forward10", label: "Seek forward 10 seconds", default: UNSET, action: || Action::SeekBy(10_000) },
-    Bindable { id: "seekwidth", label: "Seek bar length", default: UNSET, action: || Action::CycleSeekWidth },
     Bindable { id: "sharediscord", label: "Copy the song for Discord", default: UNSET, action: || Action::ShareToDiscord },
     Bindable { id: "lastfmlove", label: "Love the song on Last.fm", default: UNSET, action: || Action::LastfmLove },
-    Bindable { id: "defaultview", label: "Back to the default view", default: Key::Backtick, action: || Action::NormalView },
-    Bindable { id: "calmmode", label: "Calm mode (slow ocean, nothing reacts to the music)", default: Key::Home, action: || Action::ToggleCalm },
-    Bindable { id: "extrawindow", label: "New visualizer window (second monitor)", default: UNSET, action: || Action::ToggleExtraWindow },
-    Bindable { id: "closeextras", label: "Close the extra visualizer window", default: Key::End, action: || Action::CloseExtraWindows },
+    Bindable { id: "defaultview", label: "Default view", default: Key::Backtick, action: || Action::NormalView },
+    Bindable { id: "calmmode", label: "Calm mode", default: Key::Home, action: || Action::ToggleCalm },
+    Bindable { id: "extrawindow", label: "New visualizer window", default: UNSET, action: || Action::ToggleExtraWindow },
+    Bindable { id: "closeextras", label: "Close extra window", default: Key::End, action: || Action::CloseExtraWindows },
     Bindable { id: "queuehover", label: "Queue the song under the pointer", default: UNSET, action: || Action::QueueHovered(false) },
     Bindable { id: "queuehovertop", label: "Queue the song under the pointer, to play next", default: UNSET, action: || Action::QueueHovered(true) },
     Bindable { id: "likehover", label: "Like the song under the pointer", default: UNSET, action: || Action::LikeHovered },
     Bindable { id: "likeplaying", label: "Like the playing song", default: UNSET, action: || Action::LikePlaying },
     Bindable { id: "tap", label: "Bass jump", default: UNSET, action: || Action::TapTempo },
     Bindable { id: "jumptoggle", label: "Bass jump on or off", default: UNSET, action: || Action::ToggleJumpAuto },
-    Bindable { id: "cyclevis", label: "Next visualizer style", default: UNSET, action: || Action::CycleVisualiser },
-    Bindable { id: "visgradient", label: "Gradient on or off", default: UNSET, action: || Action::ToggleVisGradient },
+    Bindable { id: "visgradient", label: "Visualizer gradient", default: UNSET, action: || Action::ToggleVisGradient },
     Bindable { id: "visreverse", label: "Reverse the visualizer", default: UNSET, action: || Action::ToggleVisReverse },
     Bindable { id: "next", label: "Next song", default: UNSET, action: || Action::Next },
     Bindable { id: "previous", label: "Previous song", default: UNSET, action: || Action::Previous },
     Bindable { id: "volup", label: "Volume up", default: UNSET, action: || Action::VolumeBy(5) },
     Bindable { id: "voldown", label: "Volume down", default: UNSET, action: || Action::VolumeBy(-5) },
-    Bindable { id: "scenes", label: "Scenes panel", default: UNSET, action: || Action::ToggleSceneBrowser },
     // Going places.
     Bindable { id: "search", label: "Search", default: UNSET, action: || Action::FocusSearch },
     Bindable { id: "home", label: "Open Home", default: UNSET, action: || Action::Open(Page::Home) },
@@ -173,7 +168,7 @@ pub const BINDABLE: &[Bindable] = &[
     // Window.
     Bindable { id: "closewindow", label: "Close to the tray", default: UNSET, action: || Action::CloseWindow },
     // Other.
-    Bindable { id: "tutorial", label: "Shortcuts", default: Key::T, action: || Action::ShowDialog(Dialog::Shortcuts) },
+    Bindable { id: "tutorial", label: "Keybinds", default: Key::T, action: || Action::ShowDialog(Dialog::Shortcuts) },
 ];
 
 /// The key binds a new install starts with, baked in from
@@ -215,13 +210,13 @@ pub fn read_keys(text: &str) -> Option<std::collections::BTreeMap<String, String
 /// The groups the shortcuts list is shown in, in order, and which shortcut
 /// belongs in each.
 pub const CATEGORIES: &[(&str, &[&str])] = &[
-    ("Views", &["views", "defaultview", "calmmode", "extrawindow", "closeextras", "normalview", "mini", "fullscreen", "lyricsfull", "visshapes", "art", "closewindow"]),
-    ("Panels", &["sidebar", "queuelyrics", "queue", "lyrics", "visualizer", "scenes"]),
+    ("Views", &["tutorial", "views", "defaultview", "calmmode", "extrawindow", "closeextras", "normalview", "mini", "fullscreen", "lyricsfull", "visshapes", "art", "closewindow"]),
+    ("Panels", &["sidebar", "queuelyrics", "queue", "lyrics", "visualizer"]),
     ("Playback", &["playpause", "playspace", "playonly", "pauseonly", "next", "previous", "shuffle", "repeat", "lastfmlove", "sharediscord", "queuehover", "queuehovertop", "likehover", "likeplaying"]),
     ("Volume", &["mute", "volup", "voldown"]),
-    ("Fun", &["tap", "jumptoggle", "cyclevis", "visgradient", "visreverse"]),
-    ("Jump in the song", &["back10", "forward10", "seekback5", "seekfwd5", "seekwidth", "tenth0", "tenth1", "tenth2", "tenth3", "tenth4", "tenth5", "tenth6", "tenth7", "tenth8", "tenth9"]),
-    ("Going places", &["search", "home", "liked", "settings", "pageback", "pageforward", "artistpage", "albumpage", "tutorial"]),
+    ("Fun", &["tap", "jumptoggle", "visreverse", "visgradient"]),
+    ("Jump in the song", &["back10", "forward10", "seekback5", "seekfwd5", "tenth0", "tenth1", "tenth2", "tenth3", "tenth4", "tenth5", "tenth6", "tenth7", "tenth8", "tenth9"]),
+    ("Going places", &["search", "home", "liked", "settings", "pageback", "pageforward", "artistpage", "albumpage"]),
 ];
 
 /// Shortcuts that may share one key, because they are the same thing.
@@ -338,6 +333,13 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         ctx.data_mut(|data| data.insert_temp(pass_id, pass));
     }
     if capture_rebind(app, ctx) {
+        return;
+    }
+    // Each window answers only its own keys: while the extra visualizer
+    // window has the focus, this one stays quiet.
+    if (app.extra_vis || app.mini_active)
+        && ctx.input(|input| input.viewport().focused == Some(false))
+    {
         return;
     }
     // The default keys were rearranged in 0.22 (W lyrics, F and D the two
@@ -570,7 +572,7 @@ pub fn shortcuts(locale: Locale) -> Vec<(Cow<'static, str>, Cow<'static, str>)> 
         ),
         (
             keys(platform_shortcut("Ctrl+/", "Cmd+/")),
-            gettext(locale, "Keyboard shortcuts"),
+            gettext(locale, "Keybinds"),
         ),
         (
             keys(platform_shortcut("Ctrl+W", "Cmd+W")),
@@ -751,18 +753,11 @@ mod tests {
     #[test]
     fn shortcut_constants_name_the_platform_modifier() {
         let expected = if cfg!(target_os = "macos") {
-            ["Cmd+Q", "Cmd+Shift+M", "Cmd+Shift+K"]
+            "Cmd+Q"
         } else {
-            ["Ctrl+Q", "Ctrl+M", "Ctrl+Shift+K"]
+            "Ctrl+Q"
         };
-        assert_eq!(
-            [
-                QUIT_SHORTCUT,
-                WINAMP_SHORTCUT,
-                MILKDROP_SHORTCUT,
-            ],
-            expected
-        );
+        assert_eq!(QUIT_SHORTCUT, expected);
     }
 
     #[test]

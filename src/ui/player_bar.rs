@@ -85,6 +85,21 @@ pub(crate) fn wheel_volume(ui: &egui::Ui, area: Rect, shown: u8) -> Option<u8> {
     if !ui.rect_contains_pointer(area) {
         return None;
     }
+    wheel_steps(ui, shown)
+}
+
+/// The same, for the pop-out controls: that panel is painted over a bare
+/// layer whose own size is empty, so the layer test above never says "over
+/// it". The pointer's place is what counts there.
+fn wheel_volume_at(ui: &egui::Ui, area: Rect, shown: u8) -> Option<u8> {
+    let over = ui.input(|input| input.pointer.hover_pos()).is_some_and(|p| area.contains(p));
+    if !over {
+        return None;
+    }
+    wheel_steps(ui, shown)
+}
+
+fn wheel_steps(ui: &egui::Ui, shown: u8) -> Option<u8> {
     let turned: f32 = ui.input(|input| {
         input
             .events
@@ -277,10 +292,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let stacked = layout != 0;
     // The controls are their own panel, so the bar keeps no row for them: a
     // slim one for the song's name, none at all with big album art.
-    let strip_h = if lyrics_page || (popped_out && app.float_mode() == 1) {
+    // With the controls popped out the bar is only the visualizer: the song's
+    // name and cover sit above the controls instead.
+    let strip_h = if lyrics_page || popped_out {
         0.0
-    } else if popped_out {
-        46.0
     } else {
         (46.0 * controls_k).clamp(46.0, 84.0)
             * match layout {
@@ -757,6 +772,8 @@ fn visualizer(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying>
         let painter = ui.painter().with_clip_rect(rect);
         let strength = if dark { 1.0 } else { LIGHT_STRENGTH };
         let phase = swirl_phase(app, ui, now);
+        // "Reverse the visualizer" turns the swirl's drift around too.
+        let phase = if app.settings.vis_reverse { -phase } else { phase };
         let run = SwirlRun {
             bright: app.settings.swirl_tune_value(10) / 100.0,
             wash: app.settings.swirl_tune_value(11) / 100.0,
@@ -785,7 +802,11 @@ fn visualizer(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying>
         crate::crash::stage("visualizer: flow");
         // Fullscreen, the flow lives under the cover: it starts 20 pixels
         // below the picture and is never taller than 300.
-        let flow_rect = if app.fullscreen_vis {
+        let flow_rect = if app.lyrics_fullscreen.is_some() {
+            // Behind the lyrics it is a low strip along the bottom.
+            let height = (rect.height() * 0.16).clamp(40.0, 150.0);
+            Rect::from_min_max(pos2(rect.left(), rect.bottom() - height), rect.max)
+        } else if app.fullscreen_vis {
             let below = fullscreen_cover(rect, app.settings.vis_title_layout.min(3)).bottom() + 20.0;
             let height = (rect.bottom() - below).clamp(40.0, 300.0);
             Rect::from_min_max(pos2(rect.left(), rect.bottom() - height), rect.max)
@@ -796,7 +817,7 @@ fn visualizer(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying>
     }
     if shapes & Settings::SHAPE_BARS != 0 {
         crate::crash::stage("visualizer: bars");
-        if app.fullscreen_vis {
+        if app.fullscreen_vis || app.lyrics_fullscreen.is_some() {
             moving |= fullscreen_edge_bars(app, ui, rect, now);
         } else {
             // Bars alone may rise off the visualizer onto the song-length
@@ -831,6 +852,8 @@ pub(super) fn lyrics_backdrop(
         // Whatever the visualizer settings say: the same shapes, colours
         // and sliders as the bar's and the full-screen visualizer's.
         3 => visualizer(app, ui, rect, now),
+        // Just the bars along the edges, with no cover or words.
+        4 => fullscreen_edge_bars(app, ui, rect, now),
         1 => visualizer_shape(app, ui, rect, now, PlayerBarVis::Flow),
         2 => {
             let art = app.swirl_art(ui.ctx());
@@ -839,6 +862,8 @@ pub(super) fn lyrics_backdrop(
             let painter = ui.painter().with_clip_rect(rect);
             let strength = if dark { 1.0 } else { LIGHT_STRENGTH };
             let phase = swirl_phase(app, ui, now);
+        // "Reverse the visualizer" turns the swirl's drift around too.
+        let phase = if app.settings.vis_reverse { -phase } else { phase };
             let run = SwirlRun {
                 bright: app.settings.swirl_tune_value(10) / 100.0,
                 wash: app.settings.swirl_tune_value(11) / 100.0,
@@ -878,7 +903,7 @@ fn fullscreen_edge_bars(
         return false;
     }
     let samples = if sounding {
-        app.winamp.tap.window(vis::WIDE_SAMPLES, vis::LAG)
+        app.audio.tap.window(vis::WIDE_SAMPLES, vis::LAG)
     } else {
         Vec::new()
     };
@@ -917,7 +942,13 @@ fn fullscreen_edge_bars(
     // Every edge's bars share one longest length: the room between the
     // window's left edge and the cover, less a margin, so no bar on any
     // side ever reaches the picture.
-    let reach = (fullscreen_cover(rect, app.settings.vis_title_layout.min(3)).left() - rect.left() - 16.0).max(10.0);
+    let reach = if app.lyrics_fullscreen.is_some() {
+        // Behind the lyrics the bars stay short, so they never climb onto
+        // the words.
+        (rect.width().min(rect.height()) * 0.14).clamp(30.0, 140.0)
+    } else {
+        (fullscreen_cover(rect, app.settings.vis_title_layout.min(3)).left() - rect.left() - 16.0).max(10.0)
+    };
     let boost = if app.settings.vis_shapes_value() == crate::settings::Settings::SHAPE_BARS {
         1.0
     } else {
@@ -932,13 +963,8 @@ fn fullscreen_edge_bars(
     // the two sets never draw over each other.
     // A little room is kept clear at every corner (the disc sits in the
     // top-left one), so the two sets part with a gap instead of touching.
-    let corner_cap = |from_corner: f32, cell: f32| {
-        if from_corner < 60.0 {
-            0.0
-        } else {
-            (from_corner - cell * 0.5 - 8.0).max(2.0)
-        }
-    };
+    // The bars run right into the corner; the disc is drawn over them.
+    let corner_cap = |_from_corner: f32, _cell: f32| f32::MAX;
     for (i, level) in merged_x.iter().enumerate() {
         let mut h = (soft_height(level * height) * reach).max(2.0);
         let x = rect.left() + i as f32 * step_x;
@@ -1030,7 +1056,7 @@ fn swirl_phase(app: &mut App, ui: &egui::Ui, now: Option<&NowPlaying>) -> f64 {
     // (a kick shoves it, quiet in between), 3 nothing.
     let mode = app.settings.swirl_react_mode.min(3);
     let energy = if sounding && mode != 3 {
-        let samples = app.winamp.tap.window(vis::FFT_SAMPLES, vis::LAG);
+        let samples = app.audio.tap.window(vis::FFT_SAMPLES, vis::LAG);
         if samples.is_empty() {
             0.0
         } else if mode == 1 {
@@ -1207,7 +1233,7 @@ pub(super) fn visualizer_shape(
                 return false;
             }
             let samples = if sounding {
-                app.winamp.tap.window(vis::WIDE_SAMPLES, vis::LAG)
+                app.audio.tap.window(vis::WIDE_SAMPLES, vis::LAG)
             } else {
                 Vec::new()
             };
@@ -1248,7 +1274,7 @@ pub(super) fn visualizer_shape(
                 + FLOW_DRIFT * app.settings.player_bar_vis_flow_speed() / 60.0)
                 .fract();
             let samples = if sounding {
-                app.winamp.tap.window(vis::WIDE_SAMPLES, vis::LAG)
+                app.audio.tap.window(vis::WIDE_SAMPLES, vis::LAG)
             } else {
                 Vec::new()
             };
@@ -1289,7 +1315,7 @@ pub(super) fn visualizer_shape(
             }
             // Winamp's scope with a column every eight points or so.
             let count = (rect.width() / 8.0).clamp(75.0, 320.0) as usize;
-            let samples = app.winamp.tap.window(count * vis::SCOPE_STEP, vis::LAG);
+            let samples = app.audio.tap.window(count * vis::SCOPE_STEP, vis::LAG);
             waveform(
                 &painter,
                 rect,
@@ -1349,64 +1375,103 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
     // Above the spot that was right-clicked; with no click on record (the V
     // key), the old place at the right.
     let clicked_x = ctx.data(|data| data.get_temp::<f32>(egui::Id::new("vis-click-x")));
-    // Normal view and full screen each remember their own place and width.
-    let mut panel = egui::Window::new("visualizer-panel")
-        .id(egui::Id::new(if floating { "visualizer-panel-full" } else { "visualizer-panel" }))
-        .title_bar(false)
-        .collapsible(false);
-    // Wherever the panel is shown it can be dragged about and made wider;
-    // its height is exactly what is in it (what does not fit scrolls), so
-    // there is never empty room.
+    // The panel is as big as what is on its tab, and when the window is too
+    // small for that it is drawn smaller, all of it, instead of being cut off.
     let screen = ctx.content_rect();
-    let max_h = (screen.height() - 20.0).max(180.0);
+    let win_id = egui::Id::new(if floating { "visualizer-panel-full" } else { "visualizer-panel" });
     let default_x = match (floating, clicked_x) {
         (false, Some(x)) => x - 180.0,
         _ => screen.right() - (screen.width() * 0.5).min(560.0) - 14.0,
     };
-    panel = panel
-        .resizable([true, false])
-        .default_width(if floating { (screen.width() * 0.4).clamp(300.0, 460.0) } else { 360.0 })
-        .min_width(260.0)
-        .movable(true)
-        .constrain(true)
-        .default_pos(egui::pos2(
-            default_x.clamp(screen.left() + 8.0, (screen.right() - 380.0).max(screen.left() + 8.0)),
+    let tab_now = ctx
+        .data(|data| data.get_temp::<u8>(egui::Id::new("vis-menu-tab")))
+        .unwrap_or(0)
+        .min(if app.vis_view_now.unwrap_or(0) == 0 { 2 } else { 3 });
+    let two_wide = tab_now == 2 || (tab_now == 3 && (app.lyrics_fullscreen.is_some() || app.settings.vis_lyrics));
+    let natural_w = if tab_now == 0 {
+        3.0 * vis_col_w(0.0) + 36.0 + 28.0
+    } else if two_wide {
+        2.0 * VIS_SINGLE_W + 18.0 + 28.0
+    } else {
+        300.0
+    };
+    let height_id = egui::Id::new(("vis-panel-natural-h", tab_now));
+    let natural_h = ctx.data(|data| data.get_temp::<f32>(height_id)).unwrap_or(440.0).max(120.0);
+    let fit = ((screen.width() - 16.0) / natural_w)
+        .min((screen.height() - 16.0) / natural_h)
+        .clamp(0.35, 1.0);
+    let scaled = fit < 0.999;
+    let fixed_pos = egui::pos2(
+        screen.left() + 8.0,
+        (screen_h - above - natural_h * fit)
+            .clamp(screen.top() + 8.0, (screen.bottom() - 8.0 - natural_h * fit).max(screen.top() + 8.0)),
+    );
+    let mut panel = egui::Window::new("visualizer-panel")
+        .id(win_id)
+        .title_bar(false)
+        .collapsible(false)
+        .resizable(false)
+        .min_width(natural_w)
+        .max_width(natural_w);
+    panel = if scaled {
+        panel.movable(false).constrain(false).fixed_pos(fixed_pos)
+    } else {
+        panel.movable(true).constrain(true).default_pos(egui::pos2(
+            default_x.clamp(screen.left() + 8.0, (screen.right() - natural_w).max(screen.left() + 8.0)),
             if floating {
                 screen.bottom() - (screen.height() * 0.55).min(520.0) - 14.0
             } else {
                 (screen_h - above - 440.0).max(screen.top() + 8.0)
             },
         ))
-        .max_size(vec2(900.0, max_h));
+    };
+    let layer = egui::LayerId::new(egui::Order::Middle, win_id);
+    ctx.set_transform_layer(
+        layer,
+        if scaled {
+            egui::emath::TSTransform::new(fixed_pos.to_vec2() * (1.0 - fit), fit)
+        } else {
+            egui::emath::TSTransform::IDENTITY
+        },
+    );
     let window = panel.show(ctx, |ui| {
         egui::ScrollArea::vertical()
-            .auto_shrink([false, true])
-            .max_height(max_h - 24.0)
+            .auto_shrink([true, true])
+            .max_height(f32::INFINITY)
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
             .show(ui, |ui| vis_menu_body(app, ui));
     });
-    // A click anywhere outside the panel closes it. (A right-click on the
-    // visualizer toggles it, so only the primary button counts here.)
-    crate::crash::stage("visualizer panel: close check");
-    if let Some(window) = window {
-        // Each question is asked on its own, never one inside another's
-        // closure. `Popup::is_any_open` takes the context's lock, and taking
-        // it again while `ctx.input` still held it could wait forever the
-        // moment another thread (the audio, the swirl, a repaint request)
-        // queued for the same lock. That was the freeze: it only happened on
-        // the frame of a click, because only then was the second call made.
-        let pressed_at = ctx.input(|input| {
-            if input.pointer.primary_pressed() {
-                input.pointer.interact_pos()
-            } else {
-                None
-            }
-        });
-        if let Some(at) = pressed_at {
-            let inside = window.response.rect.expand(8.0).contains(at);
-            if !inside && !egui::Popup::is_any_open(ctx) {
-                app.vis_panel = false;
-            }
-        }
+    let window = window.map(|window| {
+        let local = window.response.rect;
+        ctx.data_mut(|data| data.insert_temp(height_id, local.height()));
+        // Where it really is on the screen.
+        let shown = if scaled {
+            egui::Rect::from_min_size(local.min, local.size() * fit)
+        } else {
+            local
+        };
+        (window, shown)
+    });
+    // The panel stays until the X in its top right corner is clicked (or
+    // its key or the right-click on the visualizer is used again): clicking
+    // elsewhere leaves it where it is.
+    if let Some((_window, shown)) = window {
+        let size = 22.0;
+        egui::Area::new(egui::Id::new("vis-panel-close"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(shown.right_top() + egui::vec2(-size - 6.0, 6.0))
+            .show(ctx, |ui| {
+                let palette = app.palette;
+                let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::click());
+                if response.hovered() {
+                    ui.painter().circle_filled(rect.center(), size / 2.0, palette.surface_hover);
+                }
+                let colour = if response.hovered() { palette.text } else { palette.secondary };
+                theme::paint_icon(ui, Icon::X, rect, 12.0, colour);
+                if response.clicked() {
+                    app.vis_panel = false;
+                }
+            });
     }
 }
 
@@ -1421,7 +1486,7 @@ fn eq_preview_watchdog(app: &mut App, ctx: &egui::Context) {
         .data(|data| data.get_temp::<f64>(egui::Id::new("eq-preview-at")))
         .unwrap_or(0.0);
     if ctx.input(|input| input.time) - seen > 0.3 {
-        if let Ok(mut shared) = app.winamp.eq.lock() {
+        if let Ok(mut shared) = app.audio.eq.lock() {
             *shared = crate::app::eq_settings(&app.settings);
         }
         ctx.data_mut(|data| data.insert_temp(flag, false));
@@ -1674,7 +1739,7 @@ fn audio_menu_body(app: &mut App, ui: &mut egui::Ui) {
                 let mut heard = crate::app::eq_settings(&app.settings);
                 heard.on = true;
                 heard.bands_db = bands;
-                if let Ok(mut shared) = app.winamp.eq.lock() {
+                if let Ok(mut shared) = app.audio.eq.lock() {
                     *shared = heard;
                 }
                 ui.data_mut(|data| {
@@ -1682,7 +1747,7 @@ fn audio_menu_body(app: &mut App, ui: &mut egui::Ui) {
                     data.insert_temp(egui::Id::new("eq-preview-at"), ui_time);
                 });
             } else if previewing {
-                if let Ok(mut shared) = app.winamp.eq.lock() {
+                if let Ok(mut shared) = app.audio.eq.lock() {
                     *shared = crate::app::eq_settings(&app.settings);
                 }
                 ui.data_mut(|data| data.insert_temp(preview_flag, false));
@@ -1772,11 +1837,19 @@ fn audio_menu_body(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
+/// How wide one column of the visualizer menu is for a window this wide.
+fn vis_col_w(_screen_w: f32) -> f32 {
+    240.0
+}
+
+/// Width of the one column on the tabs that have only one.
+const VIS_SINGLE_W: f32 = 272.0;
+
 fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     {
         {
-            ui.set_max_width(980.0_f32.min(ui.ctx().content_rect().width() - 24.0).max(200.0));
+            ui.set_max_width(3.0 * vis_col_w(0.0) + 36.0);
             ui.spacing_mut().item_spacing.y = 3.0;
             // Three independent switches: any mix, or none (which closes
             // the visualizer down to the song-length bar).
@@ -1787,12 +1860,38 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
             let screen_w = ui.ctx().content_rect().width();
             // Two columns from a modest width when the swirl's column is
             // not open, so the panel is shorter and fits one screen.
-            let columns_fit = screen_w >= 1000.0;
-            let col_w = if columns_fit {
-                300.0
-            } else {
-                (screen_w - 64.0).clamp(200.0, 300.0)
-            };
+            let columns_fit = true;
+            let col_w = vis_col_w(screen_w);
+            // The settings sit in four tabs, one open at a time, so the
+            // panel is only as big as what is in front of you.
+            let tab_id = egui::Id::new("vis-menu-tab");
+            // Each view keeps its own settings; the normal view has no lyrics
+            // over its visualizer, so it has no lyrics tab.
+            let view = app.vis_view_now.unwrap_or(0);
+            let last_tab: u8 = if view == 0 { 2 } else { 3 };
+            let tab: u8 = ui.ctx().data(|data| data.get_temp::<u8>(tab_id)).unwrap_or(0).min(last_tab);
+            // Room is left at the right for the close X.
+            ui.scope(|ui| {
+                ui.set_max_width((ui.available_width() - 30.0).max(100.0));
+                theme::subtle(
+                    ui,
+                    &palette,
+                    &format!(
+                        "these settings are for the {} only",
+                        ["normal view", "full screen visualizer", "full screen lyrics"][view.min(2) as usize]
+                    ),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                for (index, label) in ["Shapes", "Bass and colour", "Title", "Lyrics"].iter().take(last_tab as usize + 1).enumerate() {
+                    let width = [64.0, 104.0, 50.0, 58.0][index];
+                    if chip(ui, &palette, label, tab == index as u8, width).clicked() {
+                        ui.ctx().data_mut(|data| data.insert_temp(tab_id, index as u8));
+                    }
+                }
+            });
+            super::widgets::menu_separator(ui, &palette);
             let mut columns = |ui: &mut egui::Ui| {
             ui.spacing_mut().item_spacing.x = 18.0;
             ui.vertical(|ui| {
@@ -2005,12 +2104,12 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                         .iter()
                         .map(|(name, _)| *name)
                         .collect();
-                    // All the looks sit open, one click each: no dropdown to
-                    // open first.
-                    if let Some(index) = open_choices(
+                    // Six looks for each family, numbered; no words.
+                    if let Some(index) = numbered_rows(
                         ui,
                         &palette,
                         &gettext(app.locale, "LOOK"),
+                        &[(Icon::Disc, 0..6), (Icon::Sparkles, 6..12), (Icon::Waves, 12..18)],
                         &names,
                         active,
                     ) {
@@ -2022,7 +2121,9 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                 {
                     // Scrolling art only has a speed; the ripple, blur and
                     // colour sliders are for the waves.
-                    if art_scroll && index != 8 {
+                    // Only the two speeds are left; the ripples, blur and
+                    // colour are what the looks above are for.
+                    if index != 8 && index != 9 {
                         continue;
                     }
                     slider_row(
@@ -2037,7 +2138,7 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                 slider_row(
                     ui,
                     &palette,
-                    &gettext(app.locale, "Colour drift speed"),
+                    &gettext(app.locale, "Colour drift"),
                     0.2..=4.0,
                     (9.0 / app.settings.swirl_drift_secs()) as f32,
                     |value| app.actions.push(Action::SetSwirlDrift(value)),
@@ -2048,25 +2149,23 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
             }
             });
             };
-            if columns_fit {
-                ui.horizontal_top(|ui| columns(ui));
-            } else {
-                ui.vertical(|ui| columns(ui));
+            if tab == 0 {
+                if columns_fit {
+                    ui.horizontal_top(|ui| columns(ui));
+                } else {
+                    ui.vertical(|ui| columns(ui));
+                }
             }
-            super::widgets::menu_separator(ui, &palette);
             // The settings every shape shares, then the title, then the lyrics.
             let mut shared = |ui: &mut egui::Ui| {
             ui.spacing_mut().item_spacing.x = 18.0;
-            ui.vertical(|ui| {
-            ui.set_width(col_w);
+            if tab == 1 { ui.vertical(|ui| {
+            ui.set_width(VIS_SINGLE_W);
             theme::subtle(ui, &palette, &gettext(app.locale, "BASS JUMP"));
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 if chip(ui, &palette, &gettext(app.locale, "On"), app.settings.vis_jump_on, 60.0).clicked() {
                     app.actions.push(Action::ToggleJumpAuto);
-                }
-                if chip(ui, &palette, &gettext(app.locale, "Preview"), false, 80.0).clicked() {
-                    app.actions.push(Action::TapTempo);
                 }
             });
             ui.horizontal(|ui| {
@@ -2091,8 +2190,21 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                     app.actions.push(Action::SetJumpShake(value));
                 },
             );
+            // How the jump reacts, so a finicky song can be tuned by hand.
+            slider_row(ui, &palette, &gettext(app.locale, "Sensitivity"), 40.0..=250.0,
+                app.settings.jump_sens * 100.0,
+                |value| app.actions.push(Action::SetJumpTune(0, value / 100.0)));
+            slider_row(ui, &palette, &gettext(app.locale, "Rest between"), 10.0..=100.0,
+                app.settings.jump_gap,
+                |value| app.actions.push(Action::SetJumpTune(1, value)));
+            slider_row(ui, &palette, &gettext(app.locale, "Quiet cutoff"), 0.0..=20.0,
+                app.settings.jump_floor,
+                |value| app.actions.push(Action::SetJumpTune(2, value)));
+            slider_row(ui, &palette, &gettext(app.locale, "Follows the song"), 1.0..=30.0,
+                app.settings.jump_adapt,
+                |value| app.actions.push(Action::SetJumpTune(3, value)));
             ui.add_space(6.0);
-            theme::subtle(ui, &palette, &gettext(app.locale, "COLOUR (ALL SHAPES)"));
+            theme::subtle(ui, &palette, &gettext(app.locale, "COLOUR"));
             if chip(
                 ui,
                 &palette,
@@ -2167,14 +2279,14 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
             }
-            });
-            ui.vertical(|ui| {
-            ui.set_width(col_w);
+            }); }
+            if tab == 2 { ui.horizontal_top(|ui| { ui.vertical(|ui| {
+            ui.set_width(VIS_SINGLE_W);
             theme::subtle(ui, &palette, &gettext(app.locale, "TITLE"));
-            if chip(
+            if chip_i(
                 ui,
                 &palette,
-                "Title sway",
+                "Title vibration",
                 !app.settings.vis_text_still,
                 ui.available_width().min(290.0),
             )
@@ -2182,27 +2294,56 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
             {
                 app.actions.push(Action::ToggleVisTextSway);
             }
+            if chip_i(
+                ui,
+                &palette,
+                "Art border",
+                app.settings.vis_art_border,
+                ui.available_width().min(290.0),
+            )
+            .clicked()
             {
-                let presets = crate::settings::Settings::SWAY_PRESETS;
-                let names: Vec<&str> = presets.iter().map(|preset| preset.name).collect();
-                let current = (app.settings.vis_sway as usize).min(names.len() - 1);
-                if let Some(index) = open_choices(ui, &palette, "SWAY STYLE", &names, Some(current)) {
-                    app.actions.push(Action::SetVisSway(index as u8));
-                }
-                sway_preview(ui, &palette, app.settings.vis_sway_preset(), app.settings.vis_sway_strength());
-                if chip(ui, &palette, "Sway on the beat only", app.settings.vis_sway_beat, ui.available_width().min(290.0)).clicked() {
-                    app.actions.push(Action::ToggleVisSwayBeat);
-                }
+                app.settings.vis_art_border = !app.settings.vis_art_border;
+                app.mark_settings_dirty();
+            }
+            {
+                theme::subtle(ui, &palette, &gettext(app.locale, "VIBRATION REACTS TO THE MUSIC"));
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    if chip(ui, &palette, &gettext(app.locale, "On"), app.settings.vis_sway_beat, 60.0).clicked() {
+                        app.actions.push(Action::ToggleVisSwayBeat);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    for (value, glyph, tip) in [
+                        (0u8, Glyph::Icon(Icon::Volume2), "Vibrates with the loudness"),
+                        (1, Glyph::Icon(Icon::Speaker), "Vibrates with the bass"),
+                        (2, Glyph::Icon(Icon::Zap), "Vibrates on the beat"),
+                    ] {
+                        if glyph_button(ui, &palette, glyph, tip, app.settings.vis_sway_react.min(2) == value).clicked() {
+                            app.actions.push(Action::SetSwayReact(value));
+                        }
+                    }
+                });
                 slider_row(
                     ui,
                     &palette,
-                    &gettext(app.locale, "Sway strength"),
+                    &gettext(app.locale, "Sensitivity"),
+                    40.0..=250.0,
+                    app.settings.sway_sens * 100.0,
+                    |value| app.actions.push(Action::SetSwaySens(value / 100.0)),
+                );
+                slider_row(
+                    ui,
+                    &palette,
+                    &gettext(app.locale, "Vibration strength"),
                     20.0..=300.0,
                     app.settings.vis_sway_strength() * 100.0,
                     |value| app.actions.push(Action::SetVisSwayAmount(value / 100.0)),
                 );
             }
-            if chip(
+            if chip_i(
                 ui,
                 &palette,
                 "Title outline",
@@ -2213,7 +2354,7 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
             {
                 app.actions.push(Action::ToggleVisTextOutline);
             }
-            if chip(
+            if chip_i(
                 ui,
                 &palette,
                 "Panel behind the title",
@@ -2231,11 +2372,10 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                     |value| app.actions.push(Action::SetVisBack(1, value)));
                 slider_row(ui, &palette, "Room round the words", 0.0..=40.0, app.settings.vis_back_pad,
                     |value| app.actions.push(Action::SetVisBack(2, value)));
-                if chip(ui, &palette, "One block, not a strip a line", app.settings.vis_back_block, ui.available_width().min(290.0)).clicked() {
-                    app.actions.push(Action::SetVisBack(3, if app.settings.vis_back_block { 0.0 } else { 1.0 }));
-                }
             }
-            if chip(
+            }); ui.vertical(|ui| {
+            ui.set_width(VIS_SINGLE_W);
+            if chip_i(
                 ui,
                 &palette,
                 "Artist name under the title",
@@ -2247,27 +2387,31 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                 app.actions.push(Action::ToggleVisArtist);
             }
             {
-                let layouts = [
-                    "Under the cover",
-                    "Beside the cover",
-                    "Beside it, big",
-                    "Above it, artist below",
-                ];
-                let current = (app.settings.vis_title_layout as usize).min(layouts.len() - 1);
-                if let Some(index) = open_choices(ui, &palette, "TITLE LAYOUT", &layouts, Some(current)) {
-                    app.actions.push(Action::SetVisTitleLayout(index as u8));
-                }
+                theme::subtle(ui, &palette, "TITLE LAYOUT");
+                let current = (app.settings.vis_title_layout as usize).min(2);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    for (index, glyph, tip) in [
+                        (0usize, Glyph::TitleUnder, "Under the cover"),
+                        (1, Glyph::TitleBeside, "Beside the cover"),
+                        (2, Glyph::TitleBig, "Beside it, big"),
+                    ] {
+                        if glyph_button(ui, &palette, glyph, tip, current == index).clicked() {
+                            app.actions.push(Action::SetVisTitleLayout(index as u8));
+                        }
+                    }
+                });
             }
             font_grid(app, ui);
-            });
-            ui.vertical(|ui| {
-            ui.set_width(col_w);
-            theme::subtle(ui, &palette, &gettext(app.locale, "FULL-SCREEN LYRICS"));
+            }); }); }
             let on_page = app.lyrics_fullscreen.is_some();
+            if tab == 3 { ui.horizontal_top(|ui| { ui.vertical(|ui| {
+            ui.set_width(VIS_SINGLE_W);
+            theme::subtle(ui, &palette, &gettext(app.locale, "FULL-SCREEN LYRICS"));
             // These two belong to the lyrics drawn over the visualizer, so the
             // lyrics page itself does not show them.
             if !on_page {
-                if chip(
+                if chip_i(
                     ui,
                     &palette,
                     "Show lyrics over it",
@@ -2278,7 +2422,7 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                 {
                     app.actions.push(Action::ToggleVisLyrics);
                 }
-                if chip(
+                if chip_i(
                     ui,
                     &palette,
                     "Dark background behind the lyrics",
@@ -2293,8 +2437,12 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
             if !(on_page || app.settings.vis_lyrics) {
                 use crate::settings::Settings;
                 let on = app.settings.lyrics_flag(Settings::LYRICS_BOUNCE_ART);
-                if chip(ui, &palette, "Art bounces to the music", on, ui.available_width().min(290.0)).clicked() {
+                if chip_i(ui, &palette, "Art bounces to the music", on, ui.available_width().min(290.0)).clicked() {
                     app.actions.push(Action::ToggleLyricsFlag(Settings::LYRICS_BOUNCE_ART));
+                }
+                let floats = app.settings.lyrics_flag(Settings::LYRICS_FLOAT_ART);
+                if chip_i(ui, &palette, "Floating art", floats, ui.available_width().min(290.0)).clicked() {
+                    app.actions.push(Action::ToggleLyricsFlag(Settings::LYRICS_FLOAT_ART));
                 }
             }
             // The lyrics options, one set for the page and for the lyrics over
@@ -2310,29 +2458,56 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                     (Settings::LYRICS_HIDE_ARTIST, "Artist name", true),
                 ] {
                     // The art options only mean something on the page.
-                    if !on_page && matches!(bit, Settings::LYRICS_HIDE_ART | Settings::LYRICS_FLOAT_ART | Settings::LYRICS_HIDE_ARTIST) {
+                    if !on_page && matches!(bit, Settings::LYRICS_HIDE_ART | Settings::LYRICS_HIDE_ARTIST) {
                         continue;
                     }
                     let on = app.settings.lyrics_flag(bit) != inverted;
-                    if chip(ui, &palette, label, on, ui.available_width().min(290.0)).clicked() {
+                    if chip_i(ui, &palette, label, on, ui.available_width().min(290.0)).clicked() {
                         app.actions.push(Action::ToggleLyricsFlag(bit));
                     }
                 }
-                let current = app.settings.lyrics_align_value();
-                for (value, label) in [(0u8, "Left"), (2, "Right"), (4, "Focus on the current line")] {
-                    if chip(ui, &palette, label, current == value, ui.available_width().min(290.0)).clicked() {
+            }
+            }); ui.vertical(|ui| {
+            ui.set_width(VIS_SINGLE_W);
+            if on_page || app.settings.vis_lyrics {
+                let right = app.settings.lyrics_right();
+                for (value, label) in [(0u8, "Left"), (2, "Right")] {
+                    if chip_i(ui, &palette, label, (value == 2) == right, ui.available_width().min(290.0)).clicked() {
                         app.actions.push(Action::SetLyricsAlign(value));
                     }
                 }
+                let focus = app.settings.lyrics_focus();
+                if chip_i(ui, &palette, "Focus on the current line", focus, ui.available_width().min(290.0)).clicked() {
+                    app.actions.push(Action::ToggleLyricsFlag(crate::settings::Settings::LYRICS_FOCUS));
+                }
             }
-            });
+            if app.extra_vis {
+                ui.add_space(6.0);
+                theme::subtle(ui, &palette, "NEW WINDOW LYRICS");
+                for (label, on, which) in [
+                    ("Song name", app.settings.extra_show_title, 0u8),
+                    ("Artist", app.settings.extra_show_artist, 1),
+                    ("Heart", app.settings.extra_show_heart, 2),
+                ] {
+                    if chip_i(ui, &palette, label, on, ui.available_width().min(290.0)).clicked() {
+                        match which {
+                            0 => app.settings.extra_show_title = !on,
+                            1 => app.settings.extra_show_artist = !on,
+                            _ => app.settings.extra_show_heart = !on,
+                        }
+                        app.mark_settings_dirty();
+                    }
+                }
+            }
+            }); }); }
             };
-            if columns_fit {
-                ui.horizontal_top(|ui| shared(ui));
-            } else {
-                ui.vertical(|ui| shared(ui));
+            if tab != 0 {
+                if columns_fit {
+                    ui.horizontal_top(|ui| shared(ui));
+                } else {
+                    ui.vertical(|ui| shared(ui));
+                }
             }
-            vis_presets_row(app, ui);
         }
     }
 }
@@ -2348,6 +2523,10 @@ enum Glyph {
     Mirror,
     /// A circle with a line through it.
     Nothing,
+    /// The title under the cover, beside it, beside it and big.
+    TitleUnder,
+    TitleBeside,
+    TitleBig,
 }
 
 /// A small square button with a picture and no text; the words are the tooltip.
@@ -2404,6 +2583,21 @@ fn glyph_button(
                 ));
             }
         }
+        Glyph::TitleUnder => {
+            painter.rect_filled(Rect::from_center_size(pos2(c.x, c.y - 4.0), vec2(11.0, 11.0)), 2.0, ink);
+            painter.line_segment([pos2(c.x - 9.0, c.y + 9.0), pos2(c.x + 9.0, c.y + 9.0)], egui::Stroke::new(2.0, ink));
+        }
+        Glyph::TitleBeside => {
+            painter.rect_filled(Rect::from_center_size(pos2(c.x - 8.0, c.y), vec2(10.0, 10.0)), 2.0, ink);
+            painter.line_segment([pos2(c.x + 1.0, c.y - 2.5), pos2(c.x + 11.0, c.y - 2.5)], egui::Stroke::new(1.6, ink));
+            painter.line_segment([pos2(c.x + 1.0, c.y + 2.5), pos2(c.x + 8.0, c.y + 2.5)], egui::Stroke::new(1.6, ink));
+        }
+        Glyph::TitleBig => {
+            painter.rect_filled(Rect::from_center_size(pos2(c.x - 8.0, c.y), vec2(10.0, 10.0)), 2.0, ink);
+            for dy in [-5.5_f32, 0.0, 5.5] {
+                painter.line_segment([pos2(c.x + 1.0, c.y + dy), pos2(c.x + 11.0, c.y + dy)], egui::Stroke::new(3.0, ink));
+            }
+        }
         Glyph::Nothing => {
             painter.circle_stroke(c, 7.5, egui::Stroke::new(1.5, ink));
             painter.line_segment(
@@ -2413,6 +2607,27 @@ fn glyph_button(
         }
     }
     response.on_hover_text(tip)
+}
+
+/// How much of the sway shows right now: all of it, or what the music asks
+/// for while "reacts to the music" is on (loudness, bass or beat).
+fn sway_gate(app: &App) -> f32 {
+    if !app.settings.vis_sway_beat {
+        return 1.0;
+    }
+    let sens = app.settings.sway_sens.clamp(0.4, 2.5);
+    match app.settings.vis_sway_react.min(2) {
+        0 => {
+            let window = app.audio.tap.window(1536, 0);
+            if window.is_empty() {
+                return 0.0;
+            }
+            let loud = (window.iter().map(|x| x * x).sum::<f32>() / window.len() as f32).sqrt() * 2.0;
+            ((loud * sens - 0.05) / 0.35).clamp(0.0, 1.0)
+        }
+        1 => (app.music_bass_level() * sens * 1.4).clamp(0.0, 1.0),
+        _ => ((app.music_bass_level() * sens - 0.12) / 0.4).clamp(0.0, 1.0),
+    }
 }
 
 /// Every title font as a cell showing the playing song in that very font,
@@ -2432,49 +2647,67 @@ fn font_grid(app: &mut App, ui: &mut egui::Ui) {
     let sample = app
         .now_playing()
         .map_or_else(|| "Song title".to_string(), |now| now.title.clone());
-    let columns = 2usize;
-    let gap = 6.0;
-    let width = ((ui.available_width().min(290.0) - gap * (columns as f32 - 1.0)) / columns as f32).floor().max(80.0);
     let current = usize::from(app.settings.vis_text_font).min(crate::system_fonts::VIS_FONTS.len() - 1);
     let mut hovered: Option<u8> = None;
-    for (row_index, row) in (0..crate::system_fonts::VIS_FONTS.len()).collect::<Vec<_>>().chunks(columns).enumerate() {
-        let _ = row_index;
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = gap;
-            for &index in row {
-                let (rect, response) = ui.allocate_exact_size(vec2(width, 42.0), Sense::click());
-                let fill = if index == current {
-                    palette.accent.gamma_multiply(0.35)
-                } else if response.hovered() {
-                    palette.surface_hover
-                } else {
-                    palette.surface
-                };
-                ui.painter().rect_filled(rect, egui::CornerRadius::same(6), fill);
-                let family = vis_font_family(ui.ctx(), index);
-                let painter = ui.painter().with_clip_rect(rect.shrink(3.0));
-                painter.text(
-                    pos2(rect.left() + 8.0, rect.top() + 14.0),
-                    egui::Align2::LEFT_CENTER,
-                    &sample,
-                    egui::FontId::new(15.0, family),
-                    palette.text,
-                );
-                painter.text(
-                    pos2(rect.left() + 8.0, rect.bottom() - 9.0),
-                    egui::Align2::LEFT_CENTER,
-                    crate::system_fonts::VIS_FONTS[index].0,
-                    theme::regular(10.0),
-                    palette.secondary,
-                );
-                if response.hovered() {
-                    hovered = Some(index as u8);
+    // A drop-down: one button showing the chosen face, a list under it when
+    // it is opened. Built into the panel rather than a pop-up on a pop-up.
+    let open_id = egui::Id::new("vis-font-open");
+    let open = ui.ctx().data(|data| data.get_temp::<bool>(open_id)).unwrap_or(false);
+    let width = ui.available_width().min(290.0);
+    let family_now = vis_font_family(ui.ctx(), current);
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 30.0), Sense::click());
+    let fill = if response.hovered() { palette.surface_hover } else { palette.surface };
+    ui.painter().rect_filled(rect, egui::CornerRadius::same(6), fill);
+    ui.painter().with_clip_rect(rect.shrink2(vec2(6.0, 0.0))).text(
+        pos2(rect.left() + 10.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        crate::system_fonts::VIS_FONTS[current].0,
+        egui::FontId::new(15.0, family_now),
+        palette.text,
+    );
+    theme::paint_icon(
+        ui,
+        if open { Icon::ChevronUp } else { Icon::ChevronDown },
+        Rect::from_center_size(pos2(rect.right() - 16.0, rect.center().y), vec2(20.0, 20.0)),
+        15.0,
+        palette.secondary,
+    );
+    if response.clicked() {
+        ui.ctx().data_mut(|data| data.insert_temp(open_id, !open));
+    }
+    if open {
+        egui::ScrollArea::vertical()
+            .id_salt("vis-font-list")
+            .max_height(240.0)
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                for index in 0..crate::system_fonts::VIS_FONTS.len() {
+                    let (rect, response) = ui.allocate_exact_size(vec2(width - 8.0, 30.0), Sense::click());
+                    let fill = if index == current {
+                        palette.accent.gamma_multiply(0.35)
+                    } else if response.hovered() {
+                        palette.surface_hover
+                    } else {
+                        palette.surface
+                    };
+                    ui.painter().rect_filled(rect, egui::CornerRadius::same(6), fill);
+                    let family = vis_font_family(ui.ctx(), index);
+                    ui.painter().with_clip_rect(rect.shrink2(vec2(4.0, 0.0))).text(
+                        pos2(rect.left() + 10.0, rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        format!("{}   {}", crate::system_fonts::VIS_FONTS[index].0, sample),
+                        egui::FontId::new(15.0, family),
+                        palette.text,
+                    );
+                    if response.hovered() || ui.rect_contains_pointer(rect) {
+                        hovered = Some(index as u8);
+                    }
+                    if response.clicked() {
+                        app.actions.push(Action::SetVisFont(index as u8));
+                        ui.ctx().data_mut(|data| data.insert_temp(open_id, false));
+                    }
                 }
-                if response.clicked() {
-                    app.actions.push(Action::SetVisFont(index as u8));
-                }
-            }
-        });
+            });
     }
     let pass = ui.ctx().cumulative_pass_nr();
     if app.settings.vis_live_preview
@@ -2547,6 +2780,7 @@ fn vis_font_family(ctx: &egui::Context, font_index: usize) -> egui::FontFamily {
 
 /// Saved visualizer looks: pick one to apply, x to remove, or save the
 /// current look under a name.
+#[allow(dead_code)]
 fn vis_presets_row(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     ui.add_space(8.0);
@@ -2877,6 +3111,9 @@ fn sway_preview(ui: &mut egui::Ui, palette: &crate::theme::Palette, preset: crat
     // A steady beat for the preview, so bass-driven styles show their pump.
     let pulse = ((time * 2.0).sin().max(0.0)).powi(3);
     let lean = |phase: f32| -> f32 {
+        if matches!(preset.kind, 1 | 2 | 4) {
+            return 0.0;
+        }
         ((0.05 * (t * 0.9 - phase * 0.6).sin() + 0.03 * (t * 1.7 - phase * 0.9 + 1.0).sin())
             * (1.0 + 2.0 * pulse * preset.bass * 0.5)
             * preset.lean
@@ -2887,9 +3124,20 @@ fn sway_preview(ui: &mut egui::Ui, palette: &crate::theme::Palette, preset: crat
         let w = galley.size().x;
         let h = galley.size().y;
         let bob = (time * 3.0 * preset.speed - i as f32 * 0.55).sin() * preset.bob * h * strength;
-        let origin = pos2(x, base - h + bob);
+        let drive = 0.4 + 0.6 * pulse * preset.bass.min(1.6);
+        let motion = match preset.kind {
+            1 => vec2(0.0, -(t * 2.4 - i as f32 * 0.12).sin().abs() * preset.amp * h * strength * drive),
+            2 => vec2((t * 1.6 - i as f32 * 0.1).sin() * preset.amp * h * strength * (0.6 + 0.4 * drive), 0.0),
+            4 => vec2(
+                (time * 41.0 + i as f32 * 7.3).sin() * preset.amp * h * strength * drive,
+                (time * 37.0 + i as f32 * 5.1).cos() * preset.amp * h * strength * drive,
+            ),
+            _ => vec2(0.0, 0.0),
+        };
+        let origin = pos2(x, base - h + bob) + motion;
+        let ripple = if preset.kind == 3 { 0.0 } else { 0.22 };
         let (pivot, angle) = if preset.stalk > 0.0 {
-            (pos2(x + w / 2.0, base + bob), lean(i as f32 * 0.22))
+            (pos2(x + w / 2.0, base + bob), lean(i as f32 * ripple))
         } else {
             (pos2(rect.left() + 6.0 + total / 2.0, base), lean(0.0))
         };
@@ -2904,6 +3152,7 @@ fn sway_preview(ui: &mut egui::Ui, palette: &crate::theme::Palette, preset: crat
     ui.ctx().request_repaint();
 }
 
+#[allow(dead_code)]
 fn open_choices(
     ui: &mut egui::Ui,
     palette: &crate::theme::Palette,
@@ -2929,6 +3178,35 @@ fn open_choices(
     picked
 }
 
+/// Presets as rows of numbered buttons: a picture for the family, then 1, 2,
+/// 3... for each of its looks. The words are the tooltips.
+fn numbered_rows(
+    ui: &mut egui::Ui,
+    palette: &crate::theme::Palette,
+    title: &str,
+    rows: &[(Icon, std::ops::Range<usize>)],
+    names: &[&str],
+    selected: Option<usize>,
+) -> Option<usize> {
+    let mut picked = None;
+    theme::subtle(ui, palette, title);
+    for (icon, range) in rows {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let (rect, _) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::hover());
+            theme::paint_icon(ui, *icon, rect, 17.0, palette.secondary);
+            for (number, index) in range.clone().enumerate() {
+                let name = names.get(index).copied().unwrap_or("");
+                let label = format!("{}", number + 1);
+                if chip(ui, palette, &label, selected == Some(index), 30.0).on_hover_text(name).clicked() {
+                    picked = Some(index);
+                }
+            }
+        });
+    }
+    picked
+}
+
 /// A fixed-width selectable chip.
 fn chip(
     ui: &mut egui::Ui,
@@ -2938,6 +3216,70 @@ fn chip(
     width: f32,
 ) -> egui::Response {
     chip_sensing(ui, palette, label, active, width, Sense::click())
+}
+
+/// The little picture a menu option carries, when it has one.
+fn icon_for(label: &str) -> Option<Icon> {
+    Some(match label {
+        "Title vibration" | "Title sway" => Icon::Wind,
+        "Art border" => Icon::Square,
+        "Sway on the beat only" => Icon::Zap,
+        "Title outline" => Icon::Pencil,
+        "Panel behind the title" => Icon::Tv,
+        "Artist name under the title" | "Artist name" | "Artist" => Icon::User,
+        "Show lyrics over it" => Icon::Mic,
+        "Dark background behind the lyrics" => Icon::Moon,
+        "Art bounces to the music" | "Song name" => Icon::Music,
+        "Floating art" => Icon::Sparkles,
+        "Album art" => Icon::Disc,
+        "Timestamps" => Icon::Clock,
+        "Countdown" => Icon::Watch,
+        "Left" => Icon::ArrowLeft,
+        "Right" => Icon::ArrowRight,
+        "Focus on the current line" => Icon::Expand,
+        "Heart" => Icon::Heart,
+        _ => return None,
+    })
+}
+
+/// A chip with its picture before the words (words only when it has none).
+fn chip_i(
+    ui: &mut egui::Ui,
+    palette: &crate::theme::Palette,
+    label: &str,
+    active: bool,
+    width: f32,
+) -> egui::Response {
+    let Some(icon) = icon_for(label) else {
+        return chip(ui, palette, label, active, width);
+    };
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 24.0), Sense::click());
+    let fill = if active {
+        palette.accent.gamma_multiply(0.35)
+    } else if response.hovered() {
+        palette.surface_hover
+    } else {
+        palette.surface
+    };
+    ui.painter().rect_filled(rect, egui::CornerRadius::same(6), fill);
+    let ink = if active { palette.text } else { palette.secondary };
+    let slot = Rect::from_min_size(pos2(rect.left() + 4.0, rect.top()), vec2(22.0, 24.0));
+    theme::paint_icon(ui, icon, slot, 14.0, ink);
+    let galley = crate::bidi::layout(
+        ui.painter(),
+        label,
+        theme::regular(12.5),
+        ink,
+        (width - 34.0).max(10.0),
+        1,
+        Some(crate::bidi::ELLIPSIS),
+    );
+    ui.painter().galley(
+        pos2(rect.left() + 30.0, rect.center().y - galley.size().y / 2.0),
+        galley,
+        palette.text,
+    );
+    response
 }
 
 fn chip_sensing(
@@ -3002,13 +3344,16 @@ pub(super) fn slider_row(
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         let width = (ui.available_width() - FIELD_WIDTH - 8.0).max(80.0);
+        // The label gets what the row can spare, never more than the usual
+        // column, so a narrow menu keeps a track to drag.
+        let label_col = (width * 0.58).clamp(84.0, LABEL_COLUMN);
         let (rect, _) = ui.allocate_exact_size(vec2(width, 24.0), Sense::hover());
         let galley = crate::bidi::layout(
             ui.painter(),
             label,
             theme::regular(13.5),
             palette.text,
-            LABEL_COLUMN - 14.0,
+            label_col - 14.0,
             1,
             Some(crate::bidi::ELLIPSIS),
         );
@@ -3044,11 +3389,11 @@ pub(super) fn slider_row(
 
         // The track runs between the label and the field, so nothing ever
         // overlaps however long either of them is.
-        let left = rect.left() + LABEL_COLUMN;
+        let left = rect.left() + label_col;
         let right = rect.right() - FIELD_WIDTH - 16.0;
         let track = Rect::from_center_size(
             pos2((left + right) / 2.0, rect.center().y),
-            vec2((right - left).max(20.0), 18.0),
+            vec2((right - left).max(36.0), 18.0),
         );
         let response = ui.interact(
             track,
@@ -3385,6 +3730,108 @@ fn fullscreen_title_size(rect: Rect) -> f32 {
     (rect.height() * 0.05).clamp(20.0, 64.0)
 }
 
+/// Draws the cover as a card that floats about on its own (when `floating`)
+/// and turns to face the pointer while it is over it, in 3D, with a shadow
+/// that turns with it: the full-screen lyrics' card. Returns whether it drew
+/// the cover; with the card flat and still, the caller draws it as usual.
+fn tilted_cover(ui: &egui::Ui, cover: Rect, url: Option<&str>, floating: bool, border: bool) -> bool {
+    let ctx = ui.ctx().clone();
+    let side = cover.width();
+    let pointer = ui.input(|input| input.pointer.hover_pos());
+    let over = pointer.is_some_and(|p| cover.expand(30.0).contains(p));
+    let time = ui.input(|input| input.time) as f32;
+    let (nx, ny) = match pointer.filter(|_| over) {
+        Some(p) => (
+            ((p.x - cover.center().x) / (side * 0.5)).clamp(-1.0, 1.0),
+            ((p.y - cover.center().y) / (side * 0.5)).clamp(-1.0, 1.0),
+        ),
+        None if floating => (
+            0.75 * ((time * 0.37).sin() * 0.6 + (time * 0.91 + 1.3).sin() * 0.4),
+            0.75 * ((time * 0.43 + 2.1).sin() * 0.6 + (time * 0.77 + 0.4).sin() * 0.4),
+        ),
+        None => (0.0, 0.0),
+    };
+    if floating {
+        ctx.request_repaint();
+    }
+    let id = egui::Id::new("vis-cover-tilt");
+    let nx = ctx.animate_value_with_time(id.with("x"), nx, 0.15);
+    let ny = ctx.animate_value_with_time(id.with("y"), ny, 0.15);
+    if nx.abs() <= 0.002 && ny.abs() <= 0.002 && !over {
+        return false;
+    }
+    let Some(url) = url else {
+        return false;
+    };
+    let image = egui::Image::new(url).show_loading_spinner(false);
+    let Ok(egui::load::TexturePoll::Ready { texture }) = image.load_for_size(&ctx, cover.size()) else {
+        return false;
+    };
+    let depth = 3.2_f32;
+    let tilt = 0.55_f32;
+    let half = side * 0.5;
+    let corners: Vec<egui::Pos2> = [(-1.0_f32, -1.0_f32), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+        .iter()
+        .map(|(x, y)| {
+            let z = (x * nx + y * ny) * tilt;
+            let f = depth / (depth + z);
+            pos2(cover.center().x + x * half * f, cover.center().y + y * half * f)
+        })
+        .collect();
+    // A soft shadow right behind the card, wider the further it falls.
+    for layer in 0..10 {
+        let grow = layer as f32 * 3.5;
+        let points: Vec<egui::Pos2> = corners
+            .iter()
+            .map(|p| {
+                let out = (*p - cover.center()).normalized();
+                *p + out * grow + vec2(0.0, 8.0)
+            })
+            .collect();
+        ui.painter().add(egui::Shape::convex_polygon(
+            points,
+            Color32::from_black_alpha(9),
+            egui::Stroke::NONE,
+        ));
+    }
+    let n = 12;
+    let mut mesh = egui::epaint::Mesh::with_texture(texture.id);
+    for row in 0..=n {
+        for column_index in 0..=n {
+            let u = column_index as f32 / n as f32;
+            let v = row as f32 / n as f32;
+            let x = u * 2.0 - 1.0;
+            let y = v * 2.0 - 1.0;
+            let z = (x * nx + y * ny) * tilt;
+            let f = depth / (depth + z);
+            let shade = (255.0 - z * 70.0).clamp(150.0, 255.0) as u8;
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: pos2(cover.center().x + x * half * f, cover.center().y + y * half * f),
+                uv: pos2(u, v),
+                color: Color32::from_gray(shade),
+            });
+        }
+    }
+    for row in 0..n {
+        for column_index in 0..n {
+            let a = (row * (n + 1) + column_index) as u32;
+            let b = a + 1;
+            let c = a + (n + 1) as u32;
+            let d = c + 1;
+            mesh.indices.extend_from_slice(&[a, b, c, b, d, c]);
+        }
+    }
+    ui.painter().add(egui::Shape::mesh(mesh));
+    // The border follows the tilted card's own corners.
+    if border {
+        ui.painter().add(egui::Shape::closed_line(
+            corners,
+            egui::Stroke::new(3.0, Color32::from_white_alpha(230)),
+        ));
+    }
+    true
+}
+
 fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying>) {
     let painter = ui.painter().with_clip_rect(rect);
     let palette = app.palette;
@@ -3405,18 +3852,48 @@ fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying
     };
     let cover = Rect::from_center_size(resting.center(), resting.size() * (1.0 + 0.07 * swell));
     let loader = app.backend.art().clone();
-    super::widgets::paint_cover(
-        ui,
-        &palette,
-        now.art_url.as_deref().or(now.art_small.as_deref()),
-        cover,
-        0.0,
-        Icon::Music,
-        Some(&loader),
-    );
+    // Floating and tilting to the pointer, the same card as the full-screen
+    // lyrics have.
+    let floating = app.settings.lyrics_flag(crate::settings::Settings::LYRICS_FLOAT_ART);
+    let url = now.art_url.clone().or_else(|| now.art_small.clone());
+    let tilted = tilted_cover(ui, cover, url.as_deref(), floating, app.settings.vis_art_border);
+    if !tilted {
+        super::widgets::paint_cover(
+            ui,
+            &palette,
+            url.as_deref(),
+            cover,
+            0.0,
+            Icon::Music,
+            Some(&loader),
+        );
+    }
     big_art_missing_mark(app, ui, cover, "fullscreen-vis");
-    // The words keep to the card's resting size.
+    if app.settings.vis_art_border && !tilted {
+        painter.rect_stroke(
+            cover.expand(1.5),
+            3.0,
+            egui::Stroke::new(3.0, Color32::from_white_alpha(230)),
+            egui::StrokeKind::Middle,
+        );
+    }
+    // With the controls up, the song's name lives on their card (above the
+    // controls), so it is not written a second time under the art. The extra
+    // visualizer window has its own controls card too.
+    let in_extra: bool = ui.ctx().data(|data| data.get_temp(egui::Id::new("in-extra-window"))).unwrap_or(false);
+    let _ = in_extra;
+    if app.fullscreen_vis
+        && app.float_slot(super::views_panel::default_float(ui.ctx())).is_some()
+    {
+        return;
+    }
+    // The words keep to the card's resting size, and sit below the lowest the
+    // art can reach: a bounce swells it, and a floating card tips towards the
+    // viewer and grows past its edge.
     let cover = resting;
+    let clear = cover.height()
+        * (if app.settings.lyrics_flag(crate::settings::Settings::LYRICS_BOUNCE_ART) { 0.04 } else { 0.0 }
+            + if floating { 0.18 } else { 0.0 });
     let ink = if app.swirl_art_is_light() {
         Color32::BLACK
     } else {
@@ -3542,7 +4019,7 @@ fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying
     // The bass makes it sway far harder: the low notes of what is playing,
     // smoothed a little so the letters lean into each hit rather than jitter.
     let bass = if now.playing && now.local {
-        let samples = app.winamp.tap.window(crate::vis::FFT_SAMPLES, crate::vis::LAG);
+        let samples = app.audio.tap.window(crate::vis::FFT_SAMPLES, crate::vis::LAG);
         let mut low = 0.0_f32;
         let mut sum = 0.0_f32;
         for x in &samples {
@@ -3555,20 +4032,38 @@ fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying
             ((sum / samples.len() as f32).sqrt() * 4.0).clamp(0.0, 1.0)
         }
     } else {
-        0.0
+        app.music_bass_level()
+    };
+    // Auto-gain: a quiet song or a low volume file moved the text far less
+    // than a loud one. The loudest recent hit sets the scale (it slowly
+    // forgets), so the text reacts to the shape of the music, not its level.
+    let bass = {
+        let id = egui::Id::new("title-bass-peak");
+        let before: f32 = ui.ctx().data(|data| data.get_temp(id)).unwrap_or(0.3);
+        let peak = bass.max(before * 0.998).max(0.3);
+        ui.ctx().data_mut(|data| data.insert_temp(id, peak));
+        (bass / peak * 0.9).clamp(0.0, 1.0)
     };
     let bass = ui
         .ctx()
-        .animate_value_with_time(egui::Id::new("title-bass"), bass, 0.07);
+        .animate_value_with_time(egui::Id::new("title-bass"), bass, 0.05);
     let still = app.settings.vis_text_still;
     let sway = app.settings.vis_sway_preset();
     // On the beat only: the title moves with each hit and holds still between.
-    let gate = if app.settings.vis_sway_beat {
-        ((bass - 0.12) / 0.4).clamp(0.0, 1.0)
-    } else {
-        1.0
-    };
+    let gate = sway_gate(app);
     let strength = app.settings.vis_sway_strength() * gate;
+    // How hard the music is hitting right now, 0 to 1: what the sways follow.
+    // Quiet passages barely move it; only a hard hit gets near the top (the
+    // curve is squared, so a half-strength hit is a quarter of the motion).
+    let hit = ((bass - 0.25) / 0.6).clamp(0.0, 1.0);
+    let punch = hit * hit;
+    // Shake moves the whole text together, never letter by letter.
+    let shake = if still || sway.kind != 4 {
+        vec2(0.0, 0.0)
+    } else {
+        let reach = sway.amp * title_size * strength * punch * (0.5 + 0.9 * punch);
+        vec2((time * 43.0).sin() * reach, (time * 37.0).cos() * reach - punch * 0.05 * title_size * strength)
+    };
     let contrast = if ink == Color32::WHITE { Color32::BLACK } else { Color32::WHITE };
     let outline = !app.settings.vis_text_no_outline;
     let show_artist = !app.settings.vis_text_no_artist && !now.subtitle.is_empty();
@@ -3587,7 +4082,7 @@ fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying
     // Where the title's first line starts, and where the artist goes.
     let (top, artist_top) = match layout {
         // Above the cover, the artist below it.
-        3 => (cover.top() - 18.0 - line_h, cover.bottom() + 14.0),
+        3 => (cover.top() - 18.0 - line_h, cover.bottom() + 14.0 + clear),
         // Beside it: the words as one block, centred on the cover.
         1 | 2 => {
             let block = words_height
@@ -3600,7 +4095,7 @@ fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying
             (top, top + words_height + 8.0)
         }
         // Under it, the artist beneath the title.
-        _ => (cover.bottom() + 18.0, cover.bottom() + 18.0 + line_h + 6.0),
+        _ => (cover.bottom() + 18.0 + clear, cover.bottom() + 18.0 + clear + line_h + 6.0),
     };
     // Each line's left edge: centred on the cover, or flush with the text
     // column beside it.
@@ -3623,27 +4118,23 @@ fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying
             let width = line_width(line);
             let left = line_left(width);
             let y = top + row as f32 * line_h;
+            let vpad = pad * 0.5 + 4.0;
             strips.push(Rect::from_min_max(
-                pos2(left - pad, y - 2.0),
-                pos2(left + width + pad, y + line_h + 4.0),
+                pos2(left - pad, y - vpad),
+                pos2(left + width + pad, y + line_h + vpad),
             ));
         }
         if let Some(artist) = artist.as_ref() {
             let left = line_left(artist.size().x);
             strips.push(Rect::from_min_max(
-                pos2(left - pad, artist_top - 4.0),
-                pos2(left + artist.size().x + pad, artist_top + artist.size().y + 4.0),
+                pos2(left - pad, artist_top),
+                pos2(left + artist.size().x + pad, artist_top + artist.size().y),
             ));
         }
-        if app.settings.vis_back_block {
-            if let Some(first) = strips.first().copied() {
-                let whole = strips.iter().fold(first, |all, strip| all.union(*strip));
-                painter.rect_filled(whole.expand(2.0), round, back);
-            }
-        } else {
-            for strip in strips {
-                painter.rect_filled(strip, round, back);
-            }
+        // Always one block round all of it.
+        if let Some(first) = strips.first().copied() {
+            let whole = strips.iter().fold(first, |all, strip| all.union(*strip));
+            painter.rect_filled(whole.expand(2.0), round, back);
         }
     }
     let mut moving = false;
@@ -3657,14 +4148,17 @@ fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying
         let line_pivot = pos2(x + whole_width / 2.0, line_top + line_h);
         let back_on = app.settings.vis_text_back;
         let back_pad = app.settings.vis_back_pad.clamp(0.0, 40.0);
+        let back_vpad = back_pad * 0.5 + 4.0;
         // With a backing, the letters may not lean past it.
         let max_lean = if back_on {
-            ((back_pad + 3.0) / line_h.max(1.0)).clamp(0.0, 1.0).asin()
+            // The ends of a long line swing up and down as it leans, so the
+            // lean is capped where that stays inside the block.
+            ((back_vpad + 1.0) / (whole_width / 2.0).max(1.0)).clamp(0.0, 1.0).asin()
         } else {
             0.6
         };
         let lean_at = |phase: f32| -> f32 {
-            if still {
+            if still || matches!(sway.kind, 1 | 2 | 4) {
                 return 0.0;
             }
             let damp = if sway.stalk > 0.0 {
@@ -3673,17 +4167,17 @@ fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying
                 (420.0 / whole_width.max(1.0)).clamp(0.3, 1.0)
             };
             let t = time * sway.speed;
-            let bass_lean = 1.0 + 2.0 * bass * sway.bass;
+            let bass_lean = 0.6 + 4.0 * punch * sway.bass;
             (((0.05 * (t * 0.9 - phase * 0.6).sin() + 0.03 * (t * 1.7 - phase * 0.9 + 1.0).sin())
                 * bass_lean
-                + 0.04 * bass * sway.bass * (t * 4.1 - phase * 0.7).sin())
+                + 0.07 * punch * sway.bass * (t * 4.1 - phase * 0.7).sin())
                 * damp
                 * sway.lean
                 * strength)
                 .clamp(-max_lean, max_lean)
         };
         let angle = if sway.stalk > 0.0 { 0.0 } else { lean_at(row as f32) };
-        if !still && (sway.stalk > 0.0 || angle != 0.0 || sway.bob > 0.0) {
+        if !still && (sway.stalk > 0.0 || angle != 0.0 || sway.bob > 0.0 || sway.kind != 0) {
             moving = true;
         }
         let (sin, cos) = angle.sin_cos();
@@ -3701,17 +4195,45 @@ fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying
             let mut bob = if still || sway.bob <= 0.0 {
                 0.0
             } else {
-                (time * 3.0 * sway.speed - i as f32 * 0.55).sin() * sway.bob * h * strength
+                (time * 3.0 * sway.speed - i as f32 * 0.55).sin() * sway.bob * h * strength * (0.3 + 1.6 * punch)
             };
             if back_on {
-                bob = bob.clamp(-3.0, 3.0);
+                bob = bob.clamp(-back_vpad.max(3.0), back_vpad.max(3.0));
             }
-            let origin = pos2(x, line_top + (line_h - h) + bob);
+            // Bounce and slide move letters without turning them. Slide moves a
+            // whole line together so letters never run into each other, and
+            // shake moves everything together.
+            let motion = if still || matches!(sway.kind, 0 | 3) {
+                vec2(0.0, 0.0)
+            } else {
+                let t = time * sway.speed;
+                match sway.kind {
+                    1 => {
+                        let hop = (t * 2.4 - i as f32 * 0.08).sin().powi(2);
+                        let lift = 0.2 * hop + punch * (0.8 + 0.2 * hop);
+                        vec2(0.0, -lift * sway.amp * line_h * strength)
+                    }
+                    2 => vec2(
+                        (t * 1.1 + row as f32 * 0.8).sin() * sway.amp * line_h * strength * (0.25 + punch),
+                        0.0,
+                    ),
+                    _ => shake,
+                }
+            };
+            let motion = if back_on {
+                vec2(motion.x, motion.y.clamp(-back_vpad.max(3.0), back_vpad.max(3.0)))
+            } else {
+                motion
+            };
+            let origin = pos2(x, line_top + (line_h - h) + bob) + motion;
             // Stalk styles: this letter leans about its own foot, a little out
             // of step with its neighbour so the line ripples like wheat.
             let (angle, turn_here): (f32, Box<dyn Fn(egui::Pos2) -> egui::Pos2 + '_>) =
                 if sway.stalk > 0.0 {
-                    let a = lean_at(row as f32 + i as f32 * 0.22);
+                    // Lean: every letter tilts together, so the line slants
+                    // one way and then the other with its feet fixed.
+                    let ripple = if sway.kind == 3 { 0.0 } else { 0.22 };
+                    let a = lean_at(row as f32 + i as f32 * ripple);
                     let foot = pos2(x + w / 2.0, line_top + line_h + bob);
                     let (s2, c2) = a.sin_cos();
                     (
@@ -3753,7 +4275,7 @@ fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying
         }
     }
     if let Some(artist) = artist {
-        let at = pos2(line_left(artist.size().x), artist_top);
+        let at = pos2(line_left(artist.size().x), artist_top) + shake;
         if outline {
             let reach = (artist_size * 0.05).clamp(1.0, 3.0);
             for step in 0..8 {
@@ -4171,7 +4693,7 @@ fn heart_colour(app: &App) -> Color32 {
 
 /// A heart for the playing song, drawn at `centre`. Filled in the cover's
 /// colour when the song is in Liked Songs; a click saves or removes it.
-fn like_heart(app: &mut App, ui: &mut egui::Ui, id: &str, centre: egui::Pos2, size: f32, uri: &str) {
+pub(super) fn like_heart(app: &mut App, ui: &mut egui::Ui, id: &str, centre: egui::Pos2, size: f32, uri: &str) {
     let saved = app.is_saved(uri) == Some(true);
     let rect = Rect::from_center_size(centre, Vec2::splat(size + 10.0));
     let response = ui
@@ -4239,14 +4761,15 @@ pub(super) fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, 
     };
 
     if cover_shown {
-        super::widgets::paint_cover(
+        super::widgets::paint_sticky_cover(
             ui,
             &palette,
+            "bar-cover",
             now.art_small.as_deref().or(now.art_url.as_deref()),
             cover_rect,
             6.0,
             Icon::Music,
-            Some(app.backend.art()),
+            app.backend.art(),
         );
     } else {
         // The big art is showing in the sidebar, and the words sit on it
@@ -4528,14 +5051,10 @@ pub fn now_playing_overlay(app: &mut App, ui: &mut egui::Ui, art: Rect, now: &No
         .on_hover_cursor(egui::CursorIcon::PointingHand);
     {
         let sway = app.settings.vis_sway_preset();
-        let beat_gate = if app.settings.vis_sway_beat {
-            ((app.music_bass_level() - 0.12) / 0.4).clamp(0.0, 1.0)
-        } else {
-            1.0
-        };
+        let beat_gate = sway_gate(app);
         let strength = app.settings.vis_sway_strength() * beat_gate;
         let still = app.settings.vis_text_still;
-        let angle = if still {
+        let angle = if still || matches!(sway.kind, 1 | 2 | 4) {
             0.0
         } else {
             let time = ui.input(|input| input.time) as f32;
@@ -4549,10 +5068,58 @@ pub fn now_playing_overlay(app: &mut App, ui: &mut egui::Ui, art: Rect, now: &No
                 * sway.lean
                 * strength
         };
-        let shape = egui::epaint::TextShape::new(title_pos, title_galley.clone(), palette.text)
+        // Bounce, slide and shake move the whole title without turning it.
+        let motion = if still || matches!(sway.kind, 0 | 3) {
+            vec2(0.0, 0.0)
+        } else {
+            let time = ui.input(|input| input.time) as f32;
+            let t = time * sway.speed;
+            let reach = title_extent.y * sway.amp * strength;
+            let punch = ((app.music_bass_level() - 0.05) / 0.35).clamp(0.0, 1.0);
+            let drive = if sway.kind == 4 { punch * punch } else { 0.25 + 0.75 * punch };
+            match sway.kind {
+                1 => vec2(0.0, -(t * 2.4).sin().abs() * reach * drive),
+                2 => vec2((t * 1.6).sin() * reach * (0.6 + 0.4 * drive), 0.0),
+                _ => vec2((time * 41.0).sin() * reach * drive, (time * 37.0).cos() * reach * drive),
+            }
+        };
+        // The title stays inside the card however it sways: the tilt is eased
+        // until the turned words fit, then the words are slid back inside.
+        let size = title_galley.size();
+        let bounds = card.shrink(2.0);
+        let corners = |angle: f32, at: egui::Pos2| -> Rect {
+            let pivot = at + vec2(size.x / 2.0, size.y);
+            let (s, c) = angle.sin_cos();
+            let turned = [vec2(0.0, 0.0), vec2(size.x, 0.0), vec2(0.0, size.y), vec2(size.x, size.y)]
+                .map(|corner| {
+                    let d = at + corner - pivot;
+                    pivot + vec2(d.x * c - d.y * s, d.x * s + d.y * c)
+                });
+            Rect::from_points(&turned)
+        };
+        let mut angle = angle;
+        let mut at = title_pos + motion;
+        for _ in 0..8 {
+            let spread = corners(angle, at);
+            if angle == 0.0 || (spread.width() <= bounds.width() + 0.5 && spread.height() <= bounds.height() + 0.5) {
+                break;
+            }
+            angle *= 0.6;
+        }
+        let spread = corners(angle, at);
+        let shift = vec2(
+            if spread.left() < bounds.left() { bounds.left() - spread.left() }
+            else if spread.right() > bounds.right() { bounds.right() - spread.right() }
+            else { 0.0 },
+            if spread.top() < bounds.top() { bounds.top() - spread.top() }
+            else if spread.bottom() > bounds.bottom() { bounds.bottom() - spread.bottom() }
+            else { 0.0 },
+        );
+        at += shift;
+        let shape = egui::epaint::TextShape::new(at, title_galley.clone(), palette.text)
             .with_angle_and_anchor(angle, egui::Align2::CENTER_BOTTOM);
         ui.painter().add(shape);
-        if angle != 0.0 {
+        if angle != 0.0 || motion != vec2(0.0, 0.0) {
             ui.ctx().request_repaint();
         }
     }
@@ -5085,26 +5652,6 @@ fn transport_impl(
             }
         }
     }
-    // A small grip on the bar's right end: drag it to make the bar longer or shorter.
-    let grip = Rect::from_center_size(
-        pos2(slider_left + slider_width + 6.0, row_cy),
-        vec2(10.0, 22.0 * k),
-    );
-    let grab = ui.interact(grip, egui::Id::new("seek-grip"), Sense::drag());
-    if grab.hovered() || grab.dragged() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-    }
-    if grab.hovered() || grab.dragged() || ui.rect_contains_pointer(row) {
-        ui.painter().rect_filled(
-            Rect::from_center_size(grip.center(), vec2(4.0, 16.0)),
-            2.0,
-            palette.text.gamma_multiply(0.6),
-        );
-    }
-    if grab.dragged() {
-        let wanted = (slider_width + grab.drag_delta().x).clamp(100.0, full_width);
-        app.actions.push(Action::SetSeekWidth(wanted));
-    }
     let mut seek_right = slider_left + slider_width + 14.0;
     let after = match mode {
         0 => Some(end_text.clone()),
@@ -5292,14 +5839,6 @@ fn row_menus(app: &mut App, ui: &mut egui::Ui, row: Rect, zones: [Rect; 3], name
                             super::widgets::menu_separator(ui, &palette);
                             arrange_strip(app, ui, &palette);
                             anchor_rows(app, ui, &palette, None);
-                            if super::widgets::menu_item(
-                                ui,
-                                &palette,
-                                None,
-                                &gettext(app.locale, "Default controls"),
-                            ) {
-                                app.actions.push(Action::ResetBlockNudge);
-                            }
                             super::widgets::menu_separator(ui, &palette);
                             bar_rows(app, ui, &palette);
                         }
@@ -5487,6 +6026,136 @@ fn bar_rows(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette) {
     }
 }
 
+/// The right-click menu of a volume button, the same in the pop-out controls
+/// and in the bar: change it, add one, remove it (never the last one), and
+/// open the equalizer.
+fn preset_menu(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette, list: &[u8], index: usize, shown: u8) {
+    if index >= list.len() {
+        return;
+    }
+    ui.set_width(210.0);
+    theme::subtle(ui, palette, &format!("{}% BUTTON", list[index]));
+    if super::widgets::menu_item(ui, palette, None, &format!("Set to {shown}% (current)")) {
+        let mut next = list.to_vec();
+        next[index] = shown;
+        app.actions.push(Action::SetVolumePresets(next));
+    }
+    if list.len() < 4 && super::widgets::menu_item(ui, palette, None, &gettext(app.locale, "Add button at current volume")) {
+        let mut next = list.to_vec();
+        next.push(shown);
+        app.actions.push(Action::SetVolumePresets(next));
+    }
+    // The last button cannot be removed: there is always one.
+    if list.len() > 1 && super::widgets::menu_item(ui, palette, None, &gettext(app.locale, "Remove button")) {
+        let mut next = list.to_vec();
+        next.remove(index);
+        app.actions.push(Action::SetVolumePresets(next));
+    }
+    if super::widgets::menu_item(ui, palette, None, "equalizer") {
+        ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("eq-window-open"), true));
+        ui.close();
+    }
+}
+
+/// The menu on the volume's speaker and percentage: add a volume button, or
+/// open the equalizer. (Right-clicking the bar itself jumps to that spot.)
+fn volume_menu(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette, shown: u8) {
+    let list = app.settings.volume_presets_value();
+    ui.set_width(210.0);
+    theme::subtle(ui, palette, "volume buttons");
+    if list.len() < 4 && super::widgets::menu_item(ui, palette, None, &gettext(app.locale, "Add button at current volume")) {
+        let mut next = list.clone();
+        next.push(shown);
+        app.actions.push(Action::SetVolumePresets(next));
+    }
+    if super::widgets::menu_item(ui, palette, None, "equalizer") {
+        ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("eq-window-open"), true));
+        ui.close();
+    }
+}
+
+/// The equalizer in a small window of its own, opened from a volume button's
+/// right-click menu. Drawn once per frame wherever the buttons are.
+fn eq_window(app: &mut App, ctx: &egui::Context) {
+    let open_id = egui::Id::new("eq-window-open");
+    let mut open = ctx.data(|data| data.get_temp::<bool>(open_id)).unwrap_or(false);
+    if !open {
+        return;
+    }
+    let time = ctx.input(|input| input.time);
+    let drawn_id = egui::Id::new("eq-window-drawn");
+    if ctx.data(|data| data.get_temp::<f64>(drawn_id)) == Some(time) {
+        return;
+    }
+    ctx.data_mut(|data| data.insert_temp(drawn_id, time));
+    let palette = app.palette;
+    egui::Window::new("")
+        .id(egui::Id::new("eq-window"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .constrain(true)
+        .frame(super::widgets::menu_frame(&palette))
+        .show(ctx, |ui| {
+            super::settings::eq_panel(app, ui);
+        });
+    ctx.data_mut(|data| data.insert_temp(open_id, open));
+}
+
+/// The volume buttons for the pop-out panel: click one to jump to it,
+/// right-click one for its settings and the equalizer.
+pub(super) fn popout_presets(app: &mut App, ui: &mut egui::Ui, rect: Rect, presets: &[u8]) {
+    let palette = app.palette;
+    let now = app.now_playing();
+    let volume = now
+        .as_ref()
+        .map(|now| now.volume_percent)
+        .unwrap_or_else(|| crate::app::volume_to_percent(app.local.volume));
+    let shown = match app.volume_preview {
+        Some(fraction) => (fraction * 100.0).round() as u8,
+        None => volume,
+    };
+    let adjustable = now.as_ref().is_none_or(|now| now.can_set_volume);
+    // Small chips squeezed into whatever height the row has, centred over
+    // the volume bar, so they never need a row of their own.
+    let h = rect.height().clamp(10.0, 18.0);
+    let gap = 3.0;
+    let n = presets.len().max(1) as f32;
+    let w = ((rect.width() - gap * (n - 1.0)) / n).clamp(18.0, 34.0);
+    let total = w * n + gap * (n - 1.0);
+    let mut x = rect.center().x - total / 2.0;
+    for (index, preset) in presets.iter().enumerate() {
+        let cell = Rect::from_min_size(pos2(x, rect.center().y - h / 2.0), vec2(w, h));
+        x += w + gap;
+        let response = ui.interact(cell.expand(2.0), ui.id().with(("popout-preset", index)), Sense::click());
+        let active = shown == *preset;
+        let fill = if active {
+            palette.accent.gamma_multiply(0.35)
+        } else if response.hovered() {
+            palette.surface_hover
+        } else {
+            palette.surface
+        };
+        ui.painter().rect_filled(cell, egui::CornerRadius::same(5), fill);
+        ui.painter().text(
+            cell.center(),
+            egui::Align2::CENTER_CENTER,
+            format!("{preset}"),
+            theme::regular((h * 0.62).clamp(8.5, 11.5)),
+            if active { palette.text } else { palette.secondary },
+        );
+        if response.clicked() && adjustable {
+            app.volume_preview = None;
+            app.actions.push(Action::SetVolume(*preset));
+        }
+        let list = presets.to_vec();
+        egui::Popup::context_menu(&response)
+            .frame(super::widgets::menu_frame(&palette))
+            .show(|ui| preset_menu(app, ui, &palette, &list, index, shown));
+    }
+    eq_window(app, ui.ctx());
+}
+
 fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, presets: &[u8]) {
     let palette = app.palette;
     ui.spacing_mut().item_spacing.x = 6.0;
@@ -5550,29 +6219,6 @@ fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, presets: &
             app.actions.push(Action::SetVolume(percent));
         }
     });
-    // A small grip on the volume bar's right end, like the song bar's: drag
-    // it to make the bar longer or shorter.
-    {
-        let grip = Rect::from_center_size(
-            pos2(slider_origin.x + slider_w + 3.0, slider_origin.y),
-            vec2(8.0, 22.0),
-        );
-        let grab = ui.interact(grip, egui::Id::new("volume-grip"), Sense::drag());
-        if grab.hovered() || grab.dragged() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-        }
-        if grab.hovered() || grab.dragged() || ui.rect_contains_pointer(ui.max_rect()) {
-            ui.painter().rect_filled(
-                Rect::from_center_size(grip.center(), vec2(3.0, 14.0)),
-                1.5,
-                palette.text.gamma_multiply(0.6),
-            );
-        }
-        if grab.dragged() {
-            let wanted = (slider_w + grab.drag_delta().x).clamp(60.0, 400.0);
-            app.actions.push(Action::SetVolumeWidth(wanted));
-        }
-    }
     if adjustable && let Some(next) = wheel_volume(ui, controls.response.rect, shown) {
         app.volume_preview = None;
         app.actions.push(Action::SetVolume(next));
@@ -5628,28 +6274,9 @@ fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, presets: &
         let list = presets.to_vec();
         egui::Popup::context_menu(&response)
             .frame(super::widgets::menu_frame(&palette))
-            .show(|ui| {
-                ui.set_width(210.0);
-                theme::subtle(ui, &palette, &format!("{preset}% BUTTON"));
-                if super::widgets::menu_item(ui, &palette, None, &format!("Set to {shown}% (current)")) {
-                    let mut next = list.clone();
-                    next[index] = shown;
-                    app.actions.push(Action::SetVolumePresets(next));
-                }
-                if list.len() < 4
-                    && super::widgets::menu_item(ui, &palette, None, &gettext(app.locale, "Add button at current volume"))
-                {
-                    let mut next = list.clone();
-                    next.push(shown);
-                    app.actions.push(Action::SetVolumePresets(next));
-                }
-                if super::widgets::menu_item(ui, &palette, None, &gettext(app.locale, "Remove button")) {
-                    let mut next = list.clone();
-                    next.remove(index);
-                    app.actions.push(Action::SetVolumePresets(next));
-                }
-            });
+            .show(|ui| preset_menu(app, ui, &palette, &list, index, shown));
     }
+    eq_window(app, ui.ctx());
     if presets.is_empty()
         && chip(ui, &palette, "+", false, 40.0).clicked()
     {
@@ -5858,9 +6485,24 @@ pub(super) fn volume_row(app: &mut App, ui: &mut egui::Ui, rect: Rect) {
     if track.width() < 30.0 {
         return;
     }
-    let response = ui.interact(track.expand2(vec2(6.0, 0.0)), egui::Id::new("pop-volume-slider"), Sense::click_and_drag());
+    // In the pop-out the bar only answers a right-click, a double-click or the
+    // wheel (see lyrics.rs), so a press and drag moves the panel instead.
+    let locked = ui.data(|data| data.get_temp::<bool>(egui::Id::new("sliders-locked"))).unwrap_or(false);
+    ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("pop-volume-slider").with("rect"), track));
+    let response = ui.interact(
+        track.expand2(vec2(6.0, 0.0)),
+        egui::Id::new("pop-volume-slider"),
+        // Still a drag target when locked, so the panel's own handle does not
+        // also move (lyrics.rs moves the panel for a drag that starts here).
+        Sense::click_and_drag(),
+    );
+    let adjustable_now = adjustable && !locked;
+    if adjustable && let Some(next) = wheel_volume_at(ui, rect.expand2(vec2(0.0, 4.0)), shown) {
+        app.volume_preview = None;
+        app.actions.push(Action::SetVolume(next));
+    }
     let at = |x: f32| ((x - track.left()) / track.width()).clamp(0.0, 1.0);
-    if adjustable && let Some(p) = response.interact_pointer_pos().filter(|_| response.dragged() || response.clicked()) {
+    if adjustable_now && let Some(p) = response.interact_pointer_pos().filter(|_| response.dragged() || response.clicked()) {
         let value = at(p.x);
         if response.dragged() {
             app.volume_preview = Some(value);
@@ -5869,10 +6511,10 @@ pub(super) fn volume_row(app: &mut App, ui: &mut egui::Ui, rect: Rect) {
             }
         }
     }
-    if adjustable && response.drag_stopped() {
+    if adjustable_now && response.drag_stopped() {
         let value = app.volume_preview.take().unwrap_or(shown as f32 / 100.0);
         app.actions.push(Action::SetVolume((value * 100.0).round() as u8));
-    } else if adjustable && response.clicked() && let Some(p) = response.interact_pointer_pos() {
+    } else if adjustable_now && response.clicked() && let Some(p) = response.interact_pointer_pos() {
         app.volume_preview = None;
         app.actions.push(Action::SetVolume((at(p.x) * 100.0).round() as u8));
     }
@@ -5893,5 +6535,17 @@ pub(super) fn volume_row(app: &mut App, ui: &mut egui::Ui, rect: Rect) {
     );
     if hot {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    // Right-click the speaker or the percentage for the volume menu (add a
+    // button, the equalizer). The bar itself keeps right-click as "jump here".
+    let zones = [
+        icon_box.expand(5.0),
+        Rect::from_min_max(pos2(track.right() + 8.0, rect.top()), pos2(rect.right() + 4.0, rect.bottom())),
+    ];
+    for (i, zone) in zones.iter().enumerate() {
+        let response = ui.interact(*zone, egui::Id::new(("pop-volume-menu", i)), Sense::click());
+        egui::Popup::context_menu(&response)
+            .frame(super::widgets::menu_frame(&palette))
+            .show(|ui| volume_menu(app, ui, &palette, shown));
     }
 }
