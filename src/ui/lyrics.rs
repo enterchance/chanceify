@@ -1410,7 +1410,10 @@ pub(super) fn controls_box_inner(app: &mut App, ui: &mut egui::Ui, top_left: egu
     // A drag that began on a bar keeps moving the panel until the button is
     // let go, even though the bar moves away from where the press was (asking
     // "is the press still on the bar" dropped the panel after a few pixels).
-    let drag_flag = egui::Id::new("popout-bar-dragging");
+    // Kept per window, so the extra visualizer window and the main one never
+    // share a drag.
+    let viewport = ctx.viewport_id();
+    let drag_flag = egui::Id::new(("popout-bar-dragging", viewport));
     let mut dragging = ctx.data(|data| data.get_temp::<bool>(drag_flag)).unwrap_or(false);
     if pressed {
         dragging = pos.is_some_and(|p| bars.iter().any(|bar| bar.contains(p)));
@@ -1419,8 +1422,7 @@ pub(super) fn controls_box_inner(app: &mut App, ui: &mut egui::Ui, top_left: egu
         dragging = false;
     }
     ctx.data_mut(|data| data.insert_temp(drag_flag, dragging));
-    let bar_drag = if dragging { delta } else { egui::Vec2::ZERO };
-    ctx.data_mut(|data| data.insert_temp(egui::Id::new("popout-bar-drag"), bar_drag));
+    let _ = delta;
     if now.playing {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
     }

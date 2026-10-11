@@ -1070,6 +1070,8 @@ pub struct Settings {
     pub mini_restore_size: Option<[f32; 2]>,
     pub float_big: Option<[f32; 3]>,
     pub float_lyrics: Option<[f32; 3]>,
+    /// Where the extra visualizer window keeps its controls.
+    pub float_extra: Option<[f32; 3]>,
     /// Calm mode: how much of the cover shows soft (0 sharp, 1 fully soft).
     pub calm_blur: f32,
     /// Hovering a theme in the list shows it for the moment.
@@ -1505,6 +1507,7 @@ impl Default for Settings {
             mini_restore_size: None,
             float_big: None,
             float_lyrics: None,
+            float_extra: None,
             calm_blur: 0.8,
             theme_point_preview: false,
             discord_playlist: false,

@@ -351,6 +351,8 @@ pub struct App {
     /// Which view's visualizer settings are loaded: 0 normal, 1 full screen
     /// visualizer, 2 full screen lyrics. None until the first frame.
     pub vis_view_now: Option<u8>,
+    /// True only while the extra visualizer window is being drawn.
+    pub extra_drawing: bool,
     /// The extra visualizer window is open.
     pub extra_vis: bool,
     /// The visualizer settings panel open inside the extra window.
@@ -1050,6 +1052,7 @@ impl App {
             calm_mode: false,
             lastfm_song_count: 0,
             vis_view_now: None,
+            extra_drawing: false,
             extra_vis: false,
             extra_vis_panel: false,
             extra_mode: 0,
@@ -9670,6 +9673,9 @@ impl App {
         // everywhere: changing the view never rescales it.
         let width = self.settings.float_controls.map_or(default[2], |slot| slot[2]);
         let sized = |slot: [f32; 3]| [slot[0], slot[1], width];
+        if self.extra_drawing {
+            return Some(sized(self.settings.float_extra.unwrap_or(default)));
+        }
         match self.float_mode() {
             2 => Some(sized(self.settings.float_lyrics.unwrap_or(default))),
             1 => Some(sized(self.settings.float_big.unwrap_or(default))),
@@ -10848,6 +10854,17 @@ impl App {
                     _ => self.settings.float_controls = place,
                 }
                 // One size for every view: the new width goes to all of them.
+                if let Some([_, _, width]) = place {
+                    for slot in [&mut self.settings.float_controls, &mut self.settings.float_big, &mut self.settings.float_lyrics] {
+                        if let Some(slot) = slot.as_mut() {
+                            slot[2] = width;
+                        }
+                    }
+                }
+                self.mark_settings_dirty();
+            }
+            Action::SetFloatExtra(place) => {
+                self.settings.float_extra = place;
                 if let Some([_, _, width]) = place {
                     for slot in [&mut self.settings.float_controls, &mut self.settings.float_big, &mut self.settings.float_lyrics] {
                         if let Some(slot) = slot.as_mut() {

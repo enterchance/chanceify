@@ -1441,6 +1441,8 @@ pub enum Action {
     CloseExtraWindows,
     /// Shows, moves, resizes or puts away the pop-out controls.
     SetFloatControls(Option<[f32; 3]>),
+    /// The same, for the extra visualizer window's own panel.
+    SetFloatExtra(Option<[f32; 3]>),
     SaveMyView,
     ApplyMyView,
     /// The Views disc was dragged to this place (or `None`: back to its own).

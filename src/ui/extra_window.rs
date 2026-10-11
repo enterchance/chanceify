@@ -180,7 +180,9 @@ pub fn show(app: &mut App, ctx: &Context) {
             let detached = app.settings.float_detached;
             app.settings.float_detached = false;
             app.fullscreen_vis = true;
+            app.extra_drawing = true;
             super::views_panel::floating_controls(app, &ctx);
+            app.extra_drawing = false;
             app.fullscreen_vis = saved_full;
             app.settings.float_detached = detached;
         }

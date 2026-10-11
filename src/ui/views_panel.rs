@@ -287,7 +287,14 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
             {
                 let side = if lyrics_page { 44.0 } else { (outer.width() * 0.26).clamp(64.0, 120.0) };
                 let pad = 8.0;
-                let top = (outer.top() - side - pad * 2.0 - 8.0).max(screen.top() + 4.0 + pad);
+                // Above the controls; where that would be cut off by the top of
+                // the window, below them instead.
+                let above_top = outer.top() - side - pad * 2.0 - 8.0;
+                let top = if above_top >= screen.top() + 4.0 + pad {
+                    above_top
+                } else {
+                    outer.bottom() + 8.0 + pad
+                };
                 let cover = Rect::from_min_size(egui::pos2(outer.left() + pad, top), egui::vec2(side, side));
                 let palette = app.palette;
                 let text_left = if lyrics_page { outer.left() + 14.0 } else { cover.right() + 12.0 };
@@ -395,14 +402,32 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
             if grip_response.hovered() || grip_response.dragged() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
             }
-            let bar_drag: egui::Vec2 = ui.ctx().data(|data| data.get_temp(Id::new("popout-bar-drag"))).unwrap_or(egui::Vec2::ZERO);
-            if grip_response.dragged() || card_dragging || bar_drag != egui::Vec2::ZERO {
-                let to = top_left + grip_response.drag_delta() + card_drag + bar_drag;
+            // The panel follows the pointer exactly: where it was grabbed is
+            // remembered, and every frame it is put at pointer minus that, so
+            // it moves at the pointer's own speed whichever part is held (the
+            // handle, the card or a bar), however the frames are paced.
+            let bar_dragging = ui
+                .ctx()
+                .data(|data| data.get_temp::<bool>(Id::new(("popout-bar-dragging", vp))))
+                .unwrap_or(false);
+            let grab_key = Id::new(("pop-out-grab", vp));
+            let pointer = ui.ctx().input(|input| input.pointer.latest_pos());
+            if (grip_response.dragged() || card_dragging || bar_dragging)
+                && let Some(p) = pointer
+            {
+                let grab = ui
+                    .ctx()
+                    .data(|data| data.get_temp::<egui::Vec2>(grab_key))
+                    .unwrap_or(p - top_left);
+                ui.ctx().data_mut(|data| data.insert_temp(grab_key, grab));
+                let to = p - grab;
                 top_left = egui::pos2(
                     to.x.clamp(screen.left(), (screen.right() - width).max(screen.left())),
                     to.y.clamp(screen.top(), (screen.bottom() - outer.height()).max(screen.top())),
                 );
                 change = Some(Some([top_left.x, top_left.y, width]));
+            } else {
+                ui.ctx().data_mut(|data| data.remove::<egui::Vec2>(grab_key));
             }
             // Resizable from any edge or corner. The sides widen it (the left
             // one moves it so the far edge stays put); the bottom makes it
@@ -498,7 +523,12 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
             });
         });
     if let Some(place) = change {
-        app.actions.push(Action::SetFloatControls(place));
+        // The extra visualizer window keeps its own place for the panel.
+        if app.extra_drawing {
+            app.actions.push(Action::SetFloatExtra(place));
+        } else {
+            app.actions.push(Action::SetFloatControls(place));
+        }
     }
 }
 
@@ -544,8 +574,16 @@ fn detached_controls(app: &mut App, ctx: &Context) {
         }
         // The window is exactly the panel, whatever size it has been scaled to.
         let size = ctx.content_rect().size();
-        if (size.x - width).abs() > 1.0 || (size.y - height).abs() > 1.0 {
+        // Asked for once per size, not every frame: a window that cannot be
+        // exactly that size (rounding on a scaled screen) would otherwise be
+        // told again each frame and shake.
+        let size_key = Id::new("detached-asked-size");
+        let asked: Option<egui::Vec2> = ctx.data(|data| data.get_temp(size_key));
+        if ((size.x - width).abs() > 1.0 || (size.y - height).abs() > 1.0)
+            && asked.is_none_or(|asked| (asked.x - width).abs() > 0.5 || (asked.y - height).abs() > 0.5)
+        {
             ctx.send_viewport_cmd(ViewportCommand::InnerSize(egui::vec2(width, height)));
+            ctx.data_mut(|data| data.insert_temp(size_key, egui::vec2(width, height)));
         }
         egui::CentralPanel::default()
             .frame(Frame::new().fill(app.palette.window))
@@ -616,10 +654,18 @@ fn detached_controls(app: &mut App, ctx: &Context) {
                 }
                 let _ = super::lyrics::controls_box_inner(app, ui, egui::pos2(0.0, card_h), width, false);
                 // A press that begins on a bar drags the window too.
-                let bar_drag: egui::Vec2 = ctx.data(|data| data.get_temp(Id::new("popout-bar-drag"))).unwrap_or(egui::Vec2::ZERO);
-                if bar_drag != egui::Vec2::ZERO {
+                // Once, when the press lands (asking again every frame made the
+                // window judder).
+                let own_vp = ctx.viewport_id();
+                let bar_dragging = ctx
+                    .data(|data| data.get_temp::<bool>(Id::new(("popout-bar-dragging", own_vp))))
+                    .unwrap_or(false);
+                let was_key = Id::new("detached-bar-was");
+                let was = ctx.data(|data| data.get_temp::<bool>(was_key)).unwrap_or(false);
+                if bar_dragging && !was {
                     ctx.send_viewport_cmd(ViewportCommand::StartDrag);
                 }
+                ctx.data_mut(|data| data.insert_temp(was_key, bar_dragging));
                 // Scaling: the bottom-right corner, like the one in the app.
                 let corner = Rect::from_min_size(body.max - egui::vec2(18.0, 18.0), egui::vec2(18.0, 18.0));
                 let handle = ui.interact(corner, Id::new("detached-corner"), egui::Sense::drag());
