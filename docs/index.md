@@ -9,7 +9,7 @@ needs spotify premium.
 ## get it
 
 1. download `chanceify.exe` from [releases](https://github.com/madlygeeked/chanceify/releases)
-2. run it. [virustotal](https://www.virustotal.com)
+2. run it. [virustotal](https://www.virustotal.com/gui/file/69fea436120c0f9e6be32e125f2fdeec441a8b1c47d15d533e255e88557319c0)
 
 ## features
 
@@ -23,7 +23,6 @@ needs spotify premium.
 - **views.** click the disc to switch parts of the screen on or off.
 - **keybinds.** every key can be changed.
 - **right-click anything** to bring up settings, and hover any button to see what it does.
-- **gallery.** [pictures of everything]({{ '/gallery/' | relative_url }}).
 
 {% assign anyshots = site.static_files | where_exp: "f", "f.path contains '/shots/'" %}
 {% if anyshots.size > 0 %}
