@@ -175,9 +175,25 @@ impl TrackColumns {
         if self.title_w.is_finite() && self.title_w > 0.0 { self.title_w.clamp(200.0, 1400.0) } else { 460.0 }
     }
 
-    /// How wide the length column is (44 to 200).
+    /// How wide the length column is: always the same, it only ever holds a
+    /// time such as 4:13 (or 1:02:03).
     pub fn length_width(&self) -> f32 {
-        if self.length_w.is_finite() && self.length_w > 0.0 { self.length_w.clamp(44.0, 200.0) } else { 56.0 }
+        60.0
+    }
+
+    /// The tempo column is always as wide as three digits need.
+    pub const BPM_WIDTH: f32 = 48.0;
+
+    /// The narrowest a column is drawn, so what it holds always fits without
+    /// being cut: "11 months ago" and the heading "date added" need more than
+    /// the general minimum.
+    pub fn min_width(column: crate::model::SortColumn) -> f32 {
+        match column {
+            crate::model::SortColumn::Added => 100.0,
+            crate::model::SortColumn::Release => 84.0,
+            crate::model::SortColumn::Bpm => Self::BPM_WIDTH,
+            _ => Self::MIN,
+        }
     }
 
     /// Title first, then the others in the order they have always had.
@@ -275,10 +291,12 @@ impl TrackColumns {
             crate::model::SortColumn::Genre => 0.0,
             _ => 0.0,
         };
-        if raw.is_finite() {
-            raw.clamp(0.0, Self::MAX)
-        } else {
+        if !raw.is_finite() || raw <= 0.0 {
             0.0
+        } else if column == crate::model::SortColumn::Bpm {
+            Self::BPM_WIDTH
+        } else {
+            raw.clamp(Self::min_width(column), Self::MAX)
         }
     }
 

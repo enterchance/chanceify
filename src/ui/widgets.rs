@@ -1775,7 +1775,7 @@ fn fitted_galley(
 /// ellipsis rather than running into the next column.
 fn paint_cell(painter: &egui::Painter, left: f32, right: f32, cy: f32, text: &str, size: f32, color: Color32) {
     let avail = (right - left - 8.0).max(10.0);
-    let galley = fitted_galley(painter, text, &theme::regular(size), 8.0, avail, color);
+    let galley = fitted_galley(painter, text, &theme::regular(size), 5.0, avail, color);
     painter.galley(pos2(left, cy - galley.size().y / 2.0), galley, color);
 }
 
@@ -1909,7 +1909,7 @@ const TITLE_MIN: f32 = 150.0;
 /// Lets the shown columns share `region` between them: the song names count
 /// double, every other column once, so a wide window fills out evenly.
 pub(crate) fn spread_columns(laid: &mut Columns, region: f32) {
-    let shown = [laid.playlists, laid.album, laid.added, laid.release, laid.bpm]
+    let shown = [laid.playlists, laid.album, laid.added, laid.release]
         .iter()
         .filter(|w| **w > 0.0)
         .count();
@@ -1922,7 +1922,6 @@ pub(crate) fn spread_columns(laid: &mut Columns, region: f32) {
         &mut laid.album,
         &mut laid.added,
         &mut laid.release,
-        &mut laid.bpm,
     ] {
         if *width > 0.0 {
             *width = each;
@@ -2836,7 +2835,7 @@ fn track_row_contents(
             // column read at a glance while scrolling. 104 is what the
             // record is.
             let label = format!("{}", tempo.round());
-            let galley = fitted_galley(&painter, &label, &theme::regular(13.0), 8.0, (cell.width() - 8.0).max(10.0), palette.secondary);
+            let galley = fitted_galley(&painter, &label, &theme::regular(13.0), 5.0, (cell.width() - 8.0).max(10.0), palette.secondary);
             let at = pos2(cell.left(), cell.center().y - galley.size().y / 2.0);
             painter.galley(at, galley, palette.secondary);
         }
@@ -3490,6 +3489,10 @@ fn column_divider(
     // the topmost always takes the click.
     placed: &mut Vec<f32>,
 ) -> Option<egui::Response> {
+    // The length and the tempo are always the same width.
+    if matches!(column, crate::model::SortColumn::Duration | crate::model::SortColumn::Bpm) {
+        return None;
+    }
     if x <= rect.left() + 20.0 || x >= rect.right() - 20.0 {
         return None;
     }
@@ -3544,7 +3547,7 @@ fn column_divider(
                     columns.length_w
                 }
                 _ => {
-                    let width = (columns.width(column) + sign).max(crate::settings::TrackColumns::MIN);
+                    let width = (columns.width(column) + sign).max(crate::settings::TrackColumns::min_width(column));
                     columns.set(column, width);
                     width
                 }
@@ -3623,10 +3626,6 @@ fn column_divider(
     // A right-click on the handle is a right-click on the header: the
     // handle sits on top of it and would otherwise swallow the menu.
     let right_clicked = response.secondary_clicked();
-    let response = response.on_hover_text(gettext(
-        locale,
-        "Drag to resize (hold Shift to make every column the same width), double-click to reset, drag to the far left to hide",
-    ));
     right_clicked.then_some(response)
 }
 
@@ -3676,7 +3675,7 @@ pub fn table_header(
             let avail = (room - 12.0 - arrow_room).max(12.0);
             let galley = glyph
                 .is_none()
-                .then(|| fitted_galley(ui.painter(), text, &font, 8.0, avail, egui::Color32::PLACEHOLDER));
+                .then(|| fitted_galley(ui.painter(), text, &font, 5.0, avail, egui::Color32::PLACEHOLDER));
             let size = galley.as_ref().map_or(vec2(15.0, 15.0), |galley| galley.size());
             let top_left = pos2(x, rect.center().y - size.y / 2.0);
             let head =
