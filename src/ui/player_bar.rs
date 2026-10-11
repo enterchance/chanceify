@@ -772,6 +772,8 @@ fn visualizer(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying>
         let painter = ui.painter().with_clip_rect(rect);
         let strength = if dark { 1.0 } else { LIGHT_STRENGTH };
         let phase = swirl_phase(app, ui, now);
+        // "Reverse the visualizer" turns the swirl's drift around too.
+        let phase = if app.settings.vis_reverse { -phase } else { phase };
         let run = SwirlRun {
             bright: app.settings.swirl_tune_value(10) / 100.0,
             wash: app.settings.swirl_tune_value(11) / 100.0,
@@ -860,6 +862,8 @@ pub(super) fn lyrics_backdrop(
             let painter = ui.painter().with_clip_rect(rect);
             let strength = if dark { 1.0 } else { LIGHT_STRENGTH };
             let phase = swirl_phase(app, ui, now);
+        // "Reverse the visualizer" turns the swirl's drift around too.
+        let phase = if app.settings.vis_reverse { -phase } else { phase };
             let run = SwirlRun {
                 bright: app.settings.swirl_tune_value(10) / 100.0,
                 wash: app.settings.swirl_tune_value(11) / 100.0,
@@ -6084,7 +6088,7 @@ fn eq_window(app: &mut App, ctx: &egui::Context) {
     }
     ctx.data_mut(|data| data.insert_temp(drawn_id, time));
     let palette = app.palette;
-    egui::Window::new("equalizer")
+    egui::Window::new("")
         .id(egui::Id::new("eq-window"))
         .open(&mut open)
         .collapsible(false)

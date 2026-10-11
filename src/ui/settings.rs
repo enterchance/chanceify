@@ -1932,18 +1932,6 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
         });
     }
 
-    if needle.is_empty() || "song lists table columns album cover picture".contains(needle.as_str()) {
-        any_visible = true;
-        section(ui, &palette, "Song lists", |ui| {
-            let mut on = !app.settings.track_columns.hide_cover;
-            if widgets::switch_labeled(ui, &palette, "Show album covers in song lists", &mut on).changed() {
-                app.settings.track_columns.hide_cover = !on;
-                app.mark_settings_dirty();
-            }
-            note(ui, &palette, "Drag the lines between the headings to resize a column, including cover and length. Right-click a heading for the rest.");
-        });
-    }
-
     if needle.is_empty() || "discord rich presence status buttons".contains(needle.as_str()) {
         any_visible = true;
         section(ui, &palette, "Discord", |ui| {
@@ -2181,7 +2169,7 @@ pub(super) fn eq_panel(app: &mut App, ui: &mut egui::Ui) {
     let locale = app.locale;
     ui.set_width(500.0);
     let mut on = app.settings.eq_on;
-    if widgets::switch(ui, &palette, &gettext(locale, "Equalizer"), &mut on).changed() {
+    if widgets::switch(ui, &palette, &gettext(locale, "On"), &mut on).changed() {
         app.actions.push(Action::ToggleEq);
     }
     ui.add_space(6.0);

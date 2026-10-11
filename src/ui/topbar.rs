@@ -548,7 +548,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     ui.painter().circle_filled(dot, 4.5, palette.danger);
                 }
                 let hover = if missing > 0 {
-                    format!("{name}\n{missing} songs need attention (Settings, Unavailable songs)")
+                    format!("{missing} {} unavailable", if missing == 1 { "song" } else { "songs" })
                 } else {
                     name.clone()
                 };

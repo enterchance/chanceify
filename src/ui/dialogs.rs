@@ -411,7 +411,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     if floating {
         let mut open = true;
         let screen = ctx.content_rect();
-        let shown = egui::Window::new("Keybinds")
+        let shown = egui::Window::new("")
             .id(egui::Id::new("dialog"))
             .open(&mut open)
             .order(egui::Order::Foreground)

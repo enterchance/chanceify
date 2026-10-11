@@ -126,10 +126,10 @@ pub const BINDABLE: &[Bindable] = &[
     Bindable { id: "forward10", label: "Seek forward 10 seconds", default: UNSET, action: || Action::SeekBy(10_000) },
     Bindable { id: "sharediscord", label: "Copy the song for Discord", default: UNSET, action: || Action::ShareToDiscord },
     Bindable { id: "lastfmlove", label: "Love the song on Last.fm", default: UNSET, action: || Action::LastfmLove },
-    Bindable { id: "defaultview", label: "Back to the default view", default: Key::Backtick, action: || Action::NormalView },
-    Bindable { id: "calmmode", label: "Calm mode (slow ocean, nothing reacts to the music)", default: Key::Home, action: || Action::ToggleCalm },
-    Bindable { id: "extrawindow", label: "New visualizer window (second monitor)", default: UNSET, action: || Action::ToggleExtraWindow },
-    Bindable { id: "closeextras", label: "Close the extra visualizer window", default: Key::End, action: || Action::CloseExtraWindows },
+    Bindable { id: "defaultview", label: "Default view", default: Key::Backtick, action: || Action::NormalView },
+    Bindable { id: "calmmode", label: "Calm mode", default: Key::Home, action: || Action::ToggleCalm },
+    Bindable { id: "extrawindow", label: "New visualizer window", default: UNSET, action: || Action::ToggleExtraWindow },
+    Bindable { id: "closeextras", label: "Close extra window", default: Key::End, action: || Action::CloseExtraWindows },
     Bindable { id: "queuehover", label: "Queue the song under the pointer", default: UNSET, action: || Action::QueueHovered(false) },
     Bindable { id: "queuehovertop", label: "Queue the song under the pointer, to play next", default: UNSET, action: || Action::QueueHovered(true) },
     Bindable { id: "likehover", label: "Like the song under the pointer", default: UNSET, action: || Action::LikeHovered },
@@ -209,13 +209,13 @@ pub fn read_keys(text: &str) -> Option<std::collections::BTreeMap<String, String
 /// The groups the shortcuts list is shown in, in order, and which shortcut
 /// belongs in each.
 pub const CATEGORIES: &[(&str, &[&str])] = &[
-    ("Views", &["views", "defaultview", "calmmode", "extrawindow", "closeextras", "normalview", "mini", "fullscreen", "lyricsfull", "visshapes", "art", "closewindow"]),
+    ("Views", &["tutorial", "views", "defaultview", "calmmode", "extrawindow", "closeextras", "normalview", "mini", "fullscreen", "lyricsfull", "visshapes", "art", "closewindow"]),
     ("Panels", &["sidebar", "queuelyrics", "queue", "lyrics", "visualizer"]),
     ("Playback", &["playpause", "playspace", "playonly", "pauseonly", "next", "previous", "shuffle", "repeat", "lastfmlove", "sharediscord", "queuehover", "queuehovertop", "likehover", "likeplaying"]),
     ("Volume", &["mute", "volup", "voldown"]),
     ("Fun", &["tap", "jumptoggle", "visreverse"]),
     ("Jump in the song", &["back10", "forward10", "seekback5", "seekfwd5", "tenth0", "tenth1", "tenth2", "tenth3", "tenth4", "tenth5", "tenth6", "tenth7", "tenth8", "tenth9"]),
-    ("Going places", &["search", "home", "liked", "settings", "pageback", "pageforward", "artistpage", "albumpage", "tutorial"]),
+    ("Going places", &["search", "home", "liked", "settings", "pageback", "pageforward", "artistpage", "albumpage"]),
 ];
 
 /// Shortcuts that may share one key, because they are the same thing.

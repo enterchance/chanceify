@@ -261,10 +261,14 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
     {
         top_left = egui::pos2(base.left(), (base.bottom() + 96.0).min(screen.bottom() - 120.0));
     }
+    // The area itself senses nothing (it starts at the window's corner, so
+    // anything it sensed would sit on top of the title bar and stop it from
+    // dragging the window); every control on it senses for itself.
     egui::Area::new(Id::new("pop-out-controls"))
         .order(egui::Order::Foreground)
         .fixed_pos(egui::pos2(0.0, 0.0))
         .interactable(true)
+        .sense(egui::Sense::hover())
         .show(ctx, |ui| {
             ui.set_opacity(dim);
             // The whole panel is a handle: this is registered first, so the
