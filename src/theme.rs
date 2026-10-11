@@ -621,6 +621,7 @@ fastframe_icons::icons! {
         Smartphone => lucide "smartphone",
         Sparkles => "sparkles",
         Speaker => "speaker",
+        Spread => "spread",
         Square => "square",
         SquarePen => lucide "square-pen",
         Sun => lucide "sun",

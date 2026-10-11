@@ -3237,31 +3237,34 @@ pub(crate) fn columns_menu(ui: &mut Ui, palette: &Palette, locale: crate::i18n::
     use crate::model::SortColumn;
     ui.set_width(220.0);
                     ui.spacing_mut().item_spacing.y = 1.0;
-                    if checkbox_row(ui, palette, &gettext(locale, "GRID VIEW"), widths.grid) {
-                        widths.grid = !widths.grid;
-                    }
-                    if checkbox_row(ui, palette, &gettext(locale, "SPREAD EVENLY"), widths.spread) {
-                        widths.spread = !widths.spread;
-                    }
-                    if checkbox_row(ui, palette, &gettext(locale, "LOCK TO THE LEFT"), widths.lock_left) {
-                        widths.lock_left = !widths.lock_left;
-                    }
+                    // Two icon switches, no words: the grid view, and spreading
+                    // the columns evenly.
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        if icon_toggle(ui, palette, Icon::LayoutGrid, widths.grid, "Grid view") {
+                            widths.grid = !widths.grid;
+                        }
+                        if icon_toggle(ui, palette, Icon::Spread, widths.spread, "Spread evenly") {
+                            widths.spread = !widths.spread;
+                        }
+                    });
                     menu_separator(ui, palette);
-                    if checkbox_row(
-                        ui,
-                        palette,
-                        &gettext(locale, "NUMBER"),
-                        !widths.hide_number,
-                    ) {
+                    // In the order they sit in the table: the number, the cover,
+                    // the title (always there) with the artist under it, then
+                    // the rest from left to right.
+                    if checkbox_row(ui, palette, &gettext(locale, "NUMBER"), !widths.hide_number) {
                         widths.hide_number = !widths.hide_number;
                     }
-                    for (column, entry) in RESIZABLE {
-                        if checkbox_row(
-                            ui,
-                            palette,
-                            &column_label(locale, entry),
-                            widths.shown(column),
-                        ) {
+                    if checkbox_row(ui, palette, &gettext(locale, "COVER"), !widths.hide_cover) {
+                        widths.hide_cover = !widths.hide_cover;
+                    }
+                    checkbox_row_ex(ui, palette, &gettext(locale, "TITLE"), true, false, "");
+                    if checkbox_row(ui, palette, &gettext(locale, "ARTIST"), !widths.hide_artist) {
+                        widths.hide_artist = !widths.hide_artist;
+                    }
+                    for column in [SortColumn::Playlists, SortColumn::Album, SortColumn::Added] {
+                        let entry = RESIZABLE.iter().find(|(c, _)| *c == column).map(|(_, e)| *e).unwrap_or("");
+                        if checkbox_row(ui, palette, &column_label(locale, entry), widths.shown(column)) {
                             widths.toggle(column);
                         }
                     }
@@ -3273,19 +3276,11 @@ pub(crate) fn columns_menu(ui: &mut Ui, palette: &Palette, locale: crate::i18n::
                     ) {
                         widths.toggle(SortColumn::Release);
                     }
-                    if checkbox_row(
-                        ui,
-                        palette,
-                        &gettext(locale, "LENGTH"),
-                        !widths.hide_duration,
-                    ) {
+                    if checkbox_row(ui, palette, &gettext(locale, "LENGTH"), !widths.hide_duration) {
                         widths.hide_duration = !widths.hide_duration;
                     }
-                    if checkbox_row(ui, palette, &gettext(locale, "COVER"), !widths.hide_cover) {
-                        widths.hide_cover = !widths.hide_cover;
-                    }
-                    if checkbox_row(ui, palette, &gettext(locale, "ARTIST"), !widths.hide_artist) {
-                        widths.hide_artist = !widths.hide_artist;
+                    if checkbox_row(ui, palette, &pgettext(locale, "column heading", "BPM"), widths.shown(SortColumn::Bpm)) {
+                        widths.toggle(SortColumn::Bpm);
                     }
                     if checkbox_row(ui, palette, &gettext(locale, "LIKED"), !widths.hide_heart) {
                         widths.hide_heart = !widths.hide_heart;
@@ -3355,6 +3350,28 @@ fn column_label(locale: Locale, entry: &'static str) -> String {
         Some((context, text)) => pgettext(locale, context, text).into_owned(),
         None => gettext(locale, entry).into_owned(),
     }
+}
+
+/// A small square switch drawn as an icon alone: lit when on.
+fn icon_toggle(ui: &mut Ui, palette: &Palette, icon: Icon, on: bool, tooltip: &str) -> bool {
+    let (rect, response) = ui.allocate_exact_size(vec2(36.0, 30.0), Sense::click());
+    if ui.is_rect_visible(rect) {
+        let fill = if on {
+            palette.accent.gamma_multiply(0.3)
+        } else if response.hovered() {
+            palette.surface_hover
+        } else {
+            Color32::TRANSPARENT
+        };
+        ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
+        if on {
+            ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, palette.accent), egui::StrokeKind::Inside);
+        }
+        let colour = if on { palette.accent } else { palette.secondary };
+        icon.image(colour, 18.0)
+            .paint_at(ui, Rect::from_center_size(rect.center(), Vec2::splat(18.0)));
+    }
+    response.on_hover_text(tooltip).clicked()
 }
 
 /// A compact row with a green tick box, as in Spotify's Columns menu.
