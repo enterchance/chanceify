@@ -11625,8 +11625,11 @@ impl App {
                 self.mark_settings_dirty();
             }
             Action::SetVolumePresets(list) => {
-                self.settings.volume_presets = Some(list.into_iter().map(|v| v.min(100)).take(4).collect());
-                self.mark_settings_dirty();
+                // Never save an empty list: there is always one button.
+                if !list.is_empty() {
+                    self.settings.volume_presets = Some(list.into_iter().map(|v| v.min(100)).take(4).collect());
+                    self.mark_settings_dirty();
+                }
             }
             Action::CycleSeekWidth => {
                 self.settings.seek_custom_width = 0.0;

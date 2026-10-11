@@ -2037,7 +2037,11 @@ impl Settings {
     /// The volume shortcut buttons, at most four.
     pub fn volume_presets_value(&self) -> Vec<u8> {
         match &self.volume_presets {
-            Some(list) => list.iter().map(|v| (*v).min(100)).take(4).collect(),
+            Some(list) => {
+                let list: Vec<u8> = list.iter().map(|v| (*v).min(100)).take(4).collect();
+                // There is always at least one button.
+                if list.is_empty() { vec![50] } else { list }
+            }
             None => vec![50, 100],
         }
     }

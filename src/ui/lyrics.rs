@@ -1377,7 +1377,7 @@ pub(super) fn controls_box_inner(app: &mut App, ui: &mut egui::Ui, top_left: egu
     // double-click, which jump straight to the spot; a press and drag on
     // either one moves the panel, so a slip never seeks or changes the volume.
     let ctx = ui.ctx().clone();
-    let bars = [seek_row.expand2(vec2(0.0, 4.0)), volume_row.expand2(vec2(6.0, 4.0))];
+    let bars = [seek_row.expand2(vec2(0.0, 4.0)), volume_row.expand2(vec2(6.0, 1.0))];
     let (double, right, down, pos, origin, delta) = ctx.input(|input| {
         (
             input.pointer.button_double_clicked(egui::PointerButton::Primary),
@@ -1392,7 +1392,7 @@ pub(super) fn controls_box_inner(app: &mut App, ui: &mut egui::Ui, top_left: egu
         && let Some(p) = pos
         && let Some(i) = bars.iter().position(|bar| bar.contains(p))
     {
-        let slider_id = if i == 0 { "seek-slider" } else { "volume-slider" };
+        let slider_id = if i == 0 { "seek-slider" } else { "pop-volume-slider" };
         let rect = ctx.data(|data| data.get_temp::<Rect>(egui::Id::new(slider_id).with("rect")));
         if let Some(rect) = rect.filter(|rect| rect.width() > 1.0) {
             let value = ((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0);

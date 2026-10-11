@@ -1364,11 +1364,9 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
         (false, Some(x)) => x - 180.0,
         _ => screen.right() - (screen.width() * 0.5).min(560.0) - 14.0,
     };
-    let tab_now = ctx.data(|data| data.get_temp::<u8>(egui::Id::new("vis-menu-tab"))).unwrap_or(0).min(4);
+    let tab_now = ctx.data(|data| data.get_temp::<u8>(egui::Id::new("vis-menu-tab"))).unwrap_or(0).min(3);
     let two_wide = tab_now == 2 || (tab_now == 3 && (app.lyrics_fullscreen.is_some() || app.settings.vis_lyrics));
-    let natural_w = if tab_now == 4 {
-        520.0
-    } else if tab_now == 0 {
+    let natural_w = if tab_now == 0 {
         3.0 * vis_col_w(0.0) + 36.0 + 28.0
     } else if two_wide {
         2.0 * VIS_SINGLE_W + 18.0 + 28.0
@@ -1848,11 +1846,11 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
             // The settings sit in four tabs, one open at a time, so the
             // panel is only as big as what is in front of you.
             let tab_id = egui::Id::new("vis-menu-tab");
-            let tab: u8 = ui.ctx().data(|data| data.get_temp::<u8>(tab_id)).unwrap_or(0).min(4);
+            let tab: u8 = ui.ctx().data(|data| data.get_temp::<u8>(tab_id)).unwrap_or(0).min(3);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                for (index, label) in ["Shapes", "Bass and colour", "Title", "Lyrics", "EQ"].iter().enumerate() {
-                    let width = [64.0, 104.0, 50.0, 58.0, 40.0][index];
+                for (index, label) in ["Shapes", "Bass and colour", "Title", "Lyrics"].iter().enumerate() {
+                    let width = [64.0, 104.0, 50.0, 58.0][index];
                     if chip(ui, &palette, label, tab == index as u8, width).clicked() {
                         ui.ctx().data_mut(|data| data.insert_temp(tab_id, index as u8));
                     }
@@ -2467,9 +2465,6 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
             }); }); }
-            if tab == 4 {
-                super::settings::eq_panel(app, ui);
-            }
             };
             if tab != 0 {
                 if columns_fit {
@@ -5993,7 +5988,67 @@ fn bar_rows(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette) {
     }
 }
 
-/// The volume buttons for the pop-out panel: click one to jump to it.
+/// The right-click menu of a volume button, the same in the pop-out controls
+/// and in the bar: change it, add one, remove it (never the last one), and
+/// open the equalizer.
+fn preset_menu(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette, list: &[u8], index: usize, shown: u8) {
+    if index >= list.len() {
+        return;
+    }
+    ui.set_width(210.0);
+    theme::subtle(ui, palette, &format!("{}% BUTTON", list[index]));
+    if super::widgets::menu_item(ui, palette, None, &format!("Set to {shown}% (current)")) {
+        let mut next = list.to_vec();
+        next[index] = shown;
+        app.actions.push(Action::SetVolumePresets(next));
+    }
+    if list.len() < 4 && super::widgets::menu_item(ui, palette, None, &gettext(app.locale, "Add button at current volume")) {
+        let mut next = list.to_vec();
+        next.push(shown);
+        app.actions.push(Action::SetVolumePresets(next));
+    }
+    // The last button cannot be removed: there is always one.
+    if list.len() > 1 && super::widgets::menu_item(ui, palette, None, &gettext(app.locale, "Remove button")) {
+        let mut next = list.to_vec();
+        next.remove(index);
+        app.actions.push(Action::SetVolumePresets(next));
+    }
+    if super::widgets::menu_item(ui, palette, None, "equalizer") {
+        ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("eq-window-open"), true));
+        ui.close();
+    }
+}
+
+/// The equalizer in a small window of its own, opened from a volume button's
+/// right-click menu. Drawn once per frame wherever the buttons are.
+fn eq_window(app: &mut App, ctx: &egui::Context) {
+    let open_id = egui::Id::new("eq-window-open");
+    let mut open = ctx.data(|data| data.get_temp::<bool>(open_id)).unwrap_or(false);
+    if !open {
+        return;
+    }
+    let time = ctx.input(|input| input.time);
+    let drawn_id = egui::Id::new("eq-window-drawn");
+    if ctx.data(|data| data.get_temp::<f64>(drawn_id)) == Some(time) {
+        return;
+    }
+    ctx.data_mut(|data| data.insert_temp(drawn_id, time));
+    let palette = app.palette;
+    egui::Window::new("equalizer")
+        .id(egui::Id::new("eq-window"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .constrain(true)
+        .frame(super::widgets::menu_frame(&palette))
+        .show(ctx, |ui| {
+            super::settings::eq_panel(app, ui);
+        });
+    ctx.data_mut(|data| data.insert_temp(open_id, open));
+}
+
+/// The volume buttons for the pop-out panel: click one to jump to it,
+/// right-click one for its settings and the equalizer.
 pub(super) fn popout_presets(app: &mut App, ui: &mut egui::Ui, rect: Rect, presets: &[u8]) {
     let palette = app.palette;
     let now = app.now_playing();
@@ -6038,7 +6093,13 @@ pub(super) fn popout_presets(app: &mut App, ui: &mut egui::Ui, rect: Rect, prese
             app.volume_preview = None;
             app.actions.push(Action::SetVolume(*preset));
         }
+        let list = presets.to_vec();
+        let index = list.iter().position(|v| v == preset).unwrap_or(0);
+        egui::Popup::context_menu(&response)
+            .frame(super::widgets::menu_frame(&palette))
+            .show(|ui| preset_menu(app, ui, &palette, &list, index, shown));
     }
+    eq_window(app, ui.ctx());
 }
 
 fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, presets: &[u8]) {
@@ -6159,28 +6220,9 @@ fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, presets: &
         let list = presets.to_vec();
         egui::Popup::context_menu(&response)
             .frame(super::widgets::menu_frame(&palette))
-            .show(|ui| {
-                ui.set_width(210.0);
-                theme::subtle(ui, &palette, &format!("{preset}% BUTTON"));
-                if super::widgets::menu_item(ui, &palette, None, &format!("Set to {shown}% (current)")) {
-                    let mut next = list.clone();
-                    next[index] = shown;
-                    app.actions.push(Action::SetVolumePresets(next));
-                }
-                if list.len() < 4
-                    && super::widgets::menu_item(ui, &palette, None, &gettext(app.locale, "Add button at current volume"))
-                {
-                    let mut next = list.clone();
-                    next.push(shown);
-                    app.actions.push(Action::SetVolumePresets(next));
-                }
-                if super::widgets::menu_item(ui, &palette, None, &gettext(app.locale, "Remove button")) {
-                    let mut next = list.clone();
-                    next.remove(index);
-                    app.actions.push(Action::SetVolumePresets(next));
-                }
-            });
+            .show(|ui| preset_menu(app, ui, &palette, &list, index, shown));
     }
+    eq_window(app, ui.ctx());
     if presets.is_empty()
         && chip(ui, &palette, "+", false, 40.0).clicked()
     {
@@ -6389,7 +6431,19 @@ pub(super) fn volume_row(app: &mut App, ui: &mut egui::Ui, rect: Rect) {
     if track.width() < 30.0 {
         return;
     }
-    let response = ui.interact(track.expand2(vec2(6.0, 0.0)), egui::Id::new("pop-volume-slider"), Sense::click_and_drag());
+    // In the pop-out the bar only answers a right-click, a double-click or the
+    // wheel (see lyrics.rs), so a press and drag moves the panel instead.
+    let locked = ui.data(|data| data.get_temp::<bool>(egui::Id::new("sliders-locked"))).unwrap_or(false);
+    ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("pop-volume-slider").with("rect"), track));
+    let response = ui.interact(
+        track.expand2(vec2(6.0, 0.0)),
+        egui::Id::new("pop-volume-slider"),
+        if locked { Sense::hover() } else { Sense::click_and_drag() },
+    );
+    if adjustable && let Some(next) = wheel_volume(ui, rect.expand2(vec2(0.0, 4.0)), shown) {
+        app.volume_preview = None;
+        app.actions.push(Action::SetVolume(next));
+    }
     let at = |x: f32| ((x - track.left()) / track.width()).clamp(0.0, 1.0);
     if adjustable && let Some(p) = response.interact_pointer_pos().filter(|_| response.dragged() || response.clicked()) {
         let value = at(p.x);
