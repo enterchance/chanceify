@@ -1378,13 +1378,13 @@ pub(super) fn controls_box_inner(app: &mut App, ui: &mut egui::Ui, top_left: egu
     // either one moves the panel, so a slip never seeks or changes the volume.
     let ctx = ui.ctx().clone();
     let bars = [seek_row.expand2(vec2(0.0, 4.0)), volume_row.expand2(vec2(6.0, 1.0))];
-    let (double, right, down, pos, origin, delta) = ctx.input(|input| {
+    let (double, right, down, pressed, pos, delta) = ctx.input(|input| {
         (
             input.pointer.button_double_clicked(egui::PointerButton::Primary),
             input.pointer.button_clicked(egui::PointerButton::Secondary),
             input.pointer.primary_down(),
+            input.pointer.primary_pressed(),
             input.pointer.interact_pos(),
-            input.pointer.press_origin(),
             input.pointer.delta(),
         )
     });
@@ -1407,12 +1407,19 @@ pub(super) fn controls_box_inner(app: &mut App, ui: &mut egui::Ui, top_left: egu
             }
         }
     }
-    let mut bar_drag = egui::Vec2::ZERO;
-    for bar in &bars {
-        if down && origin.is_some_and(|p| bar.contains(p)) {
-            bar_drag += delta;
-        }
+    // A drag that began on a bar keeps moving the panel until the button is
+    // let go, even though the bar moves away from where the press was (asking
+    // "is the press still on the bar" dropped the panel after a few pixels).
+    let drag_flag = egui::Id::new("popout-bar-dragging");
+    let mut dragging = ctx.data(|data| data.get_temp::<bool>(drag_flag)).unwrap_or(false);
+    if pressed {
+        dragging = pos.is_some_and(|p| bars.iter().any(|bar| bar.contains(p)));
     }
+    if !down {
+        dragging = false;
+    }
+    ctx.data_mut(|data| data.insert_temp(drag_flag, dragging));
+    let bar_drag = if dragging { delta } else { egui::Vec2::ZERO };
     ctx.data_mut(|data| data.insert_temp(egui::Id::new("popout-bar-drag"), bar_drag));
     if now.playing {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));

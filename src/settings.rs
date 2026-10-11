@@ -633,7 +633,55 @@ pub struct VisPreset {
 impl Settings {
     /// The settings that make up a visualizer look.
     fn is_vis_key(key: &str) -> bool {
-        key.starts_with("player_bar_vis") || key.starts_with("swirl_") || key.starts_with("vis_") && key != "vis_presets"
+        key.starts_with("player_bar_vis") || key.starts_with("swirl_") || key.starts_with("vis_") && key != "vis_presets" && key != "vis_views"
+    }
+
+    /// The settings each view keeps for itself (see `vis_views`).
+    fn is_view_key(key: &str) -> bool {
+        (Self::is_vis_key(key) && !matches!(key, "vis_panel_w" | "vis_panel_h" | "vis_live_preview"))
+            || matches!(
+                key,
+                "jump_shake" | "jump_sens" | "jump_gap" | "jump_floor" | "jump_adapt" | "sway_sens" | "lyrics_flags"
+                    | "lyrics_align" | "lyrics_vis" | "lyrics_vis_dark" | "lyrics_vis_mode"
+            )
+    }
+
+    /// Keep the open view's settings in its slot.
+    pub fn store_view(&mut self, view: u8) {
+        let Ok(serde_json::Value::Object(all)) = serde_json::to_value(&*self) else {
+            return;
+        };
+        let own: serde_json::Map<_, _> = all.into_iter().filter(|(key, _)| Self::is_view_key(key)).collect();
+        self.vis_views[view.min(2) as usize] = Some(own);
+    }
+
+    /// Put a view's own settings in place. A view never opened before keeps
+    /// the values as they are, so it starts as a copy of the one before.
+    pub fn load_view(&mut self, view: u8) {
+        let Some(profile) = self.vis_views[view.min(2) as usize].clone() else {
+            return;
+        };
+        let Ok(serde_json::Value::Object(mut all)) = serde_json::to_value(&*self) else {
+            return;
+        };
+        for (key, value) in profile {
+            if Self::is_view_key(&key) {
+                all.insert(key, value);
+            }
+        }
+        if let Ok(mut next) = serde_json::from_value::<Settings>(serde_json::Value::Object(all)) {
+            next.proxy_password = std::mem::take(&mut self.proxy_password);
+            next.proxy_password_legacy = self.proxy_password_legacy;
+            *self = next;
+        }
+    }
+
+    /// Leave view `from` (if there was one) and enter view `to`.
+    pub fn switch_view(&mut self, from: Option<u8>, to: u8) {
+        if let Some(from) = from {
+            self.store_view(from);
+        }
+        self.load_view(to);
     }
 
     pub fn save_vis_preset(&mut self, name: &str) {
@@ -1306,6 +1354,11 @@ pub struct Settings {
     /// succeeds. This flag is only in memory and is never persisted.
     #[serde(skip)]
     pub proxy_password_legacy: bool,
+    /// The visualizer and lyrics settings each view keeps for itself: 0 the
+    /// normal view, 1 the full screen visualizer, 2 the full screen lyrics.
+    /// The plain fields above always hold the open view's own values; moving
+    /// to another view saves them here and loads that view's.
+    pub vis_views: [Option<serde_json::Map<String, serde_json::Value>>; 3],
 }
 
 impl std::fmt::Debug for Settings {
@@ -1568,6 +1621,7 @@ impl Default for Settings {
             proxy_username: String::new(),
             proxy_password: String::new(),
             proxy_password_legacy: false,
+            vis_views: [None, None, None],
         }
     }
 }
@@ -2645,6 +2699,25 @@ impl ManualProxy {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn each_view_keeps_its_own_visualizer_settings() {
+        let mut s = super::Settings::default();
+        s.switch_view(None, 0);
+        s.vis_jump_on = true;
+        s.lyrics_align = 2;
+        // A view never opened starts as a copy of the one before.
+        s.switch_view(Some(0), 1);
+        assert!(s.vis_jump_on);
+        s.vis_jump_on = false;
+        s.lyrics_align = 0;
+        s.switch_view(Some(1), 0);
+        assert!(s.vis_jump_on);
+        assert_eq!(s.lyrics_align, 2);
+        s.switch_view(Some(0), 1);
+        assert!(!s.vis_jump_on);
+        assert_eq!(s.lyrics_align, 0);
+    }
+
     #[test]
     fn the_bar_layout_follows_the_old_stack_switch_and_stays_in_range() {
         let mut settings = super::Settings::default();

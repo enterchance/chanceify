@@ -348,6 +348,9 @@ pub struct App {
     pub calm_mode: bool,
     /// Songs played this run, for refreshing the Last.fm numbers every 10.
     lastfm_song_count: u32,
+    /// Which view's visualizer settings are loaded: 0 normal, 1 full screen
+    /// visualizer, 2 full screen lyrics. None until the first frame.
+    pub vis_view_now: Option<u8>,
     /// The extra visualizer window is open.
     pub extra_vis: bool,
     /// The visualizer settings panel open inside the extra window.
@@ -1046,6 +1049,7 @@ impl App {
             hovered_track: None,
             calm_mode: false,
             lastfm_song_count: 0,
+            vis_view_now: None,
             extra_vis: false,
             extra_vis_panel: false,
             extra_mode: 0,
@@ -4204,6 +4208,9 @@ impl App {
         if self.offline {
             // Demo data must never overwrite the person's real preferences.
             return;
+        }
+        if let Some(view) = self.vis_view_now {
+            self.settings.store_view(view);
         }
         let mut saved = self.settings.clone();
         self.applied_proxy_preferences.apply_to(&mut saved);
@@ -12634,6 +12641,24 @@ impl App {
                 self.lyrics_fullscreen_seen = true;
             } else if self.lyrics_fullscreen_seen {
                 self.leave_lyrics_fullscreen(ctx);
+            }
+        }
+        // Each view (normal, full screen visualizer, full screen lyrics) has
+        // its own visualizer and lyrics settings: moving to another view puts
+        // that view's in place, and what is changed there stays there.
+        let view = if self.lyrics_fullscreen.is_some() {
+            2
+        } else if self.fullscreen_vis {
+            1
+        } else {
+            0
+        };
+        if self.vis_view_now != Some(view) {
+            let from = self.vis_view_now;
+            self.settings.switch_view(from, view);
+            self.vis_view_now = Some(view);
+            if from.is_some() {
+                self.mark_settings_dirty();
             }
         }
         crate::i18n::set_english(self.locale == crate::i18n::Locale::English);

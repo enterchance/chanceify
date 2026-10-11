@@ -85,6 +85,21 @@ pub(crate) fn wheel_volume(ui: &egui::Ui, area: Rect, shown: u8) -> Option<u8> {
     if !ui.rect_contains_pointer(area) {
         return None;
     }
+    wheel_steps(ui, shown)
+}
+
+/// The same, for the pop-out controls: that panel is painted over a bare
+/// layer whose own size is empty, so the layer test above never says "over
+/// it". The pointer's place is what counts there.
+fn wheel_volume_at(ui: &egui::Ui, area: Rect, shown: u8) -> Option<u8> {
+    let over = ui.input(|input| input.pointer.hover_pos()).is_some_and(|p| area.contains(p));
+    if !over {
+        return None;
+    }
+    wheel_steps(ui, shown)
+}
+
+fn wheel_steps(ui: &egui::Ui, shown: u8) -> Option<u8> {
     let turned: f32 = ui.input(|input| {
         input
             .events
@@ -1364,7 +1379,10 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
         (false, Some(x)) => x - 180.0,
         _ => screen.right() - (screen.width() * 0.5).min(560.0) - 14.0,
     };
-    let tab_now = ctx.data(|data| data.get_temp::<u8>(egui::Id::new("vis-menu-tab"))).unwrap_or(0).min(3);
+    let tab_now = ctx
+        .data(|data| data.get_temp::<u8>(egui::Id::new("vis-menu-tab")))
+        .unwrap_or(0)
+        .min(if app.vis_view_now.unwrap_or(0) == 0 { 2 } else { 3 });
     let two_wide = tab_now == 2 || (tab_now == 3 && (app.lyrics_fullscreen.is_some() || app.settings.vis_lyrics));
     let natural_w = if tab_now == 0 {
         3.0 * vis_col_w(0.0) + 36.0 + 28.0
@@ -1846,10 +1864,22 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
             // The settings sit in four tabs, one open at a time, so the
             // panel is only as big as what is in front of you.
             let tab_id = egui::Id::new("vis-menu-tab");
-            let tab: u8 = ui.ctx().data(|data| data.get_temp::<u8>(tab_id)).unwrap_or(0).min(3);
+            // Each view keeps its own settings; the normal view has no lyrics
+            // over its visualizer, so it has no lyrics tab.
+            let view = app.vis_view_now.unwrap_or(0);
+            let last_tab: u8 = if view == 0 { 2 } else { 3 };
+            let tab: u8 = ui.ctx().data(|data| data.get_temp::<u8>(tab_id)).unwrap_or(0).min(last_tab);
+            theme::subtle(
+                ui,
+                &palette,
+                &format!(
+                    "these settings are for the {} only",
+                    ["normal view", "full screen visualizer", "full screen lyrics"][view.min(2) as usize]
+                ),
+            );
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                for (index, label) in ["Shapes", "Bass and colour", "Title", "Lyrics"].iter().enumerate() {
+                for (index, label) in ["Shapes", "Bass and colour", "Title", "Lyrics"].iter().take(last_tab as usize + 1).enumerate() {
                     let width = [64.0, 104.0, 50.0, 58.0][index];
                     if chip(ui, &palette, label, tab == index as u8, width).clicked() {
                         ui.ctx().data_mut(|data| data.insert_temp(tab_id, index as u8));
@@ -4005,9 +4035,9 @@ fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying
     let bass = {
         let id = egui::Id::new("title-bass-peak");
         let before: f32 = ui.ctx().data(|data| data.get_temp(id)).unwrap_or(0.3);
-        let peak = bass.max(before * 0.998).max(0.12);
+        let peak = bass.max(before * 0.998).max(0.3);
         ui.ctx().data_mut(|data| data.insert_temp(id, peak));
-        (bass / peak * 0.85).clamp(0.0, 1.0)
+        (bass / peak * 0.9).clamp(0.0, 1.0)
     };
     let bass = ui
         .ctx()
@@ -4018,13 +4048,16 @@ fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying
     let gate = sway_gate(app);
     let strength = app.settings.vis_sway_strength() * gate;
     // How hard the music is hitting right now, 0 to 1: what the sways follow.
-    let punch = ((bass - 0.08) / 0.5).clamp(0.0, 1.0).sqrt();
+    // Quiet passages barely move it; only a hard hit gets near the top (the
+    // curve is squared, so a half-strength hit is a quarter of the motion).
+    let hit = ((bass - 0.25) / 0.6).clamp(0.0, 1.0);
+    let punch = hit * hit;
     // Shake moves the whole text together, never letter by letter.
     let shake = if still || sway.kind != 4 {
         vec2(0.0, 0.0)
     } else {
-        let reach = sway.amp * title_size * strength * punch;
-        vec2((time * 43.0).sin() * reach, (time * 37.0).cos() * reach - punch * 0.04 * title_size * strength)
+        let reach = sway.amp * title_size * strength * punch * (0.5 + 0.9 * punch);
+        vec2((time * 43.0).sin() * reach, (time * 37.0).cos() * reach - punch * 0.05 * title_size * strength)
     };
     let contrast = if ink == Color32::WHITE { Color32::BLACK } else { Color32::WHITE };
     let outline = !app.settings.vis_text_no_outline;
@@ -5038,7 +5071,7 @@ pub fn now_playing_overlay(app: &mut App, ui: &mut egui::Ui, art: Rect, now: &No
             let t = time * sway.speed;
             let reach = title_extent.y * sway.amp * strength;
             let punch = ((app.music_bass_level() - 0.05) / 0.35).clamp(0.0, 1.0);
-            let drive = 0.25 + 0.75 * punch;
+            let drive = if sway.kind == 4 { punch * punch } else { 0.25 + 0.75 * punch };
             match sway.kind {
                 1 => vec2(0.0, -(t * 2.4).sin().abs() * reach * drive),
                 2 => vec2((t * 1.6).sin() * reach * (0.6 + 0.4 * drive), 0.0),
@@ -6438,14 +6471,17 @@ pub(super) fn volume_row(app: &mut App, ui: &mut egui::Ui, rect: Rect) {
     let response = ui.interact(
         track.expand2(vec2(6.0, 0.0)),
         egui::Id::new("pop-volume-slider"),
-        if locked { Sense::hover() } else { Sense::click_and_drag() },
+        // Still a drag target when locked, so the panel's own handle does not
+        // also move (lyrics.rs moves the panel for a drag that starts here).
+        Sense::click_and_drag(),
     );
-    if adjustable && let Some(next) = wheel_volume(ui, rect.expand2(vec2(0.0, 4.0)), shown) {
+    let adjustable_now = adjustable && !locked;
+    if adjustable && let Some(next) = wheel_volume_at(ui, rect.expand2(vec2(0.0, 4.0)), shown) {
         app.volume_preview = None;
         app.actions.push(Action::SetVolume(next));
     }
     let at = |x: f32| ((x - track.left()) / track.width()).clamp(0.0, 1.0);
-    if adjustable && let Some(p) = response.interact_pointer_pos().filter(|_| response.dragged() || response.clicked()) {
+    if adjustable_now && let Some(p) = response.interact_pointer_pos().filter(|_| response.dragged() || response.clicked()) {
         let value = at(p.x);
         if response.dragged() {
             app.volume_preview = Some(value);
@@ -6454,10 +6490,10 @@ pub(super) fn volume_row(app: &mut App, ui: &mut egui::Ui, rect: Rect) {
             }
         }
     }
-    if adjustable && response.drag_stopped() {
+    if adjustable_now && response.drag_stopped() {
         let value = app.volume_preview.take().unwrap_or(shown as f32 / 100.0);
         app.actions.push(Action::SetVolume((value * 100.0).round() as u8));
-    } else if adjustable && response.clicked() && let Some(p) = response.interact_pointer_pos() {
+    } else if adjustable_now && response.clicked() && let Some(p) = response.interact_pointer_pos() {
         app.volume_preview = None;
         app.actions.push(Action::SetVolume((at(p.x) * 100.0).round() as u8));
     }
