@@ -208,6 +208,9 @@ pub(super) fn default_float(ctx: &Context) -> [f32; 3] {
 /// dragged anywhere by its top strip, widened from its right edge, snapped
 /// onto the library sidebar, or put away from the right-click menu.
 pub fn floating_controls(app: &mut App, ctx: &Context) {
+    // Read once, out here: asking the context for it from inside one of its
+    // own data closures would lock it against itself and freeze the app.
+    let vp = ctx.viewport_id();
     let Some([x, y, width]) = app.float_slot(default_float(ctx)) else {
         return;
     };
@@ -225,8 +228,8 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
     // In the full screen visualizer there is no bar, so the panel is here
     // too, fading away when the pointer is not near, like the views panel.
     let dim = if app.fullscreen_vis {
-        let mut last: Option<Rect> = ctx.data(|data| data.get_temp(Id::new(("pop-out-last", ctx.viewport_id()))));
-        if let (Some(rect), Some(card)) = (last, ctx.data(|data| data.get_temp::<Rect>(Id::new(("pop-out-card-last", ctx.viewport_id()))))) {
+        let mut last: Option<Rect> = ctx.data(|data| data.get_temp(Id::new(("pop-out-last", vp))));
+        if let (Some(rect), Some(card)) = (last, ctx.data(|data| data.get_temp::<Rect>(Id::new(("pop-out-card-last", vp))))) {
             last = Some(rect.union(card));
         }
         let near = last.is_some_and(|rect| {
@@ -237,7 +240,7 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
         }) || last.is_none();
         // Resting, the buttons stay easy to see; the pointer on any part of
         // the card or the controls brings it all to full.
-        fade_to(ctx, near, &format!("pop-out-seen-{:?}", ctx.viewport_id()), app.settings.float_idle.unwrap_or(0.5).clamp(0.05, 1.0))
+        fade_to(ctx, near, &format!("pop-out-seen-{vp:?}"), app.settings.float_idle.unwrap_or(0.5).clamp(0.05, 1.0))
     } else {
         1.0
     };
@@ -271,7 +274,7 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
             let Some(outer) = super::lyrics::controls_box_inner(app, ui, top_left, width, false) else {
                 return;
             };
-            ui.ctx().data_mut(|data| data.insert_temp(Id::new(("pop-out-last", ctx.viewport_id())), outer));
+            ui.ctx().data_mut(|data| data.insert_temp(Id::new(("pop-out-last", vp)), outer));
             // The now playing card: the cover and the song's name sit just
             // above the controls and travel with them. Under the full screen
             // lyrics the big cover is already on the page, so the card is
@@ -313,7 +316,7 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                 let need = text_left + (title.size().x + 34.0).max(artist.size().x) + pad + 4.0;
                 let card_right = need.clamp(outer.left() + 160.0_f32.min(outer.width()), outer.right());
                 let card = Rect::from_min_max(cover.min - egui::vec2(pad, pad), egui::pos2(card_right, cover.bottom() + pad));
-                ui.ctx().data_mut(|data| data.insert_temp(Id::new(("pop-out-card-last", ctx.viewport_id())), card));
+                ui.ctx().data_mut(|data| data.insert_temp(Id::new(("pop-out-card-last", vp)), card));
                 let song = app.now_playing_item();
                 // The whole card is a handle, registered first so the cover,
                 // the name and the heart still take their own clicks.
