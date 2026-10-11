@@ -1282,6 +1282,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, grid_art: Option<Rect>) {
         if can_back && back.clicked() {
             app.actions.push(Action::Back);
         }
+        super::topbar::history_menu(app, &back);
         let can_forward = app.can_go_forward();
         let forward = theme::icon_button(
             ui,
@@ -1294,6 +1295,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, grid_art: Option<Rect>) {
         if can_forward && forward.clicked() {
             app.actions.push(Action::Forward);
         }
+        super::topbar::history_menu(app, &forward);
         // The library's own button and filter live up here with the page
         // buttons. The field says "Search your library" so it is never mistaken
         // for the global search in the top bar.

@@ -470,6 +470,11 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                     ui.ctx().set_cursor_icon(cursor);
                 }
             }
+            // The same little dot as the Views panel, so it shows that the
+            // corner resizes.
+            if corner_right_response.hovered() || corner_right_response.dragged() {
+                ui.painter().circle_filled(egui::pos2(outer.right() - 7.0, outer.bottom() - 7.0), 4.0, Color32::from_white_alpha(110));
+            }
             // Wider and taller are one thing: the panel only scales, between
             // the smallest and the biggest it can be, so it is never long
             // and thin.
@@ -671,6 +676,7 @@ fn detached_controls(app: &mut App, ctx: &Context) {
                 let handle = ui.interact(corner, Id::new("detached-corner"), egui::Sense::drag());
                 if handle.hovered() || handle.dragged() {
                     ctx.set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+                    ui.painter().circle_filled(corner.center(), 4.0, Color32::from_white_alpha(110));
                 }
                 if handle.dragged() {
                     let d = handle.drag_delta();
@@ -826,11 +832,7 @@ pub fn show(app: &mut App, ctx: &Context) {
             }
             ui.visuals_mut().override_text_color = Some(palette.text);
             ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-            let screen_h = ctx.content_rect().height();
-            egui::ScrollArea::vertical()
-                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-                .auto_shrink([false, true])
-                .show(ui, |ui| {
+            ui.vertical(|ui| {
                     // Icons only, one row: the four views of this window (exactly
                     // one is on) and the mini player, which is a window of its own.
                     let views = [

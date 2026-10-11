@@ -155,6 +155,30 @@ fn badge(
     response
 }
 
+/// Right-click on back or forward: every page visited lately, newest first
+/// (not just the straight line back), and a click opens it.
+pub(super) fn history_menu(app: &mut App, response: &egui::Response) {
+    let pages: Vec<Page> = app.visited.iter().filter(|page| *page != app.page()).cloned().collect();
+    response.clone().context_menu(|ui| {
+        ui.set_max_width(260.0);
+        if pages.is_empty() {
+            ui.label("nothing visited yet");
+            return;
+        }
+        ui.label("visited lately");
+        ui.separator();
+        egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+            for page in &pages {
+                let name = app.page_name(page);
+                if ui.button(name).clicked() {
+                    app.actions.push(Action::Open(page.clone()));
+                    ui.close();
+                }
+            }
+        });
+    });
+}
+
 fn nav_button(
     ui: &mut egui::Ui,
     palette: &Palette,
@@ -164,11 +188,7 @@ fn nav_button(
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(
         Vec2::splat(32.0),
-        if enabled {
-            Sense::click()
-        } else {
-            Sense::hover()
-        },
+        Sense::click(),
     );
     if ui.is_rect_visible(rect) {
         // Solid, so the page scrolling underneath never shows through.
@@ -274,28 +294,28 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             }
             // With the sidebar showing, back and forward live there.
             if !app.settings.sidebar_visible {
-                if nav_button(
+                let back_response = nav_button(
                     ui,
                     &palette,
                     Icon::ChevronLeft,
                     app.can_go_back(),
                     &gettext(locale, "Back"),
-                )
-                .clicked()
-                {
+                );
+                if back_response.clicked() {
                     app.actions.push(Action::Back);
                 }
-                if nav_button(
+                history_menu(app, &back_response);
+                let forward_response = nav_button(
                     ui,
                     &palette,
                     Icon::ChevronRight,
                     app.can_go_forward(),
                     &gettext(locale, "Forward"),
-                )
-                .clicked()
-                {
+                );
+                if forward_response.clicked() {
                     app.actions.push(Action::Forward);
                 }
+                history_menu(app, &forward_response);
             }
             // The Views disc: always here, left of the playing-from cover.
             super::views_panel::topbar_disc(ui, app);

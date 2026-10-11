@@ -505,6 +505,9 @@ pub struct App {
 
     pub history: Vec<Page>,
     pub history_index: usize,
+    /// Every page opened lately, newest first, never cut when going back and
+    /// opening something else (so no page is ever lost from the list).
+    pub visited: Vec<Page>,
 
     pub saved: HashMap<String, bool>,
     saved_pending: HashSet<String>,
@@ -1162,6 +1165,7 @@ impl App {
             track_used: HashMap::new(),
             history: vec![first_page],
             history_index: 0,
+            visited: Vec::new(),
             saved: HashMap::new(),
             saved_pending: HashSet::new(),
             // Nothing is known before the account is: the file is named for it, and
@@ -7652,6 +7656,7 @@ impl App {
 
     pub fn open(&mut self, page: Page) {
         self.touch_page(&page);
+        self.note_visited(&page);
         if *self.page() == page {
             self.ensure_loaded(page.clone());
             self.retain_table_rows(&page);
@@ -7736,6 +7741,51 @@ impl App {
                     "chanceify™ cannot open this kind of Spotify link",
                 ));
             }
+        }
+    }
+
+    /// Puts a page at the top of the visited list (once), keeping 40.
+    fn note_visited(&mut self, page: &Page) {
+        let was = self.page().clone();
+        for p in [was, page.clone()] {
+            self.visited.retain(|seen| *seen != p);
+            self.visited.insert(0, p);
+        }
+        self.visited.truncate(40);
+    }
+
+    /// A short name for a page, for the history menu.
+    pub fn page_name(&self, page: &Page) -> String {
+        let text = |name: Option<&str>, fallback: &str| name.filter(|n| !n.is_empty()).unwrap_or(fallback).to_string();
+        match page {
+            Page::Home => "home".into(),
+            Page::TopSongs => "top songs".into(),
+            Page::Search => "search".into(),
+            Page::LikedSongs => "liked songs".into(),
+            Page::Albums => "albums".into(),
+            Page::Artists => "artists".into(),
+            Page::Podcasts => "podcasts".into(),
+            Page::Episodes => "episodes".into(),
+            Page::Queue => "queue".into(),
+            Page::Settings => "settings".into(),
+            Page::Local => "on this computer".into(),
+            Page::Playlist(id) => {
+                let name = self.playlist_pages.get(id).and_then(|p| p.playlist.get()).or_else(|| self.known_playlist(id)).map(|p| p.name.as_str());
+                text(name, "playlist")
+            }
+            Page::Album(id) => {
+                let name = self.album_pages.get(id).and_then(|p| p.album.get()).or_else(|| self.known_album(id)).map(|p| p.name.as_str());
+                text(name, "album")
+            }
+            Page::Artist(id) => {
+                let name = self.artist_pages.get(id).and_then(|p| p.artist.get()).or_else(|| self.known_artist(id)).map(|p| p.name.as_str());
+                text(name, "artist")
+            }
+            Page::Show(id) => {
+                let name = self.show_pages.get(id).and_then(|p| p.show.get()).or_else(|| self.known_show(id)).map(|p| p.name.as_str());
+                text(name, "show")
+            }
+            Page::Radio(_) => "radio".into(),
         }
     }
 
