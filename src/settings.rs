@@ -172,7 +172,7 @@ impl TrackColumns {
 
     /// The widest the song name column gets (200 to 1400).
     pub fn title_cap(&self) -> f32 {
-        if self.title_w.is_finite() && self.title_w > 0.0 { self.title_w.clamp(200.0, 1400.0) } else { 460.0 }
+        if self.title_w.is_finite() && self.title_w > 0.0 { self.title_w.clamp(200.0, 1400.0) } else { 380.0 }
     }
 
     /// How wide the length column is: always the same, it only ever holds a
@@ -183,6 +183,15 @@ impl TrackColumns {
 
     /// The tempo column is always as wide as three digits need.
     pub const BPM_WIDTH: f32 = 48.0;
+
+    /// The widest a column is drawn. The playlists column only ever holds a
+    /// small grid of covers, so it never needs more than this.
+    pub fn max_width(column: crate::model::SortColumn) -> f32 {
+        match column {
+            crate::model::SortColumn::Playlists => 96.0,
+            _ => Self::MAX,
+        }
+    }
 
     /// The narrowest a column is drawn, so what it holds always fits without
     /// being cut: "11 months ago" and the heading "date added" need more than
@@ -268,11 +277,11 @@ impl TrackColumns {
     /// The width this column starts at, and returns to on a double-click.
     pub fn default_width(column: crate::model::SortColumn) -> f32 {
         match column {
-            crate::model::SortColumn::Album => 200.0,
-            crate::model::SortColumn::Added => 120.0,
+            crate::model::SortColumn::Album => 160.0,
+            crate::model::SortColumn::Added => 104.0,
             crate::model::SortColumn::Bpm => 72.0,
-            crate::model::SortColumn::Release => 110.0,
-            crate::model::SortColumn::Playlists => 150.0,
+            crate::model::SortColumn::Release => 90.0,
+            crate::model::SortColumn::Playlists => 76.0,
             crate::model::SortColumn::Genre => 170.0,
             _ => 0.0,
         }
@@ -296,7 +305,7 @@ impl TrackColumns {
         } else if column == crate::model::SortColumn::Bpm {
             Self::BPM_WIDTH
         } else {
-            raw.clamp(Self::min_width(column), Self::MAX)
+            raw.clamp(Self::min_width(column), Self::max_width(column))
         }
     }
 

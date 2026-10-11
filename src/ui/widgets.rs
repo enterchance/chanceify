@@ -235,48 +235,7 @@ fn membership_icons(ui: &Ui, app: &mut App, rect: Rect, right: f32, row: &TrackR
             Vec2::splat(height),
         );
         cursor -= gap;
-        // A playlist with no cover of its own falls back to the first letter
-        // of its name, so every membership still reads as something.
-        let response = ui.interact(icon, ui.id().with(("membership", &id)), Sense::click());
-        // The icon carries no text of its own, so its playlist's name is what
-        // a screen reader announces and what the hover tooltip repeats.
-        response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), &name)
-        });
-        if image.is_some() {
-            super::widgets::paint_cover(
-                ui,
-                &app.palette,
-                image.as_deref(),
-                icon,
-                height * 0.18,
-                Icon::ListMusic,
-                Some(&art),
-            );
-        } else {
-            ui.painter().rect_filled(
-                icon,
-                CornerRadius::same((height * 0.18).round() as u8),
-                app.palette.surface_hover,
-            );
-            ui.painter().text(
-                icon.center(),
-                egui::Align2::CENTER_CENTER,
-                initial.to_string(),
-                theme::semibold(height * 0.44),
-                app.palette.secondary,
-            );
-        }
-        if response.clicked() {
-            app.actions.push(Action::Open(Page::Playlist(id)));
-        }
-        // Right-click steps the size for every row at once. It lives here
-        // rather than in Settings because the only useful judge of an icon's
-        // size is another icon beside it.
-        if response.secondary_clicked() {
-            app.actions.push(Action::CycleMembershipIconSize);
-        }
-        response.on_hover_text(&name);
+        paint_membership_icon(ui, app, icon, height, id, name, image, initial, &art);
     }
     if total > drawn {
         cursor -= height;
@@ -294,6 +253,121 @@ fn membership_icons(ui: &Ui, app: &mut App, rect: Rect, right: f32, row: &TrackR
             egui::Align2::CENTER_CENTER,
             format!("+{}", total - drawn),
             theme::semibold(height * 0.36),
+            app.palette.secondary,
+        );
+        let response = ui.interact(chip, ui.id().with("membership-more"), Sense::hover());
+        response.on_hover_text(format!("{} more playlists", total - drawn));
+    }
+}
+
+/// One playlist's little cover (or its first letter), clickable, with its name
+/// on hover. Shared by the row of icons and the playlists column's grid.
+#[allow(clippy::too_many_arguments)]
+fn paint_membership_icon(
+    ui: &Ui,
+    app: &mut App,
+    icon: Rect,
+    height: f32,
+    id: String,
+    name: String,
+    image: Option<String>,
+    initial: char,
+    art: &crate::images::ArtLoader,
+) {
+    // A playlist with no cover of its own falls back to the first letter
+    // of its name, so every membership still reads as something.
+    let response = ui.interact(icon, ui.id().with(("membership", &id)), Sense::click());
+    // The icon carries no text of its own, so its playlist's name is what
+    // a screen reader announces and what the hover tooltip repeats.
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), &name)
+    });
+    if image.is_some() {
+        super::widgets::paint_cover(
+            ui,
+            &app.palette,
+            image.as_deref(),
+            icon,
+            height * 0.18,
+            Icon::ListMusic,
+            Some(art),
+        );
+    } else {
+        ui.painter().rect_filled(
+            icon,
+            CornerRadius::same((height * 0.18).round() as u8),
+            app.palette.surface_hover,
+        );
+        ui.painter().text(
+            icon.center(),
+            egui::Align2::CENTER_CENTER,
+            initial.to_string(),
+            theme::semibold(height * 0.44),
+            app.palette.secondary,
+        );
+    }
+    if response.clicked() {
+        app.actions.push(Action::Open(Page::Playlist(id)));
+    }
+    // Right-click steps the size for every row at once. It lives here
+    // rather than in Settings because the only useful judge of an icon's
+    // size is another icon beside it.
+    if response.secondary_clicked() {
+        app.actions.push(Action::CycleMembershipIconSize);
+    }
+    response.on_hover_text(&name);
+}
+
+/// The playlists column: the song's playlists as a small grid from the cell's
+/// left (one, two side by side, four as two by two, six as three by two),
+/// scaled to the cell, so the column can stay narrow.
+fn membership_grid(ui: &Ui, app: &mut App, cell: Rect, row: &TrackRow<'_>) {
+    if !row.item.is_track() {
+        return;
+    }
+    let shown: Vec<(String, String, Option<String>, char)> = membership_shown(app, row)
+        .into_iter()
+        .map(|membership| (membership.id.clone(), membership.name.clone(), membership.image.clone(), membership.initial()))
+        .collect();
+    let total = shown.len();
+    if total == 0 {
+        return;
+    }
+    const CAP: usize = 6;
+    let (base, _) = membership_metrics(app.settings.membership_icon_scale);
+    let gap = 3.0_f32;
+    let slots = total.min(CAP);
+    let cols = match slots {
+        1 => 1,
+        2..=4 => 2,
+        _ => 3,
+    };
+    let rows = slots.div_ceil(cols);
+    let avail_w = (cell.width() - 12.0).max(10.0);
+    let avail_h = (cell.height() - 10.0).max(10.0);
+    let size = base
+        .min((avail_w - (cols as f32 - 1.0) * gap) / cols as f32)
+        .min((avail_h - (rows as f32 - 1.0) * gap) / rows as f32)
+        .max(8.0);
+    let grid_h = rows as f32 * size + (rows as f32 - 1.0) * gap;
+    let top = cell.center().y - grid_h / 2.0;
+    let art = app.backend.art().clone();
+    let drawn = if total > CAP { CAP - 1 } else { total };
+    let spot = |index: usize| {
+        let (r, c) = (index / cols, index % cols);
+        Rect::from_min_size(pos2(cell.left() + c as f32 * (size + gap), top + r as f32 * (size + gap)), Vec2::splat(size))
+    };
+    for (index, (id, name, image, initial)) in shown.into_iter().take(drawn).enumerate() {
+        paint_membership_icon(ui, app, spot(index), size, id, name, image, initial, &art);
+    }
+    if total > drawn {
+        let chip = spot(drawn);
+        ui.painter().rect_filled(chip, CornerRadius::same((size * 0.18).round() as u8), app.palette.surface_hover);
+        ui.painter().text(
+            chip.center(),
+            egui::Align2::CENTER_CENTER,
+            format!("+{}", total - drawn),
+            theme::semibold(size * 0.36),
             app.palette.secondary,
         );
         let response = ui.interact(chip, ui.id().with("membership-more"), Sense::hover());
@@ -2701,19 +2775,7 @@ fn track_row_contents(
         x = slot_at(crate::model::SortColumn::Playlists).unwrap_or(x);
         rule(x);
         let cell = Rect::from_min_size(pos2(x, rect.top()), vec2(cols.playlists, row_height));
-        let (height, gap) = membership_metrics(app.settings.membership_icon_scale);
-        let wanted = membership_shown(app, &row).len();
-        if wanted > 0 {
-            let n = wanted as f32;
-            let natural = n * height + (n - 1.0) * gap;
-            let shrink = ((cell.width() - 12.0) / natural).clamp(0.2, 1.0);
-            let (h, g) = (height * shrink, gap * shrink);
-            let right = cell.left() + n * h + (n - 1.0) * g;
-            let key = egui::Id::new("membership-shrink");
-            ui.data_mut(|data| data.insert_temp(key, shrink));
-            membership_icons(ui, app, cell, right, &row);
-            ui.data_mut(|data| data.remove::<f32>(key));
-        }
+        membership_grid(ui, app, cell, &row);
         x += cols.playlists;
     }
     if cols.album > 0.0 {
