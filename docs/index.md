@@ -22,7 +22,7 @@ needs spotify premium.
 - **visualizer.** bars, flow and swirl, full screen, in its own window or behind the lyrics.
 - **views.** click the disc to switch parts of the screen on or off.
 - **keybinds.** every key can be changed.
-- **right-click anything** to bring up settings, and hover any button to see what it does.
+- **right-click anything** to bring up settings.
 
 {% assign anyshots = site.static_files | where_exp: "f", "f.path contains '/shots/'" %}
 {% if anyshots.size > 0 %}
