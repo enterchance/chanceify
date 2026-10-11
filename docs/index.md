@@ -16,13 +16,13 @@ needs spotify premium.
 - **plays your spotify.** no, really.
 - **music stats.** top artists and songs, plus recommended.
 - **last.fm.** scrobbling, love, and missing cover art saved for you.
-- **lyrics.** a floating card that follows the song.
+- **discord.** shows what you're playing.
+- **lyrics.** the words to the song.
 - **looks.** themes, make your own, or let it follow the album cover.
 - **visualizer.** bars, flow and swirl, full screen, in its own window or behind the lyrics.
 - **views.** click the disc to switch parts of the screen on or off.
 - **keybinds.** every key can be changed.
-- **discord.** shows what you're playing.
-- **right-click anything** to bring up settings.
+- **right-click anything** to bring up settings, and hover any button to see what it does.
 - **gallery.** [pictures of everything]({{ '/gallery/' | relative_url }}).
 
 {% assign anyshots = site.static_files | where_exp: "f", "f.path contains '/shots/'" %}
