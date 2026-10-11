@@ -136,6 +136,7 @@ pub const BINDABLE: &[Bindable] = &[
     Bindable { id: "likeplaying", label: "Like the playing song", default: UNSET, action: || Action::LikePlaying },
     Bindable { id: "tap", label: "Bass jump", default: UNSET, action: || Action::TapTempo },
     Bindable { id: "jumptoggle", label: "Bass jump on or off", default: UNSET, action: || Action::ToggleJumpAuto },
+    Bindable { id: "visgradient", label: "Visualizer gradient", default: UNSET, action: || Action::ToggleVisGradient },
     Bindable { id: "visreverse", label: "Reverse the visualizer", default: UNSET, action: || Action::ToggleVisReverse },
     Bindable { id: "next", label: "Next song", default: UNSET, action: || Action::Next },
     Bindable { id: "previous", label: "Previous song", default: UNSET, action: || Action::Previous },
@@ -213,7 +214,7 @@ pub const CATEGORIES: &[(&str, &[&str])] = &[
     ("Panels", &["sidebar", "queuelyrics", "queue", "lyrics", "visualizer"]),
     ("Playback", &["playpause", "playspace", "playonly", "pauseonly", "next", "previous", "shuffle", "repeat", "lastfmlove", "sharediscord", "queuehover", "queuehovertop", "likehover", "likeplaying"]),
     ("Volume", &["mute", "volup", "voldown"]),
-    ("Fun", &["tap", "jumptoggle", "visreverse"]),
+    ("Fun", &["tap", "jumptoggle", "visreverse", "visgradient"]),
     ("Jump in the song", &["back10", "forward10", "seekback5", "seekfwd5", "tenth0", "tenth1", "tenth2", "tenth3", "tenth4", "tenth5", "tenth6", "tenth7", "tenth8", "tenth9"]),
     ("Going places", &["search", "home", "liked", "settings", "pageback", "pageforward", "artistpage", "albumpage"]),
 ];

@@ -68,7 +68,7 @@ impl<'a> RowText<'a> {
 }
 
 /// The guide to writing a palette file for the themes folder.
-const THEMES_GUIDE_URL: &str = "https://madlygeeked.github.io/chanceify/settings-and-files/#custom-themes";
+const THEMES_GUIDE_URL: &str = "https://madlygeeked.github.io/chanceify/#make-a-theme";
 
 fn section_matches(needle: &str, title: &str, rows: &[RowText<'_>]) -> bool {
     let needle = needle.trim().to_lowercase();
@@ -490,7 +490,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     .clicked()
                 {
                     app.actions.push(Action::OpenUrl(
-                        "https://madlygeeked.github.io/chanceify/make-it-even-faster/#make-a-spotify-app".into(),
+                        "https://madlygeeked.github.io/chanceify/#setup".into(),
                     ));
                 }
             });
@@ -1918,17 +1918,6 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                 });
                 missing_lists(ui, app, &palette);
             }
-        });
-    }
-
-    if needle.is_empty() || "visualizer gradient colour color bars flow".contains(needle.as_str()) {
-        any_visible = true;
-        section(ui, &palette, "Visualizer gradient", |ui| {
-            let mut on = !app.settings.vis_no_gradient;
-            if widgets::switch_labeled(ui, &palette, "Gradient on the bars and flow", &mut on).changed() {
-                app.actions.push(Action::ToggleVisGradient);
-            }
-            note(ui, &palette, "Off, the bars and flow use one colour from the cover.");
         });
     }
 
