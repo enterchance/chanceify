@@ -6052,6 +6052,23 @@ fn preset_menu(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette
     }
 }
 
+/// The menu on the volume's speaker and percentage: add a volume button, or
+/// open the equalizer. (Right-clicking the bar itself jumps to that spot.)
+fn volume_menu(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette, shown: u8) {
+    let list = app.settings.volume_presets_value();
+    ui.set_width(210.0);
+    theme::subtle(ui, palette, "volume buttons");
+    if list.len() < 4 && super::widgets::menu_item(ui, palette, None, &gettext(app.locale, "Add button at current volume")) {
+        let mut next = list.clone();
+        next.push(shown);
+        app.actions.push(Action::SetVolumePresets(next));
+    }
+    if super::widgets::menu_item(ui, palette, None, "equalizer") {
+        ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("eq-window-open"), true));
+        ui.close();
+    }
+}
+
 /// The equalizer in a small window of its own, opened from a volume button's
 /// right-click menu. Drawn once per frame wherever the buttons are.
 fn eq_window(app: &mut App, ctx: &egui::Context) {
@@ -6102,10 +6119,10 @@ pub(super) fn popout_presets(app: &mut App, ui: &mut egui::Ui, rect: Rect, prese
     let w = ((rect.width() - gap * (n - 1.0)) / n).clamp(18.0, 34.0);
     let total = w * n + gap * (n - 1.0);
     let mut x = rect.center().x - total / 2.0;
-    for preset in presets {
+    for (index, preset) in presets.iter().enumerate() {
         let cell = Rect::from_min_size(pos2(x, rect.center().y - h / 2.0), vec2(w, h));
         x += w + gap;
-        let response = ui.interact(cell, ui.id().with(("popout-preset", *preset)), Sense::click());
+        let response = ui.interact(cell.expand(2.0), ui.id().with(("popout-preset", index)), Sense::click());
         let active = shown == *preset;
         let fill = if active {
             palette.accent.gamma_multiply(0.35)
@@ -6127,7 +6144,6 @@ pub(super) fn popout_presets(app: &mut App, ui: &mut egui::Ui, rect: Rect, prese
             app.actions.push(Action::SetVolume(*preset));
         }
         let list = presets.to_vec();
-        let index = list.iter().position(|v| v == preset).unwrap_or(0);
         egui::Popup::context_menu(&response)
             .frame(super::widgets::menu_frame(&palette))
             .show(|ui| preset_menu(app, ui, &palette, &list, index, shown));
@@ -6514,5 +6530,17 @@ pub(super) fn volume_row(app: &mut App, ui: &mut egui::Ui, rect: Rect) {
     );
     if hot {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    // Right-click the speaker or the percentage for the volume menu (add a
+    // button, the equalizer). The bar itself keeps right-click as "jump here".
+    let zones = [
+        icon_box.expand(5.0),
+        Rect::from_min_max(pos2(track.right() + 8.0, rect.top()), pos2(rect.right() + 4.0, rect.bottom())),
+    ];
+    for (i, zone) in zones.iter().enumerate() {
+        let response = ui.interact(*zone, egui::Id::new(("pop-volume-menu", i)), Sense::click());
+        egui::Popup::context_menu(&response)
+            .frame(super::widgets::menu_frame(&palette))
+            .show(|ui| volume_menu(app, ui, &palette, shown));
     }
 }

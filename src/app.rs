@@ -6863,6 +6863,7 @@ impl App {
                         if let Some(Dialog::CreatePlaylist { add_uris, .. }) = self.dialog.take()
                             && !add_uris.is_empty()
                         {
+                            self.library.membership.add_song(&playlist, add_uris.clone());
                             self.backend.api(ApiRequest::AddToPlaylist {
                                 playlist_id: playlist.id.clone(),
                                 playlist_name: playlist.name.clone(),
@@ -9488,12 +9489,30 @@ impl App {
             increase_playlist_total(playlist, added);
         }
 
+        // The playlists column shows it now, not after the next walk.
+        self.note_membership_added(&playlist_id, items.iter().map(|item| item.uri().to_string()).collect());
         self.backend.api(ApiRequest::AddToPlaylist {
             playlist_id,
             playlist_name,
             uris: items.iter().map(|item| item.uri().to_string()).collect(),
             position,
         });
+    }
+
+    /// Records in the membership index that these songs are now in a
+    /// playlist, and keeps the saved copy in step.
+    fn note_membership_added(&mut self, playlist_id: &str, uris: Vec<String>) {
+        let Some(playlist) = self
+            .library
+            .playlists
+            .get()
+            .and_then(|playlists| playlists.iter().find(|playlist| playlist.id == playlist_id))
+            .cloned()
+        else {
+            return;
+        };
+        self.library.membership.add_song(&playlist, uris);
+        self.library.membership.save(&self.membership_path());
     }
 
     /// Appends the songs linked in pasted text to an editable playlist.
@@ -10247,6 +10266,8 @@ impl App {
                         count.total = count.total.saturating_sub(removed);
                     }
                 }
+                self.library.membership.remove_songs(&playlist_id, &uris);
+                self.library.membership.save(&self.membership_path());
                 self.playlist_busy = true;
                 self.backend.api(ApiRequest::RemoveFromPlaylist {
                     playlist_id,

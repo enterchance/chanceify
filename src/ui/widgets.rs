@@ -333,29 +333,31 @@ fn membership_grid(ui: &Ui, app: &mut App, cell: Rect, row: &TrackRow<'_>) {
     if total == 0 {
         return;
     }
-    const CAP: usize = 6;
+    // One square the size of the single cover: a lone playlist fills it, two
+    // sit side by side at half the size, three or four make two by two, up to
+    // nine in three by three, and so on, each cover smaller than the last.
+    const CAP: usize = 16;
     let (base, _) = membership_metrics(app.settings.membership_icon_scale);
-    let gap = 3.0_f32;
     let slots = total.min(CAP);
     let cols = match slots {
         1 => 1,
         2..=4 => 2,
-        _ => 3,
+        5..=9 => 3,
+        _ => 4,
     };
     let rows = slots.div_ceil(cols);
-    let avail_w = (cell.width() - 12.0).max(10.0);
-    let avail_h = (cell.height() - 10.0).max(10.0);
-    let size = base
-        .min((avail_w - (cols as f32 - 1.0) * gap) / cols as f32)
-        .min((avail_h - (rows as f32 - 1.0) * gap) / rows as f32)
-        .max(8.0);
+    let gap = if cols >= 3 { 1.5_f32 } else { 2.0 };
+    let side = (cell.width() - 12.0).min(cell.height() - 10.0).max(10.0);
+    let size = base.min((side - (cols as f32 - 1.0) * gap) / cols as f32).max(6.0);
+    let grid_w = cols as f32 * size + (cols as f32 - 1.0) * gap;
     let grid_h = rows as f32 * size + (rows as f32 - 1.0) * gap;
+    let left = cell.left() + (cell.width() - 12.0 - grid_w).max(0.0) / 2.0;
     let top = cell.center().y - grid_h / 2.0;
     let art = app.backend.art().clone();
     let drawn = if total > CAP { CAP - 1 } else { total };
     let spot = |index: usize| {
         let (r, c) = (index / cols, index % cols);
-        Rect::from_min_size(pos2(cell.left() + c as f32 * (size + gap), top + r as f32 * (size + gap)), Vec2::splat(size))
+        Rect::from_min_size(pos2(left + c as f32 * (size + gap), top + r as f32 * (size + gap)), Vec2::splat(size))
     };
     for (index, (id, name, image, initial)) in shown.into_iter().take(drawn).enumerate() {
         paint_membership_icon(ui, app, spot(index), size, id, name, image, initial, &art);
@@ -2474,8 +2476,8 @@ fn track_row_contents(
             }
             crate::model::SortColumn::Duration => {
                 painter.text(
-                    pos2(at + width - 6.0, rect.center().y),
-                    egui::Align2::RIGHT_CENTER,
+                    pos2(at + 10.0, rect.center().y),
+                    egui::Align2::LEFT_CENTER,
                     util::format_duration_ms(row.item.duration_ms()),
                     theme::regular(13.0),
                     palette.secondary,
@@ -2979,8 +2981,8 @@ fn track_row_contents(
         let duration_rect =
             Rect::from_min_size(pos2(x, rect.top()), vec2(cols.duration, row_height));
         painter.text(
-            pos2(duration_rect.right() - 6.0, duration_rect.center().y),
-            egui::Align2::RIGHT_CENTER,
+            pos2(duration_rect.left() + 10.0, duration_rect.center().y),
+            egui::Align2::LEFT_CENTER,
             util::format_duration_ms(row.item.duration_ms()),
             theme::regular(13.0),
             palette.secondary,
@@ -3552,7 +3554,10 @@ fn column_divider(
     placed: &mut Vec<f32>,
 ) -> Option<egui::Response> {
     // The length and the tempo are always the same width.
-    if matches!(column, crate::model::SortColumn::Duration | crate::model::SortColumn::Bpm) {
+    if matches!(
+        column,
+        crate::model::SortColumn::Duration | crate::model::SortColumn::Bpm | crate::model::SortColumn::Playlists
+    ) {
         return None;
     }
     if x <= rect.left() + 20.0 || x >= rect.right() - 20.0 {
@@ -3883,7 +3888,7 @@ pub fn table_header(
         }
         if *column == SortColumn::Duration || *column == SortColumn::AddedBy {
             if *column == SortColumn::Duration {
-                heading(ui, at + room - 21.0, "length", SortColumn::Duration, *room, Some(Icon::Clock), None, &mut anchors);
+                heading(ui, at + 10.0, "length", SortColumn::Duration, *room, Some(Icon::Clock), None, &mut anchors);
             } else {
                 heading(ui, at + 14.0, "cover", SortColumn::AddedBy, *room, Some(Icon::Disc), None, &mut anchors);
             }
@@ -3921,7 +3926,7 @@ pub fn table_header(
         }
     }
     if show_length && length_embedded.is_none() {
-        heading(ui, rect.right() - shift - 34.0 - 7.5, "length", SortColumn::Duration, 56.0, Some(Icon::Clock), None, &mut anchors);
+        heading(ui, rect.right() - shift - 8.0 - length_w + 10.0, "length", SortColumn::Duration, 56.0, Some(Icon::Clock), None, &mut anchors);
     }
     if let Some((column, at)) = dropped {
         let before = |x: f32, w: f32| x + w / 2.0 < at;

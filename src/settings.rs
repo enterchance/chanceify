@@ -184,6 +184,10 @@ impl TrackColumns {
     /// The tempo column is always as wide as three digits need.
     pub const BPM_WIDTH: f32 = 48.0;
 
+    /// The playlists column is one cover square wide; more playlists make the
+    /// covers smaller, never the column bigger.
+    pub const PLAYLISTS_WIDTH: f32 = 52.0;
+
     /// The widest a column is drawn. The playlists column only ever holds a
     /// small grid of covers, so it never needs more than this.
     pub fn max_width(column: crate::model::SortColumn) -> f32 {
@@ -304,6 +308,8 @@ impl TrackColumns {
             0.0
         } else if column == crate::model::SortColumn::Bpm {
             Self::BPM_WIDTH
+        } else if column == crate::model::SortColumn::Playlists {
+            Self::PLAYLISTS_WIDTH
         } else {
             raw.clamp(Self::min_width(column), Self::max_width(column))
         }

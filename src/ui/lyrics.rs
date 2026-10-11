@@ -1377,7 +1377,12 @@ pub(super) fn controls_box_inner(app: &mut App, ui: &mut egui::Ui, top_left: egu
     // double-click, which jump straight to the spot; a press and drag on
     // either one moves the panel, so a slip never seeks or changes the volume.
     let ctx = ui.ctx().clone();
-    let bars = [seek_row.expand2(vec2(0.0, 4.0)), volume_row.expand2(vec2(6.0, 1.0))];
+    // Only the bar itself jumps on a right-click; the speaker and the
+    // percentage beside it open the volume menu instead.
+    let volume_track = ctx
+        .data(|data| data.get_temp::<Rect>(egui::Id::new("pop-volume-slider").with("rect")))
+        .unwrap_or(volume_row);
+    let bars = [seek_row.expand2(vec2(0.0, 4.0)), volume_track.expand2(vec2(6.0, 4.0))];
     let (double, right, down, pressed, pos, delta) = ctx.input(|input| {
         (
             input.pointer.button_double_clicked(egui::PointerButton::Primary),

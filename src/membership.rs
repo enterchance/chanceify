@@ -107,6 +107,35 @@ impl Index {
         }
     }
 
+    /// A song was just added to this playlist: show it at once, without
+    /// waiting for the playlist to be walked again.
+    pub fn add_song(&mut self, playlist: &Playlist, uris: impl IntoIterator<Item = String>) {
+        let membership = Membership {
+            id: playlist.id.clone(),
+            name: playlist.name.clone(),
+            image: pick_image(&playlist.images, 64).map(str::to_string),
+        };
+        for uri in uris {
+            let entry = self.by_track.entry(uri).or_default();
+            if !entry.iter().any(|found| found.id == membership.id) {
+                entry.push(membership.clone());
+                entry.sort_by(|left, right| left.name.cmp(&right.name));
+            }
+        }
+    }
+
+    /// Songs were just taken out of this playlist: their icons for it go.
+    pub fn remove_songs(&mut self, playlist_id: &str, uris: &[String]) {
+        for uri in uris {
+            if let Some(entry) = self.by_track.get_mut(uri) {
+                entry.retain(|membership| membership.id != playlist_id);
+                if entry.is_empty() {
+                    self.by_track.remove(uri);
+                }
+            }
+        }
+    }
+
     /// Forget a playlist, so its icons stop appearing after it is deleted.
     pub fn remove(&mut self, id: &str) {
         self.scanned.retain(|scanned| scanned != id);
