@@ -6103,29 +6103,6 @@ fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, presets: &
             app.actions.push(Action::SetVolume(percent));
         }
     });
-    // A small grip on the volume bar's right end, like the song bar's: drag
-    // it to make the bar longer or shorter.
-    {
-        let grip = Rect::from_center_size(
-            pos2(slider_origin.x + slider_w + 3.0, slider_origin.y),
-            vec2(8.0, 22.0),
-        );
-        let grab = ui.interact(grip, egui::Id::new("volume-grip"), Sense::drag());
-        if grab.hovered() || grab.dragged() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-        }
-        if grab.hovered() || grab.dragged() || ui.rect_contains_pointer(ui.max_rect()) {
-            ui.painter().rect_filled(
-                Rect::from_center_size(grip.center(), vec2(3.0, 14.0)),
-                1.5,
-                palette.text.gamma_multiply(0.6),
-            );
-        }
-        if grab.dragged() {
-            let wanted = (slider_w + grab.drag_delta().x).clamp(60.0, 400.0);
-            app.actions.push(Action::SetVolumeWidth(wanted));
-        }
-    }
     if adjustable && let Some(next) = wheel_volume(ui, controls.response.rect, shown) {
         app.volume_preview = None;
         app.actions.push(Action::SetVolume(next));
