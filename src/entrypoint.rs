@@ -569,9 +569,8 @@ pub(crate) fn run() -> eframe::Result<()> {
     if let Some(uri) = link {
         app.open_link(uri);
     }
-    if let Some(note) = safe_start_note {
-        app.toast(note);
-    }
+    // The safe start is silent: the visualizer simply comes up a moment later.
+    let _ = safe_start_note;
     #[cfg(feature = "demo")]
     if demo {
         chanceify::demo::populate(&mut app);
