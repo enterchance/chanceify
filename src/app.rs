@@ -9836,7 +9836,6 @@ impl App {
                 | Action::Back
                 | Action::Forward
                 | Action::SignOut
-                | Action::ToggleQueuePanel
         ) {
             self.leave_lyrics_fullscreen(ctx);
         }

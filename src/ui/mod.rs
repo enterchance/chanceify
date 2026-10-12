@@ -96,6 +96,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if app.fullscreen_vis {
         player_bar::show(app, ui);
         lyrics::vis_overlay(app, ui);
+        // The queue floats over the picture, on the right, while it is on.
+        if app.show_queue_panel {
+            queue::side_panel(app, ui);
+        }
         keys::handle(app, ctx);
         views_panel::show(app, ctx);
         dialogs::show(app, ctx);
@@ -130,6 +134,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
     player_bar::show(app, ui);
     if app.lyrics_fullscreen.is_some() {
+        // The queue keeps its place beside the lyrics; E sends it away.
+        if app.show_queue_panel {
+            queue::side_panel(app, ui);
+        }
         lyrics::fullscreen(app, ui);
     } else {
         if app.settings.sidebar_visible {
