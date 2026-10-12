@@ -33,22 +33,15 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             }
             match dialog {
                 Dialog::PersonalAppIntro => {
-                    theme::text(ui, gettext(locale, "Spend less time waiting for Spotify"), theme::bold(20.0), palette.text);
-                    ui.add_space(12.0);
-                    for text in [
-                        gettext(locale, "chanceify™'s default connection shares Spotify's request limit with other listeners. When it gets busy, loading music and using playback controls can take longer."),
-                        gettext(locale, "Your Premium account lets you create a free personal Spotify app. Connect it here to give supported requests your own allowance. Some pages still use the shared connection."),
-                        gettext(locale, "Setup takes a few minutes. You can also find it later in Settings under Personal Spotify app."),
-                    ] {
-                        ui.add(egui::Label::new(egui::RichText::new(text).font(theme::regular(14.0)).color(palette.secondary)).wrap());
-                        ui.add_space(10.0);
-                    }
-                    ui.add_space(8.0);
+                    theme::text(ui, gettext(locale, "Spotify is making you wait"), theme::bold(20.0), palette.text);
+                    ui.add_space(10.0);
+                    ui.add(egui::Label::new(egui::RichText::new(gettext(locale, "When it gets busy, Spotify slows down shared connections. With Premium, you can set up your own faster one.")).font(theme::regular(14.0)).color(palette.secondary)).wrap());
+                    ui.add_space(14.0);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if theme::pill_button(ui, &palette, &gettext(locale, "Set up personal app"), true).clicked() {
                             app.actions.push(Action::OpenPersonalAppSetup);
                         }
-                        if theme::pill_button(ui, &palette, &gettext(locale, "Keep shared app"), false).clicked() {
+                        if theme::pill_button(ui, &palette, &gettext(locale, "Not now"), false).clicked() {
                             app.actions.push(Action::CloseDialog);
                         }
                     });

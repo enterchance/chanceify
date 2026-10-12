@@ -2936,7 +2936,7 @@ mod tests {
                 if setup {
                     "Set up personal app"
                 } else {
-                    "Keep shared app"
+                    "Not now"
                 },
                 Role::Button,
             );

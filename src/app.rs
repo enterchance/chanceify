@@ -790,6 +790,9 @@ pub struct App {
     /// A Spotify link handed over from outside, waiting for the account
     /// to be signed in and, for a song, for its album to be known.
     pending_link: Option<String>,
+    /// Songs asked for by name (from a web page), waiting for Spotify's answer.
+    link_lookups: HashMap<String, crate::link::Lookup>,
+    link_lookup_serial: u64,
     /// The songs behind the links last copied from a track table, so a
     /// paste of those links adds rows with their names straight away.
     copied_songs: Vec<PlayableItem>,
@@ -1325,6 +1328,8 @@ impl App {
             rootlist_cache: session.rootlist.clone(),
             editable_by_grant: std::collections::BTreeSet::new(),
             pending_link: None,
+            link_lookups: HashMap::new(),
+            link_lookup_serial: 0,
             copied_songs: Vec::new(),
             pending_pastes: Vec::new(),
             collapsed_folders: session.collapsed_folders.clone(),
@@ -7297,7 +7302,13 @@ impl App {
                     self.search.playlists_pending = split;
                 }
             }
-            ApiResponse::MatchLocal { path, result } => self.local_match_answer(path, result),
+            ApiResponse::MatchLocal { path, result } => {
+                if path.starts_with("chanceify-link:") {
+                    self.link_lookup_answer(path, result);
+                } else {
+                    self.local_match_answer(path, result);
+                }
+            }
             ApiResponse::SearchPlaylists {
                 query,
                 serial,
@@ -7681,6 +7692,28 @@ impl App {
         self.actions.push(Action::OpenLink(uri));
     }
 
+    /// Spotify's answer to a song asked for by name: the best match plays
+    /// (or joins the queue), and when Spotify has nothing a note says so.
+    fn link_lookup_answer(&mut self, path: String, result: Result<Vec<crate::api::models::Track>, crate::api::ApiError>) {
+        let Some(lookup) = self.link_lookups.remove(&path) else {
+            return;
+        };
+        let Ok(tracks) = result else {
+            self.toast_error("Could not look that song up on Spotify");
+            return;
+        };
+        // The exact song when one matches; else the first real result, since
+        // the search already asked for that title and artist.
+        let found = crate::local_match::pick(&tracks, &lookup.track, &lookup.artist, 0)
+            .or_else(|| tracks.iter().find(|track| !track.is_local && !track.uri.is_empty()))
+            .map(|track| (track.uri.clone(), format!("{} by {}", track.name, track.artist_names())));
+        match found {
+            Some((uri, label)) if lookup.queue => self.actions.push(Action::AddToQueue { uri, label }),
+            Some((uri, _)) => self.actions.push(Action::PlayUris { uris: vec![uri], index: 0 }),
+            None => self.toast_error(format!("{} is not on Spotify", lookup.track)),
+        }
+    }
+
     /// Opens the page behind the pending link once the account is signed
     /// in. A song and an episode have no page of their own here, so the
     /// album's and the podcast's open, once Spotify has said which.
@@ -7689,6 +7722,16 @@ impl App {
             return;
         };
         if self.user.is_none() {
+            return;
+        }
+        // A song asked for by name: look it up on Spotify, then play or queue it.
+        if let Some(lookup) = crate::link::lookup(&uri) {
+            self.pending_link = None;
+            self.link_lookup_serial += 1;
+            let path = format!("chanceify-link:{}", self.link_lookup_serial);
+            let query = crate::local_match::query_for(&lookup.track, &lookup.artist);
+            self.link_lookups.insert(path.clone(), lookup);
+            self.backend.api(ApiRequest::MatchLocal { path, query });
             return;
         }
         if let Some(query) = crate::link::search_query(&uri) {
@@ -9862,11 +9905,16 @@ impl App {
                 }
             }
             Action::OpenLink(uri) => {
-                // The window first: a link is the user asking for the
+                // A song asked for by name plays in the background, so the
+                // page that asked keeps the screen. Anything else brings the
+                // window forward first: a link is the user asking for the
                 // app, signed in or not, and the page follows when it can.
+                let quiet = crate::link::lookup(&uri).is_some();
                 self.pending_link = Some(uri);
                 self.open_pending_link();
-                self.actions.push(Action::ShowWindow);
+                if !quiet {
+                    self.actions.push(Action::ShowWindow);
+                }
             }
             Action::Back => {
                 if self.can_go_back() {
