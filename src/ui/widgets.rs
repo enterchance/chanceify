@@ -738,6 +738,22 @@ fn menu_item_response(
     enabled: bool,
     highlighted: bool,
 ) -> (egui::Response, bool) {
+    menu_row(ui, palette, icon, label, enabled, highlighted, None)
+}
+
+/// A menu row. With `badge` set, the icon slot is a small circle: the
+/// playlist icon in an outline, or, when `Some(true)`, a filled circle with a
+/// check (the song is already there).
+fn menu_row(
+    ui: &mut Ui,
+    palette: &Palette,
+    icon: Option<Icon>,
+    label: &str,
+    enabled: bool,
+    highlighted: bool,
+    badge: Option<bool>,
+) -> (egui::Response, bool) {
+    let icon = if badge.is_some() { Some(Icon::ListMusic) } else { icon };
     // In a popup menu the rows are only as wide as the widest label, so the
     // menu has no empty space on its right.
     let need = {
@@ -771,15 +787,30 @@ fn menu_item_response(
         if let Some(icon) = icon {
             let icon_rect =
                 Rect::from_center_size(pos2(x + 8.0, rect.center().y), Vec2::splat(16.0));
-            icon.image(
-                if enabled {
-                    palette.secondary
+            if let Some(present) = badge {
+                let centre = icon_rect.center();
+                if present {
+                    ui.painter().circle_filled(centre, 9.0, palette.accent);
+                    Icon::Check
+                        .image(palette.on_accent, 12.0)
+                        .paint_at(ui, Rect::from_center_size(centre, Vec2::splat(12.0)));
                 } else {
-                    palette.dim
-                },
-                16.0,
-            )
-            .paint_at(ui, icon_rect);
+                    ui.painter()
+                        .circle_stroke(centre, 8.5, Stroke::new(1.2, palette.dim));
+                    icon.image(palette.secondary, 11.0)
+                        .paint_at(ui, Rect::from_center_size(centre, Vec2::splat(11.0)));
+                }
+            } else {
+                icon.image(
+                    if enabled {
+                        palette.secondary
+                    } else {
+                        palette.dim
+                    },
+                    16.0,
+                )
+                .paint_at(ui, icon_rect);
+            }
             x += 26.0;
         }
         // A playlist can be named a paragraph; the label ends at the menu's
@@ -1254,8 +1285,9 @@ pub(crate) fn playlist_picker(
             for (index, (id, name)) in matches.into_iter().enumerate() {
                 ui.push_id(id, |ui| {
                     let chosen = highlighted == Some(index);
+                    let present = app.playlist_has_all(id, items);
                     let (row, clicked) =
-                        menu_item_response(ui, &palette, Some(Icon::ListMusic), name, true, chosen);
+                        menu_row(ui, &palette, None, name, true, chosen, Some(present));
                     if chosen && moved {
                         row.scroll_to_me(None);
                     }

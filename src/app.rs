@@ -12491,6 +12491,23 @@ impl App {
     }
 
     /// The library's playlists that take songs, as id and name pairs.
+    /// Whether every one of these songs is known to be in the playlist, from
+    /// the rows already loaded. A playlist not opened yet is not known, and
+    /// reads as not there.
+    pub fn playlist_has_all(&self, playlist_id: &str, items: &[PlayableItem]) -> bool {
+        let Some(page) = self.playlist_pages.get(playlist_id) else {
+            return false;
+        };
+        !items.is_empty()
+            && items.iter().all(|wanted| {
+                let uri = wanted.uri();
+                page.items
+                    .items
+                    .iter()
+                    .any(|row| row.playable().is_some_and(|have| have.uri() == uri))
+            })
+    }
+
     pub fn editable_playlists(&self) -> Vec<(String, String)> {
         if self.user_id().is_none() {
             return Vec::new();
