@@ -925,6 +925,24 @@ fn tray_config() -> fastframe_tray::Config {
     }
 }
 
+/// The sizes Ctrl+plus and Ctrl+minus step between; Ctrl+0 is 100%.
+const ZOOM_STEPS: [f32; 6] = [0.75, 0.85, 1.0, 1.15, 1.3, 1.5];
+
+/// The step after (or before) the one nearest `current`, never past the ends.
+fn zoom_step(current: f32, up: bool) -> f32 {
+    let nearest = ZOOM_STEPS
+        .iter()
+        .enumerate()
+        .min_by(|a, b| (a.1 - current).abs().total_cmp(&(b.1 - current).abs()))
+        .map_or(2, |(index, _)| index);
+    let next = if up {
+        (nearest + 1).min(ZOOM_STEPS.len() - 1)
+    } else {
+        nearest.saturating_sub(1)
+    };
+    ZOOM_STEPS[next]
+}
+
 impl App {
     pub fn new(waker: &Waker, dirs: AppDirs, mut settings: Settings, options: AppOptions) -> Self {
         // Only the main window opens at launch, even if the mini player was
@@ -3974,14 +3992,23 @@ impl App {
         let now = Instant::now();
         if !self.zoom_applied {
             self.zoom_applied = true;
-            let zoom = self.settings.zoom.clamp(0.5, 2.5);
+            let zoom = self.settings.zoom.clamp(ZOOM_STEPS[0], ZOOM_STEPS[ZOOM_STEPS.len() - 1]);
             if (zoom - 1.0).abs() > 0.001 {
                 ctx.set_zoom_factor(zoom);
             }
         } else {
-            let zoom = ctx.zoom_factor();
-            if (zoom - self.settings.zoom).abs() > 0.001 {
-                // Ctrl+plus/minus zoomed; remembered for the next start.
+            let asked = ctx.zoom_factor();
+            if (asked - self.settings.zoom).abs() > 0.001 {
+                // Ctrl+plus/minus/0 zoomed; snap to the nearest step in that
+                // direction and remember it for the next start.
+                let zoom = if (asked - 1.0).abs() < 0.001 {
+                    1.0
+                } else {
+                    zoom_step(self.settings.zoom, asked > self.settings.zoom)
+                };
+                if (zoom - asked).abs() > 0.001 {
+                    ctx.set_zoom_factor(zoom);
+                }
                 self.settings.zoom = zoom;
                 self.settings_dirty = true;
             }
@@ -11370,10 +11397,9 @@ impl App {
             Action::AdjustZoom(direction) => {
                 let zoom = match direction {
                     0 => 1.0,
-                    d if d > 0 => (self.settings.zoom + 0.1).min(2.5),
-                    _ => (self.settings.zoom - 0.1).max(0.5),
+                    d if d > 0 => zoom_step(self.settings.zoom, true),
+                    _ => zoom_step(self.settings.zoom, false),
                 };
-                let zoom = (zoom * 10.0).round() / 10.0;
                 self.settings.zoom = zoom;
                 ctx.set_zoom_factor(zoom);
                 self.mark_settings_dirty();
