@@ -23,18 +23,29 @@ use super::widgets::{self, SliderEvent};
 /// Its size and place are kept between launches.
 pub fn window(app: &mut App, ctx: &egui::Context) {
     use egui::{ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
+    // The place and size it opened at: the builder keeps these while the
+    // window is open, so reporting its geometry back every frame never makes
+    // egui move or resize it again (the jiggle).
+    let opened_id = egui::Id::new("mini-window-opened-at");
     if !app.settings.mini_player {
+        ctx.data_mut(|data| data.remove_temp::<Option<[f32; 4]>>(opened_id));
         return;
     }
     let id = ViewportId::from_hash_of("chanceify-mini-player");
     let saved = app.settings.mini_window;
+    let opened = ctx
+        .data(|data| data.get_temp::<Option<[f32; 4]>>(opened_id))
+        .unwrap_or_else(|| {
+            ctx.data_mut(|data| data.insert_temp(opened_id, saved));
+            saved
+        });
     let default_height = if app.settings.mini_queue { 680.0 } else { 340.0 };
     let mut builder = ViewportBuilder::default()
         .with_title("chanceify mini player")
         .with_decorations(false)
         .with_min_inner_size([240.0, 200.0])
-        .with_inner_size(saved.map_or([400.0, default_height], |s| [s[2].max(240.0), s[3].max(200.0)]));
-    if let Some(s) = saved
+        .with_inner_size(opened.map_or([400.0, default_height], |s| [s[2].max(240.0), s[3].max(200.0)]));
+    if let Some(s) = opened
         && s[0] > -20000.0
         && s[1] > -20000.0
     {

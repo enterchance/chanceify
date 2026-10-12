@@ -181,6 +181,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
         ui,
         egui::ScrollArea::vertical()
             .id_salt("lyrics-scroll")
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
             .auto_shrink([false, false]),
         egui::Vec2b::new(false, true),
         |ui| {
@@ -292,8 +293,8 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                     Some(Align::Center),
                 );
             }
-            // Room for the last line to rise to where a sung line sits.
-            ui.add_space((ui.clip_rect().height() * (1.0 - SUNG_LINE_AT)).max(60.0));
+            // The last line is the end of the song: nothing scrolls past it.
+            ui.add_space(24.0);
         },
     );
     crate::autoscroll::lyrics(ui, scroll.id);
@@ -970,6 +971,7 @@ fn fullscreen_contents(app: &mut App, ui: &mut egui::Ui) {
     ui.spacing_mut().scroll.fade.strength = 0.0;
     egui::ScrollArea::vertical()
         .id_salt(("fullscreen-lyrics-scroll", &now.uri))
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
         .auto_shrink([false, false])
         .show(ui, |ui| {
             // Before the first line there is nothing to highlight, so the
@@ -1153,7 +1155,7 @@ fn fullscreen_contents(app: &mut App, ui: &mut egui::Ui) {
                     animation,
                 );
             }
-            ui.add_space(below.max(60.0));
+            ui.add_space(if reversed { below.max(60.0) } else { 24.0 });
         });
     // Scrolling by hand means the reader wants to look elsewhere; the
     // Follow button in the header picks the song back up.

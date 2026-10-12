@@ -14,8 +14,13 @@ use crate::app::App;
 use crate::theme;
 
 pub fn show(app: &mut App, ctx: &Context) {
+    // The place and size it opened at. The window's builder keeps these for as
+    // long as it is open: handing it the geometry it just reported every frame
+    // made egui move and resize the window again and again (the jiggle).
+    let opened_id = egui::Id::new("extra-window-opened-at");
     if !app.extra_vis {
         app.extra_vis_since = None;
+        ctx.data_mut(|data| data.remove_temp::<Option<[f32; 4]>>(opened_id));
         return;
     }
     let since = *app
@@ -23,12 +28,18 @@ pub fn show(app: &mut App, ctx: &Context) {
         .get_or_insert_with(std::time::Instant::now);
     let id = ViewportId::from_hash_of("chanceify-extra-visualizer");
     let saved = app.settings.extra_window;
+    let opened = ctx
+        .data(|data| data.get_temp::<Option<[f32; 4]>>(opened_id))
+        .unwrap_or_else(|| {
+            ctx.data_mut(|data| data.insert_temp(opened_id, saved));
+            saved
+        });
     let mut builder = ViewportBuilder::default()
         .with_title("chanceify visualizer")
         .with_decorations(false)
-        .with_inner_size(saved.map_or([960.0, 540.0], |s| [s[2].max(240.0), s[3].max(160.0)]))
+        .with_inner_size(opened.map_or([960.0, 540.0], |s| [s[2].max(240.0), s[3].max(160.0)]))
         .with_min_inner_size([240.0, 160.0]);
-    if let Some(s) = saved
+    if let Some(s) = opened
         && s[0] > -20000.0
         && s[1] > -20000.0
     {
