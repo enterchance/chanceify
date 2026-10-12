@@ -594,7 +594,7 @@ fn control_row(app: &mut App, ui: &mut egui::Ui, unit: f32, now: Option<&NowPlay
 }
 
 /// A thin volume bar.
-fn volume_row(app: &mut App, ui: &mut egui::Ui, width: f32, now: Option<&NowPlaying>) {
+pub(super) fn volume_row(app: &mut App, ui: &mut egui::Ui, width: f32, now: Option<&NowPlaying>) {
     let palette = app.palette;
     let volume = now
         .map(|now| now.volume_percent)

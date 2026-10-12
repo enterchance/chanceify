@@ -1378,7 +1378,15 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
     // The panel is as big as what is on its tab, and when the window is too
     // small for that it is drawn smaller, all of it, instead of being cut off.
     let screen = ctx.content_rect();
-    let win_id = egui::Id::new(if floating { "visualizer-panel-full" } else { "visualizer-panel" });
+    // The mini player's panel is its own window, so what it measured there
+    // (its smaller room) can never squeeze the one in the main window.
+    let win_id = egui::Id::new(if app.mini_active {
+        "visualizer-panel-mini"
+    } else if floating {
+        "visualizer-panel-full"
+    } else {
+        "visualizer-panel"
+    });
     let default_x = match (floating, clicked_x) {
         (false, Some(x)) => x - 180.0,
         _ => screen.right() - (screen.width() * 0.5).min(560.0) - 14.0,
@@ -1395,7 +1403,7 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
     } else {
         300.0
     };
-    let height_id = egui::Id::new(("vis-panel-natural-h", tab_now));
+    let height_id = egui::Id::new(("vis-panel-natural-h", tab_now, app.mini_active));
     let natural_h = ctx.data(|data| data.get_temp::<f32>(height_id)).unwrap_or(440.0).max(120.0);
     let fit = ((screen.width() - 16.0) / natural_w)
         .min((screen.height() - 16.0) / natural_h)
@@ -1436,6 +1444,7 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
     );
     let window = panel.show(ctx, |ui| {
         egui::ScrollArea::vertical()
+            .id_salt(("vis-panel-scroll", app.mini_active))
             .auto_shrink([true, true])
             .max_height(f32::INFINITY)
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
@@ -1443,6 +1452,11 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
     });
     let window = window.map(|window| {
         let local = window.response.rect;
+        // A panel squeezed to a sliver can never recover by itself (its own
+        // remembered size holds it there), so the windows start fresh.
+        if local.height() < 90.0 {
+            ctx.memory_mut(|memory| memory.reset_areas());
+        }
         ctx.data_mut(|data| data.insert_temp(height_id, local.height()));
         // Where it really is on the screen.
         let shown = if scaled {

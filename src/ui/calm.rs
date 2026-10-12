@@ -156,6 +156,16 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     {
                         app.actions.push(Action::TogglePlay);
                     }
+                    // The volume, a quiet slider under the pause button.
+                    {
+                        let row = Rect::from_center_size(pos2(middle.x, middle.y + 166.0), vec2(280.0, 26.0));
+                        let mut child = ui.new_child(
+                            egui::UiBuilder::new()
+                                .max_rect(row)
+                                .layout(egui::Layout::top_down(egui::Align::Min)),
+                        );
+                        super::mini::volume_row(app, &mut child, 280.0, Some(now));
+                    }
                 }
                 None => {
                     ui.painter().text(
