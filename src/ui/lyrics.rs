@@ -1344,6 +1344,16 @@ pub(super) fn controls_box_inner(app: &mut App, ui: &mut egui::Ui, top_left: egu
             app.actions.push(Action::ToggleVisPanel);
         }
     }
+    // Beside it, the queue.
+    {
+        let spot = Rect::from_center_size(pos2(outer.right() - 31.0, outer.top() + 8.0), vec2(16.0, 14.0));
+        let response = ui.interact(spot, egui::Id::new("pop-out-queue"), Sense::click());
+        let colour = if response.hovered() || app.show_queue_panel { palette.text } else { palette.dim };
+        theme::paint_icon(ui, Icon::ListMusic, spot, 11.0, colour);
+        if response.on_hover_text(gettext(app.locale, "Queue").into_owned()).clicked() {
+            app.actions.push(Action::ToggleQueuePanel);
+        }
+    }
     let buttons_row = Rect::from_min_size(pos2(outer.left(), outer.top() + 10.0), vec2(width, buttons_h));
     let seek_row = Rect::from_min_size(
         pos2(outer.left(), buttons_row.bottom() + 4.0),

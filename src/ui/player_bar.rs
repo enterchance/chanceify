@@ -2594,15 +2594,19 @@ fn vis_font_family(ctx: &egui::Context, font_index: usize) -> egui::FontFamily {
         let flag = egui::Id::new(("vis-font-loaded", font_index));
         let state = ctx.data(|data| data.get_temp::<bool>(flag));
         if state.is_none() {
+            // The display face first, then everything the normal text uses, so
+            // Cyrillic, Chinese and other scripts the display face lacks still draw.
             let loaded = crate::system_fonts::vis_font_bytes(font_index).is_some_and(|bytes| {
-                ctx.add_font(egui::epaint::text::FontInsert::new(
-                    &name,
-                    egui::FontData::from_owned(bytes),
-                    vec![egui::epaint::text::InsertFontFamily {
-                        family: egui::FontFamily::Name(name.clone().into()),
-                        priority: egui::epaint::text::FontPriority::Highest,
-                    }],
-                ));
+                let mut fonts = ctx.fonts(|fonts| fonts.definitions().clone());
+                fonts
+                    .font_data
+                    .insert(name.clone(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
+                let mut list = vec![name.clone()];
+                if let Some(base) = fonts.families.get(&egui::FontFamily::Proportional) {
+                    list.extend(base.iter().cloned());
+                }
+                fonts.families.insert(egui::FontFamily::Name(name.clone().into()), list);
+                ctx.set_fonts(fonts);
                 true
             });
             ctx.data_mut(|data| data.insert_temp(flag, loaded));

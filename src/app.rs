@@ -8232,6 +8232,21 @@ impl App {
     /// librespot then picks its own random track, and only the Web API,
     /// which would start at track one, needs telling where to go.
     fn shuffle_start(&self, context_uri: &str) -> (Option<String>, Option<u32>) {
+        // Only the first pages of a long list are loaded, so choosing among
+        // those rows would always start in the same first fifty. When the
+        // library knows the real length, pick across all of it.
+        let loaded = self.context_track_uris(context_uri).map_or(0, |uris| uris.len() as u32);
+        if let Some(len) = self.context_len(context_uri)
+            && len > loaded.saturating_add(1)
+        {
+            let pick = rand::random_range(0..len);
+            if pick < loaded
+                && let Some(uris) = self.context_track_uris(context_uri)
+            {
+                return (Some(uris[pick as usize].clone()), None);
+            }
+            return (None, Some(pick));
+        }
         if let Some(uri) = self.random_track_in(context_uri) {
             return (Some(uri), None);
         }

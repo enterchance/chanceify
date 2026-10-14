@@ -225,7 +225,7 @@ pub fn activity_for(
         };
         for kind in style.picks {
             let made = match kind {
-                1 => page.clone().map(|url| ("Open in chanceify".to_string(), url)),
+                1 => page.clone().map(|url| ("Open in browser".to_string(), url)),
                 2 => song_url.clone().map(|url| ("Open in Spotify".to_string(), url)),
                 3 => style.playlist_url.clone().map(|url| {
                     let label = match style.playlist.as_deref().filter(|name| !name.trim().is_empty()) {
