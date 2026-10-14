@@ -11,7 +11,7 @@ with zipfile.ZipFile(out / f"chanceify-lastfm-{ver}.zip", "w", zipfile.ZIP_DEFLA
 css = (here / "content.css").read_text()
 js = (here / "content.js").read_text()
 header = f"""// ==UserScript==
-// @name         chanceify for Last.fm
+// @name         chanceify™
 // @namespace    https://madlygeeked.github.io/chanceify/
 // @version      {ver}
 // @description  Play any song on Last.fm in chanceify with one click.

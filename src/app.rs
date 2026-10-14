@@ -7739,13 +7739,42 @@ impl App {
     /// Spotify's answer to a song asked for by name: the best match plays
     /// (or joins the queue), and when Spotify has nothing a note says so.
     fn link_lookup_answer(&mut self, path: String, result: Result<Vec<crate::api::models::Track>, crate::api::ApiError>) {
-        let Some(lookup) = self.link_lookups.remove(&path) else {
+        // A second try, as plain words, when the exact title-and-artist search
+        // found nothing (a video title is rarely the song's exact name).
+        let retried = path.ends_with(":free");
+        let key = path.trim_end_matches(":free").to_string();
+        let Some(lookup) = self.link_lookups.remove(&key) else {
             return;
         };
         let Ok(tracks) = result else {
             self.toast_error("Could not look that song up on Spotify");
             return;
         };
+        if lookup.artist_only {
+            // The artist's own songs: the first result by an artist of that name.
+            let wanted = lookup.artist.to_lowercase();
+            let artist = tracks
+                .iter()
+                .flat_map(|track| track.artists.iter())
+                .find(|artist| artist.name.to_lowercase() == wanted)
+                .and_then(|artist| artist.id.clone());
+            match artist {
+                Some(id) => self.actions.push(Action::PlayContext {
+                    uri: format!("spotify:artist:{id}"),
+                    offset_uri: None,
+                    offset_index: None,
+                }),
+                None => self.toast_error(format!("{} is not on Spotify", lookup.artist)),
+            }
+            return;
+        }
+        if tracks.iter().all(|track| track.is_local || track.uri.is_empty()) && !retried {
+            let free = format!("{} {}", lookup.artist, lookup.track).trim().to_string();
+            let free_path = format!("{key}:free");
+            self.link_lookups.insert(key, lookup);
+            self.backend.api(ApiRequest::MatchLocal { path: free_path, query: free });
+            return;
+        }
         // The exact song when one matches; else the first real result, since
         // the search already asked for that title and artist.
         let found = crate::local_match::pick(&tracks, &lookup.track, &lookup.artist, 0)
@@ -7773,7 +7802,11 @@ impl App {
             self.pending_link = None;
             self.link_lookup_serial += 1;
             let path = format!("chanceify-link:{}", self.link_lookup_serial);
-            let query = crate::local_match::query_for(&lookup.track, &lookup.artist);
+            let query = if lookup.artist_only {
+                lookup.artist.clone()
+            } else {
+                crate::local_match::query_for(&lookup.track, &lookup.artist)
+            };
             self.link_lookups.insert(path.clone(), lookup);
             self.backend.api(ApiRequest::MatchLocal { path, query });
             return;

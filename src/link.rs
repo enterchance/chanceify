@@ -33,6 +33,8 @@ pub struct Lookup {
     pub queue: bool,
     pub artist: String,
     pub track: String,
+    /// The whole artist (the artist's songs play), not one song.
+    pub artist_only: bool,
 }
 
 const LOOKUP_PREFIX: &str = "spotify:lookup:";
@@ -57,6 +59,10 @@ pub fn lookup(text: &str) -> Option<Lookup> {
     if parts.next().is_some() {
         return None;
     }
+    if mode == "artist" {
+        let artist = decode_part(artist)?;
+        return (!artist.is_empty()).then(|| Lookup { queue: false, artist, track: String::new(), artist_only: true });
+    }
     let queue = match mode {
         "play" => false,
         "queue" => true,
@@ -67,6 +73,7 @@ pub fn lookup(text: &str) -> Option<Lookup> {
         queue,
         artist: decode_part(artist).unwrap_or_default(),
         track,
+        artist_only: false,
     })
 }
 
@@ -74,7 +81,7 @@ fn canonical_lookup(found: &Lookup) -> String {
     let encode = |text: &str| percent_encoding::utf8_percent_encode(text, percent_encoding::NON_ALPHANUMERIC).to_string();
     format!(
         "{LOOKUP_PREFIX}{}:{}:{}",
-        if found.queue { "queue" } else { "play" },
+        if found.artist_only { "artist" } else if found.queue { "queue" } else { "play" },
         encode(&found.artist),
         encode(&found.track)
     )
@@ -84,8 +91,9 @@ fn canonical_lookup(found: &Lookup) -> String {
 fn lookup_from_link(rest: &str) -> Option<Lookup> {
     let rest = rest.split('#').next().unwrap_or(rest);
     let (verb, query) = rest.split_once('?')?;
-    let queue = match verb.trim_matches('/') {
-        "play" => false,
+    let verb = verb.trim_matches('/');
+    let queue = match verb {
+        "play" | "artist" => false,
         "queue" => true,
         _ => return None,
     };
@@ -98,7 +106,10 @@ fn lookup_from_link(rest: &str) -> Option<Lookup> {
             _ => {}
         }
     }
-    (!track.is_empty()).then_some(Lookup { queue, artist, track })
+    if verb == "artist" {
+        return (!artist.is_empty()).then_some(Lookup { queue: false, artist, track: String::new(), artist_only: true });
+    }
+    (!track.is_empty()).then_some(Lookup { queue, artist, track, artist_only: false })
 }
 
 /// Resource pages. Search links carry text instead of a resource id.
@@ -271,7 +282,7 @@ mod tests {
     #[test]
     fn songs_asked_for_by_name() {
         let uri = parse("chanceify://play?artist=Daft+Punk&track=One%20More%20Time").unwrap();
-        let wanted = Lookup { queue: false, artist: "Daft Punk".into(), track: "One More Time".into() };
+        let wanted = Lookup { queue: false, artist: "Daft Punk".into(), track: "One More Time".into(), artist_only: false };
         assert_eq!(lookup(&uri), Some(wanted));
         // Passed on to the running instance, the canonical form still parses.
         assert_eq!(parse(&uri), Some(uri.clone()));

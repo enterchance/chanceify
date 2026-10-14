@@ -1,4 +1,4 @@
-# chanceify for Last.fm
+# chanceify™
 
 Adds a purple play button to songs on Last.fm, and an "open in chanceify" button under YouTube videos. One click plays the song in chanceify; shift-click or right-click adds it to the queue.
 

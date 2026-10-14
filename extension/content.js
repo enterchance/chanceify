@@ -1,4 +1,4 @@
-// chanceify for Last.fm: adds a one-click play button to songs on Last.fm.
+// chanceify™: adds a one-click play button to songs on Last.fm (and YouTube).
 // Nothing leaves your computer except the chanceify:// link that opens the app.
 (() => {
   if (window.__cfyLoaded) return;
@@ -11,7 +11,9 @@
   const api = typeof browser !== 'undefined' ? browser : typeof chrome !== 'undefined' ? chrome : null;
 
   const link = (mode, artist, track) =>
-    `chanceify://${mode}?artist=${encodeURIComponent(artist)}&track=${encodeURIComponent(track)}`;
+    mode === 'artist'
+      ? `chanceify://artist?artist=${encodeURIComponent(artist)}`
+      : `chanceify://${mode}?artist=${encodeURIComponent(artist)}&track=${encodeURIComponent(track)}`;
 
   let toastEl, toastTimer;
   function toast(text) {
@@ -35,7 +37,7 @@
     document.body.appendChild(a);
     a.click();
     a.remove();
-    toast(mode === 'queue' ? `added to queue: ${track}` : `playing in chanceify: ${track}`);
+    toast(mode === 'queue' ? `added to queue: ${track}` : `playing in chanceify: ${mode === 'artist' ? artist : track}`);
   }
 
   function makeButton(mode, artist, track, hero) {
@@ -63,6 +65,20 @@
 
   function decorateRows() {
     document.querySelectorAll('.chartlist-row:not([data-cfy])').forEach((row) => {
+      // A row of artists (Top Artists): the link goes to /music/<artist> only.
+      const nameLink = row.querySelector('.chartlist-name a');
+      const path = nameLink ? (nameLink.getAttribute('href') || '').split('?')[0] : '';
+      if (/^\/music\/[^/]+\/?$/.test(path) && !row.querySelector('.chartlist-artist')) {
+        const artistName = text(nameLink);
+        if (!artistName) return;
+        row.setAttribute('data-cfy', '1');
+        const b = makeButton('artist', artistName, '', false);
+        b.title = 'play this artist in chanceify';
+        b.setAttribute('aria-label', b.title);
+        b.style.marginLeft = '10px';
+        nameLink.parentNode.insertBefore(b, nameLink.nextSibling);
+        return;
+      }
       const title = text(row.querySelector('.chartlist-name a, .chartlist-name'));
       let artist = text(row.querySelector('.chartlist-artist a, .chartlist-artist'));
       if (!artist) {
@@ -100,7 +116,10 @@
     if (!raw) return null;
     let channel = text(document.querySelector('ytd-watch-metadata ytd-channel-name a, #owner #channel-name a, ytmusic-player-bar .byline'));
     let title = raw
-      .replace(/[\[(][^\])]*(official|lyric|audio|video|visuali[sz]er|hd|hq|4k|remaster|music video|mv)[^\])]*[\])]/gi, '')
+      .replace(/[\[(\u3010\uFF08][^\])\u3011\uFF09]*(official|lyric|audio|video|visuali[sz]er|hd|hq|4k|8k|remaster|music video|mv|prod\.?|explicit|clean|slowed|reverb|sped up|free|download|out now|premiere|full)[^\])\u3011\uFF09]*[\])\u3011\uFF09]/gi, '')
+      .replace(/#\S+/g, '')
+      .replace(/["\u201C\u201D\u300C\u300D]/g, '')
+      .replace(/\s+(official|lyrics?|audio|music video)\s*$/i, '')
       .replace(/\s+/g, ' ')
       .trim();
     let artist = '';
