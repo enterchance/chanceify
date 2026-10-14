@@ -1279,6 +1279,10 @@ pub struct Settings {
     pub mini_volume: bool,
     /// Whether the mini player stays on top of other windows.
     pub mini_on_top: bool,
+    /// Whether the main window stays on top of other windows.
+    pub main_on_top: bool,
+    /// Whether the extra visualizer window stays on top.
+    pub extra_on_top: bool,
     /// Whether the floating mini player fades while the pointer is away.
     pub mini_fade: bool,
     /// The click that adds a song to the queue without playing it: 0 Ctrl
@@ -1639,6 +1643,8 @@ impl Default for Settings {
             lyrics_phonetic: false,
             mini_volume: true,
             mini_on_top: false,
+            main_on_top: false,
+            extra_on_top: false,
             mini_fade: true,
             mini_vis: None,
             queue_click: 0,

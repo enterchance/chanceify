@@ -165,6 +165,7 @@ const MARQUEE_SPEED: f32 = 22.0;
 const QUEUE_ICON_CAP: usize = 2;
 
 /// How many icon-sized slots a row with `count` playlists uses.
+#[allow(dead_code)]
 fn membership_slots(count: usize, capped: bool) -> usize {
     if capped && count > QUEUE_ICON_CAP {
         QUEUE_ICON_CAP + 1
@@ -173,6 +174,7 @@ fn membership_slots(count: usize, capped: bool) -> usize {
     }
 }
 
+#[allow(dead_code)]
 fn membership_width(app: &App, count: usize, capped: bool) -> f32 {
     let count = membership_slots(count, capped);
     if count == 0 {
@@ -182,6 +184,7 @@ fn membership_width(app: &App, count: usize, capped: bool) -> f32 {
     count as f32 * height + (count as f32 - 1.0) * gap + 8.0
 }
 
+#[allow(dead_code)]
 fn membership_icons(ui: &Ui, app: &mut App, rect: Rect, right: f32, row: &TrackRow<'_>) {
     if !row.item.is_track() {
         return;
@@ -321,7 +324,7 @@ fn paint_membership_icon(
 /// The playlists column: the song's playlists as a small grid from the cell's
 /// left (one, two side by side, four as two by two, six as three by two),
 /// scaled to the cell, so the column can stay narrow.
-fn membership_grid(ui: &Ui, app: &mut App, cell: Rect, row: &TrackRow<'_>) {
+fn membership_grid(ui: &Ui, app: &mut App, cell: Rect, row: &TrackRow<'_>, max_tile: Option<f32>) {
     if !row.item.is_track() {
         return;
     }
@@ -336,9 +339,11 @@ fn membership_grid(ui: &Ui, app: &mut App, cell: Rect, row: &TrackRow<'_>) {
     // One square the size of the single cover: a lone playlist fills it, two
     // sit side by side at half the size, three or four make two by two, up to
     // nine in three by three, and so on, each cover smaller than the last.
-    const CAP: usize = 16;
+    let cap: usize = if max_tile.is_some() { 9 } else { 16 };
     let (base, _) = membership_metrics(app.settings.membership_icon_scale);
-    let slots = total.min(CAP);
+    let base = max_tile.map_or(base, |m| base.min(m));
+    let pad = if max_tile.is_some() { 0.0 } else { 12.0 };
+    let slots = total.min(cap);
     let cols = match slots {
         1 => 1,
         2..=4 => 2,
@@ -347,14 +352,14 @@ fn membership_grid(ui: &Ui, app: &mut App, cell: Rect, row: &TrackRow<'_>) {
     };
     let rows = slots.div_ceil(cols);
     let gap = if cols >= 3 { 1.5_f32 } else { 2.0 };
-    let side = (cell.width() - 12.0).min(cell.height() - 10.0).max(10.0);
+    let side = (cell.width() - pad).min(cell.height() - if max_tile.is_some() { 4.0 } else { 10.0 }).max(10.0);
     let size = base.min((side - (cols as f32 - 1.0) * gap) / cols as f32).max(6.0);
     let grid_w = cols as f32 * size + (cols as f32 - 1.0) * gap;
     let grid_h = rows as f32 * size + (rows as f32 - 1.0) * gap;
-    let left = cell.left() + (cell.width() - 12.0 - grid_w).max(0.0) / 2.0;
+    let left = cell.left() + (cell.width() - pad - grid_w).max(0.0) / 2.0;
     let top = cell.center().y - grid_h / 2.0;
     let art = app.backend.art().clone();
-    let drawn = if total > CAP { CAP - 1 } else { total };
+    let drawn = if total > cap { cap - 1 } else { total };
     let spot = |index: usize| {
         let (r, c) = (index / cols, index % cols);
         Rect::from_min_size(pos2(left + c as f32 * (size + gap), top + r as f32 * (size + gap)), Vec2::splat(size))
@@ -2374,6 +2379,24 @@ fn track_row_contents(
         if bare { 0.0 } else { centred_shift(region, others, &app.settings.track_columns) }
     };
     let mut x = rect.left() + 8.0 + lone_shift;
+    // The queue's playlist icons: a small grid in a column of its own, left
+    // of the number, never bigger than the cover (a lone icon is half of it).
+    let cover_side = if row.compact { 36.0 } else { 40.0 };
+    let icon_col = if bare
+        && !ui
+            .data(|data| data.get_temp::<bool>(egui::Id::new("queue-hide-icons")))
+            .unwrap_or(false)
+        && row.item.is_track()
+    {
+        cover_side + 6.0
+    } else {
+        0.0
+    };
+    if icon_col > 0.0 {
+        let cell = Rect::from_min_size(pos2(x, rect.top()), vec2(cover_side, row_height));
+        membership_grid(ui, app, cell, &row, Some(cover_side / 2.0));
+        x += icon_col;
+    }
 
     // Number / play.
     let pending = app.play_pending(row.item.uri());
@@ -2566,7 +2589,7 @@ fn track_row_contents(
     // Outside the queue the playlist icons live in the PLAYLISTS column and
     // nowhere else: a table with that column off shows none beside the
     // song name.
-    let wanted_icons = if hide_icons || cols.playlists > 0.0 || !bare {
+    let wanted_icons = if hide_icons || cols.playlists > 0.0 || !bare || icon_col > 0.0 {
         0.0
     } else {
         membership_width(app, membership_shown(app, &row).len(), bare)
@@ -2814,7 +2837,7 @@ fn track_row_contents(
         x = slot_at(crate::model::SortColumn::Playlists).unwrap_or(x);
         rule(x);
         let cell = Rect::from_min_size(pos2(x, rect.top()), vec2(cols.playlists, row_height));
-        membership_grid(ui, app, cell, &row);
+        membership_grid(ui, app, cell, &row, None);
         x += cols.playlists;
     }
     if cols.album > 0.0 {
@@ -3092,7 +3115,7 @@ fn track_row_contents(
             None
         };
         let on_control = control.is_some_and(|size| {
-            let control_rect = Rect::from_min_size(pos2(rect.left() + 8.0, rect.top()), size);
+            let control_rect = Rect::from_min_size(pos2(rect.left() + 8.0 + icon_col, rect.top()), size);
             response
                 .interact_pointer_pos()
                 .is_some_and(|pos| control_rect.contains(pos))

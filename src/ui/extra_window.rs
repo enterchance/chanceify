@@ -45,6 +45,10 @@ pub fn show(app: &mut App, ctx: &Context) {
     {
         builder = builder.with_position([s[0], s[1]]);
     }
+    if app.settings.extra_on_top {
+        builder = builder.with_always_on_top();
+    }
+    let extra_top = app.settings.extra_on_top;
     let mut geometry: Option<[f32; 4]> = None;
     let mut close = false;
     let now = app.now_playing();
@@ -60,6 +64,12 @@ pub fn show(app: &mut App, ctx: &Context) {
         if ctx.input(|input| input.viewport().close_requested()) {
             close = true;
             return;
+        }
+        // This window's own "always on top", apart from the main window's.
+        let level_id = egui::Id::new("extra-window-top");
+        if ctx.data(|data| data.get_temp::<bool>(level_id)) != Some(extra_top) {
+            ctx.data_mut(|data| data.insert_temp(level_id, extra_top));
+            ctx.send_viewport_cmd(ViewportCommand::WindowLevel(crate::app::on_top_window_level(extra_top)));
         }
         let full = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
         if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
@@ -205,13 +215,15 @@ pub fn show(app: &mut App, ctx: &Context) {
         let wave = egui::Rect::from_min_size(pos2(rect.left() + 10.0, rect.top() + 10.0), size);
         let swap = egui::Rect::from_min_size(pos2(rect.left() + 48.0, rect.top() + 10.0), size);
         let exit = egui::Rect::from_min_size(pos2(rect.right() - 42.0, rect.top() + 10.0), size);
+        let pin = egui::Rect::from_min_size(pos2(rect.left() + 86.0, rect.top() + 10.0), size);
         let swap_icon = theme::Icon::Mic;
         let painter = ui.painter().clone();
-        for (button, icon) in [(wave, theme::Icon::Settings), (swap, swap_icon), (exit, theme::Icon::X)] {
+        for (button, icon) in [(wave, theme::Icon::Settings), (swap, swap_icon), (pin, theme::Icon::Pin), (exit, theme::Icon::X)] {
             let hot = pointer.is_some_and(|p| button.contains(p));
             painter.circle_filled(button.center(), 16.0, Color32::from_black_alpha(if hot { 190 } else { 120 }));
             let icon_rect = egui::Rect::from_center_size(button.center(), egui::vec2(18.0, 18.0));
-            theme::paint_icon(ui, icon, icon_rect, 18.0, Color32::from_white_alpha(if hot { 255 } else { alpha }));
+            let lit = hot || (button == pin && extra_top);
+            theme::paint_icon(ui, icon, icon_rect, 18.0, Color32::from_white_alpha(if lit { 255 } else { alpha }));
             if hot {
                 ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
             }
@@ -221,6 +233,8 @@ pub fn show(app: &mut App, ctx: &Context) {
                 app.extra_vis_panel = !was_open;
             } else if swap.contains(p) {
                 app.actions.push(crate::model::Action::ToggleVisLyrics);
+            } else if pin.contains(p) {
+                app.actions.push(crate::model::Action::ToggleExtraOnTop);
             } else if exit.contains(p) {
                 close = true;
             }

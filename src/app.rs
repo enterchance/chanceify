@@ -3961,7 +3961,7 @@ impl App {
     /// Keeps the always-on-top level in step with the mini player: on while
     /// it is showing with the option set, back to normal otherwise.
     pub(crate) fn sync_mini_level(&mut self, ctx: &egui::Context) {
-        let want = self.settings.mini_on_top;
+        let want = self.settings.main_on_top;
         if want != self.mini_top_sent {
             self.mini_top_sent = want;
             if self.window_level_supported {
@@ -11920,6 +11920,14 @@ impl App {
             }
             Action::ToggleMiniOnTop => {
                 self.settings.mini_on_top = !self.settings.mini_on_top;
+                self.mark_settings_dirty();
+            }
+            Action::ToggleMainOnTop => {
+                self.settings.main_on_top = !self.settings.main_on_top;
+                self.mark_settings_dirty();
+            }
+            Action::ToggleExtraOnTop => {
+                self.settings.extra_on_top = !self.settings.extra_on_top;
                 self.mark_settings_dirty();
             }
             Action::ToggleVisBarsStay => {

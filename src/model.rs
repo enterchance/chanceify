@@ -1554,6 +1554,8 @@ pub enum Action {
     ToggleVisReverseOne(u8),
     ToggleMissingMarkBig,
     ToggleMiniOnTop,
+    ToggleMainOnTop,
+    ToggleExtraOnTop,
     ToggleMiniFade,
     /// Play song files from the Local songs page: these paths, in this
     /// order, starting at `index`. `shuffle` sets shuffle first; `None`

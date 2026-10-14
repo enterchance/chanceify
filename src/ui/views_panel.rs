@@ -865,7 +865,7 @@ pub fn show(app: &mut App, ctx: &Context) {
                         }
                     });
                     ui.add_space(4.0);
-                    let on_top = ("Always on top", app.settings.mini_on_top, Action::ToggleMiniOnTop);
+                    let on_top = ("Always on top", app.settings.main_on_top, Action::ToggleMainOnTop);
                     let flag = |bit: u8, label: &'static str, inverted: bool, app: &App| {
                         (label, app.settings.lyrics_flag(bit) != inverted, Action::ToggleLyricsFlag(bit))
                     };
