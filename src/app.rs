@@ -2649,7 +2649,8 @@ impl App {
         match scan.queue.last().cloned() {
             Some((id, name)) => {
                 scan.asked = true;
-                self.backend.api(ApiRequest::ArtistRecent { id, name });
+                let spotify_only = self.settings.releases_spotify_only;
+                self.backend.api(ApiRequest::ArtistRecent { id, name, spotify_only });
             }
             None => {
                 let found = std::mem::take(&mut scan.found);

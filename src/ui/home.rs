@@ -92,6 +92,16 @@ fn new_releases(app: &mut App, ui: &mut egui::Ui) {
             theme::subtle(ui, &palette, &format!("{} new", releases.len()));
         }
         {
+            let mut only = app.settings.releases_spotify_only;
+            if widgets::switch_labeled(ui, &palette, "Spotify only", &mut only)
+                .on_hover_text("Look for new releases on Spotify alone (slower and can hit Spotify's limits) instead of finding them on Deezer first.")
+                .changed()
+            {
+                app.settings.releases_spotify_only = only;
+                app.mark_settings_dirty();
+            }
+        }
+        {
             let mut ask = app.settings.release_confirm_remove;
             if widgets::switch_labeled(ui, &palette, "Confirm removal", &mut ask).changed() {
                 app.settings.release_confirm_remove = ask;
@@ -1210,10 +1220,30 @@ fn recommendations(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
         }
+        // The same song under another release counts too: matched by name and artist.
+        let key = |name: &str, artists: &str| format!("{}|{}", name.trim().to_lowercase(), artists.trim().to_lowercase());
+        let mut known_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for page in app.playlist_pages.values() {
+            for item in &page.items.items {
+                if let Some(crate::api::models::PlayableItem::Track(track)) = item.playable() {
+                    known_names.insert(key(&track.name, &track.artist_names()));
+                }
+            }
+        }
+        if let Loadable::Loaded(top) = &app.home.top_tracks {
+            for track in top {
+                known_names.insert(key(&track.name, &track.artist_names()));
+            }
+        }
         let kept: Vec<_> = list
             .iter()
             .filter(|track| {
-                app.saved.get(&track.uri) != Some(&true) && !owned.contains(track.uri.as_str())
+                app.saved.get(&track.uri) != Some(&true)
+                    && !owned.contains(track.uri.as_str())
+                    // In any of the reader's playlists (the background index
+                    // knows all of them, opened or not).
+                    && app.library.membership.get(&track.uri).is_empty()
+                    && !known_names.contains(&key(&track.name, &track.artist_names()))
             })
             .cloned()
             .collect();

@@ -273,6 +273,7 @@ pub enum ApiRequest {
     ArtistRecent {
         id: String,
         name: String,
+        spotify_only: bool,
     },
     RelatedArtists {
         id: String,
@@ -3874,8 +3875,8 @@ async fn handle(
                     } else {
                         let mut tracks: Vec<crate::api::models::Track> = Vec::new();
                         let mut failure = None;
-                        for (artist, title) in pairs.iter().take(30) {
-                            if tracks.len() >= 16 {
+                        for (artist, title) in pairs.iter().take(40) {
+                            if tracks.len() >= 24 {
                                 break;
                             }
                             let query = format!("track:\"{title}\" artist:\"{artist}\"");
@@ -4234,7 +4235,7 @@ async fn handle(
             result: routed!(artist_top_tracks(&id)),
             id,
         },
-        ApiRequest::ArtistRecent { id, name } => {
+        ApiRequest::ArtistRecent { id, name, spotify_only } => {
             // Deezer's open API says what is new (no limits to speak of);
             // Spotify is only asked about the few releases that turn up, so
             // they can be played. Spotify's own list is the fallback.
@@ -4243,7 +4244,7 @@ async fn handle(
                 crate::releases::NEW_FOR_DAYS,
             );
             let deezer = match crate::open_sources::client() {
-                Some(http) if !name.is_empty() => {
+                Some(http) if !name.is_empty() && !spotify_only => {
                     Some(crate::open_sources::recent_releases(&http, &name, &cutoff).await)
                 }
                 _ => None,
