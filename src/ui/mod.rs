@@ -94,12 +94,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     if app.fullscreen_vis {
-        player_bar::show(app, ui);
-        lyrics::vis_overlay(app, ui);
-        // The queue floats over the picture, on the right, while it is on.
+        // The queue is laid out first, on the right, so the picture takes
+        // what is left (a panel made after the full-window one has no room).
         if app.show_queue_panel {
             queue::side_panel(app, ui);
         }
+        player_bar::show(app, ui);
+        lyrics::vis_overlay(app, ui);
         keys::handle(app, ctx);
         views_panel::show(app, ctx);
         dialogs::show(app, ctx);

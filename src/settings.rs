@@ -666,7 +666,7 @@ pub struct VisPreset {
 impl Settings {
     /// The settings that make up a visualizer look.
     fn is_vis_key(key: &str) -> bool {
-        key.starts_with("player_bar_vis") || key.starts_with("swirl_") || key.starts_with("vis_") && key != "vis_presets" && key != "vis_views"
+        key.starts_with("player_bar_vis") || key.starts_with("swirl_") || key.starts_with("vis_") && key != "vis_presets" && key != "vis_views" && key != "vis_view_mini"
     }
 
     /// The settings each view keeps for itself (see `vis_views`).
@@ -685,13 +685,18 @@ impl Settings {
             return;
         };
         let own: serde_json::Map<_, _> = all.into_iter().filter(|(key, _)| Self::is_view_key(key)).collect();
-        self.vis_views[view.min(2) as usize] = Some(own);
+        if view == 3 {
+            self.vis_view_mini = Some(own);
+        } else {
+            self.vis_views[view.min(2) as usize] = Some(own);
+        }
     }
 
     /// Put a view's own settings in place. A view never opened before keeps
     /// the values as they are, so it starts as a copy of the one before.
     pub fn load_view(&mut self, view: u8) {
-        let Some(profile) = self.vis_views[view.min(2) as usize].clone() else {
+        let stored = if view == 3 { self.vis_view_mini.clone() } else { self.vis_views[view.min(2) as usize].clone() };
+        let Some(profile) = stored else {
             return;
         };
         let Ok(serde_json::Value::Object(mut all)) = serde_json::to_value(&*self) else {
@@ -826,6 +831,8 @@ pub struct Settings {
     /// 4 bottom, 8 right. Never set means top and left.
     #[serde(default)]
     pub vis_bar_sides: Option<u8>,
+    /// Which edges the flow rises from (1 top, 2 left, 4 bottom, 8 right).
+    pub vis_flow_sides: Option<u8>,
     /// Where the player bar's bars take their colour.
     pub player_bar_vis_color: VisColor,
     /// That colour, as `#rrggbb`, used when the source is `Fixed`.
@@ -1409,6 +1416,8 @@ pub struct Settings {
     /// The plain fields above always hold the open view's own values; moving
     /// to another view saves them here and loads that view's.
     pub vis_views: [Option<serde_json::Map<String, serde_json::Value>>; 3],
+    /// The mini player's own visualizer settings (view 3).
+    pub vis_view_mini: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl std::fmt::Debug for Settings {
@@ -1451,6 +1460,7 @@ impl Default for Settings {
             vis_shapes_set: false,
             vis_shapes_last: 0,
             vis_bar_sides: None,
+            vis_flow_sides: None,
             player_bar_vis_color: VisColor::AlbumArt,
             player_bar_vis_hex: "#8b5cf6".into(),
             player_bar_vis_bars: crate::vis::WIDE_BANDS as u16,
@@ -1681,6 +1691,7 @@ impl Default for Settings {
             proxy_password: String::new(),
             proxy_password_legacy: false,
             vis_views: [None, None, None],
+            vis_view_mini: None,
         }
     }
 }
@@ -1832,6 +1843,10 @@ impl Settings {
     }
 
     /// The fullscreen bars' edges: top and left unless chosen otherwise.
+    pub fn vis_flow_sides_value(&self) -> u8 {
+        self.vis_flow_sides.unwrap_or(4) & 15
+    }
+
     pub fn vis_bar_sides_value(&self) -> u8 {
         self.vis_bar_sides.unwrap_or(3) & 15
     }
@@ -2011,7 +2026,7 @@ impl Settings {
         "seek_width", "show_shortcut_hints", "sidebar_compact", "sidebar_grid", "sidebar_order",
         "sidebar_width", "swirl_art_scroll", "swirl_art_single", "swirl_art_edge", "swirl_colours_fixed", "swirl_drift", "swirl_peaks",
         "swirl_scale", "swirl_tune", "swirl_warp", "swirl_waves", "theme", "theme_from_cover", "custom_bg", "custom_accent",
-        "track_columns", "tracklist_compact", "vis", "vis_bar_sides", "vis_shapes",
+        "track_columns", "tracklist_compact", "vis", "vis_bar_sides", "vis_flow_sides", "vis_shapes",
         "vis_shapes_last", "vis_shapes_set", "volume_presets", "zoom",
         "volume_custom_width", "vis_no_gradient", "vis_lyrics", "vis_text_still", "vis_sway", "vis_sway_amount", "vis_sway_react", "sway_sens", "vis_text_no_outline", "vis_text_back", "vis_back_alpha", "vis_back_round", "vis_back_pad", "vis_back_block", "vis_live_preview", "vis_font_random", "vis_text_font", "vis_text_no_artist", "vis_lyrics_no_back", "vis_bars_stay", "lyrics_vis", "lyrics_vis_dark", "lyrics_vis_mode", "window_opacity", "anchor_controls", "anchor_volume", "bar_stacked", "bar_layout", "bar_free", "lyrics_ctl_off", "vis_bars_opacity", "vis_flow_opacity", "swirl_react_mode", "vis_jump_react", "vis_jump_on", "float_idle",
     ];

@@ -181,7 +181,7 @@ pub(crate) fn clear_search(ctx: &egui::Context) {
 const PROXY_DIRTY_ID: &str = "proxy-settings-dirty";
 
 /// The tabs along the top of the page.
-const TABS: [&str; 6] = ["Accounts", "Playback", "Look", "Library", "Network", "About"];
+const TABS: [&str; 7] = ["Accounts", "Playback", "Look", "Visualizer", "Library", "Network", "About"];
 
 /// Which tab a section sits in. A section that is not listed always shows.
 fn tab_of(title: &str) -> Option<u8> {
@@ -193,12 +193,14 @@ fn tab_of(title: &str) -> Option<u8> {
         Some(1)
     } else if has(&["appearance", "song lists", "gradient", "lyrics"]) {
         Some(2)
-    } else if has(&["storage", "unavailable"]) {
+    } else if has(&["visualizer"]) {
         Some(3)
-    } else if has(&["proxy"]) {
+    } else if has(&["storage", "unavailable"]) {
         Some(4)
-    } else if has(&["about", "tour"]) {
+    } else if has(&["proxy"]) {
         Some(5)
+    } else if has(&["about", "tour"]) {
+        Some(6)
     } else {
         None
     }
@@ -332,6 +334,12 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
             ui.data_mut(|data| data.insert_temp(tab_id, tab));
             ui.add_space(4.0);
         }
+    }
+    // The visualizer's own settings (shapes, bass jump, colour, equalizer),
+    // the very panel the gear opens, here in the settings page too.
+    if needle.is_empty() && ui.data(|data| data.get_temp::<u8>(egui::Id::new("settings-tab"))).unwrap_or(0) == 3 {
+        super::player_bar::embedded_vis_settings(app, ui);
+        return;
     }
     let dirty_id = egui::Id::new(PLAYBACK_DIRTY_ID);
     let mut playback_dirty = ui

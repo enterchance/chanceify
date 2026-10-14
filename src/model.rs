@@ -1376,6 +1376,8 @@ pub enum Action {
     ToggleVisShapes,
     /// Turn one fullscreen bar edge on or off (1 top, 2 left, 4 bottom, 8 right).
     ToggleBarSide(u8),
+    /// Switch one edge (1 top, 2 left, 4 bottom, 8 right) of the flow on or off.
+    ToggleFlowSide(u8),
     /// How many bars stand across the player bar.
     SetVisBars(u16),
     /// The gap between those bars, in pixels.

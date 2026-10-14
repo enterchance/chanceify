@@ -10144,7 +10144,11 @@ impl App {
                     .filter(|uri| uri.starts_with("spotify:track:"))
                     .collect();
                 if uris.len() < 2 || (total > uris.len() + 2) {
-                    self.toast("Open the list and let it finish loading first");
+                    // Ask for the rest of the list now; the next press has all of it.
+                    if let Some(id) = uri.strip_prefix("spotify:playlist:") {
+                        self.actions.push(Action::LoadMore(Page::Playlist(id.to_string())));
+                    }
+                    self.toast("Loading the rest of the list. Press it again in a moment.");
                 } else {
                     let now = jiff::Timestamp::now().as_second();
                     let last = self.stats.last_played();
@@ -11219,6 +11223,12 @@ impl App {
             Action::ToggleBarSide(bit) => {
                 let sides = self.settings.vis_bar_sides_value() ^ (bit & 15);
                 self.settings.vis_bar_sides = Some(sides);
+                self.mark_settings_dirty();
+            }
+            Action::ToggleFlowSide(bit) => {
+                let sides = self.settings.vis_flow_sides_value() ^ (bit & 15);
+                // At least one edge always stays on.
+                self.settings.vis_flow_sides = Some(if sides == 0 { 4 } else { sides });
                 self.mark_settings_dirty();
             }
             Action::SetVisBars(bars) => {
@@ -12963,6 +12973,8 @@ impl App {
             2
         } else if self.fullscreen_vis {
             1
+        } else if self.settings.mini_player {
+            3
         } else {
             0
         };

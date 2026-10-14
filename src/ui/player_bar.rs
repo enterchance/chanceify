@@ -793,9 +793,6 @@ fn visualizer(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying>
             run,
             swirl_wash(app, ui.input(|input| input.time)),
         );
-        if app.fullscreen_vis {
-            swirl_scene(app, ui, rect, now);
-        }
         moving = true;
     }
     if shapes & Settings::SHAPE_FLOW != 0 {
@@ -833,6 +830,11 @@ fn visualizer(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying>
             };
             moving |= visualizer_shape(app, ui, bars, now, PlayerBarVis::Spectrum);
         }
+    }
+    // The cover and the song's name are drawn last, so the bars and the flow
+    // pass behind them instead of across them.
+    if app.fullscreen_vis && shapes & Settings::SHAPE_SWIRL != 0 {
+        swirl_scene(app, ui, rect, now);
     }
     crate::crash::stage("visualizer: end");
     moving
@@ -1289,6 +1291,8 @@ pub(super) fn visualizer_shape(
             if app.settings.vis_reverse_flow {
                 flow.reverse();
             }
+            // Full screen, the other edges use the whole window.
+            let flow_full = if app.fullscreen_vis { ui.ctx().content_rect() } else { rect };
             flow_sheets(
                 &painter,
                 rect,
@@ -1297,6 +1301,8 @@ pub(super) fn visualizer_shape(
                 strength,
                 app.player_bar_vis_flow,
                 FlowStyle {
+                    sides: app.settings.vis_flow_sides_value(),
+                    full: flow_full,
                     sheets: app.settings.player_bar_vis_flow_sheets() as usize,
                     // The lyrics page is the whole window, so the same depth
                     // is a lot taller there than in the bar: it is eased down.
@@ -1397,7 +1403,7 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
     let tab_now = if tab_now == EQ_TAB {
         tab_now
     } else {
-        tab_now.min(if app.vis_view_now.unwrap_or(0) == 0 { 1 } else { 3 })
+        tab_now.min(if matches!(app.vis_view_now.unwrap_or(0), 0 | 3) { 1 } else { 3 })
     };
     let two_wide = tab_now == 2 || (tab_now == 3 && (app.lyrics_fullscreen.is_some() || app.settings.vis_lyrics));
     let natural_w = if tab_now == EQ_TAB {
@@ -1411,10 +1417,12 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
     };
     let height_id = egui::Id::new(("vis-panel-natural-h", tab_now, app.mini_active));
     let natural_h = ctx.data(|data| data.get_temp::<f32>(height_id)).unwrap_or(440.0).max(120.0);
-    let fit = ((screen.width() - 16.0) / natural_w)
-        .min((screen.height() - 16.0) / natural_h)
-        .clamp(0.35, 1.0);
-    let scaled = fit < 0.999;
+    let room = ((screen.width() - 16.0) / natural_w).min((screen.height() - 16.0) / natural_h);
+    // The reader's own size for the panel (the grip in its corner), never
+    // bigger than the window has room for.
+    let user = if app.settings.vis_panel_w > 0.0 { app.settings.vis_panel_w.clamp(0.4, 1.4) } else { 1.0 };
+    let fit = (room.clamp(0.35, 1.0) * user).min(room.max(0.35)).clamp(0.3, 1.4);
+    let scaled = (fit - 1.0).abs() > 0.001;
     let fixed_pos = egui::pos2(
         screen.left() + 8.0,
         (screen_h - above - natural_h * fit)
@@ -1472,6 +1480,34 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
     // its key or the right-click on the visualizer is used again): clicking
     // elsewhere leaves it where it is.
     if let Some((_window, shown)) = window {
+        // A grip in the bottom right corner: drag to make the panel smaller or larger.
+        let grip = egui::Rect::from_center_size(shown.right_bottom() - egui::vec2(10.0, 10.0), egui::vec2(18.0, 18.0));
+        egui::Area::new(egui::Id::new("vis-panel-grip"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(grip.min)
+            .show(ctx, |ui| {
+                let palette = app.palette;
+                let (rect, response) = ui.allocate_exact_size(grip.size(), egui::Sense::drag());
+                let hot = response.hovered() || response.dragged();
+                if hot {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+                }
+                let colour = if hot { palette.text } else { palette.dim };
+                for (dx, dy) in [(0.0, 0.0), (-4.0, 0.0), (0.0, -4.0), (-8.0, 0.0), (-4.0, -4.0), (0.0, -8.0)] {
+                    ui.painter().circle_filled(egui::pos2(rect.center().x + dx + 4.0, rect.center().y + dy + 4.0), 1.0, colour);
+                }
+                if response.dragged() {
+                    let now_scale = if app.settings.vis_panel_w > 0.0 { app.settings.vis_panel_w } else { 1.0 };
+                    let next = now_scale + response.drag_delta().x / natural_w.max(200.0);
+                    app.settings.vis_panel_w = next.clamp(0.4, 1.4);
+                    app.mark_settings_dirty();
+                }
+                if response.double_clicked() {
+                    app.settings.vis_panel_w = 0.0;
+                    app.mark_settings_dirty();
+                }
+                response.on_hover_text("Drag to resize. Double-click to reset.");
+            });
         let size = 22.0;
         egui::Area::new(egui::Id::new("vis-panel-close"))
             .order(egui::Order::Foreground)
@@ -1658,6 +1694,20 @@ const VIS_SINGLE_W: f32 = 272.0;
 /// The visualizer settings' last tab, the equalizer, whatever the view.
 const EQ_TAB: u8 = 4;
 
+/// The visualizer settings drawn inside the settings page.
+pub(super) fn embedded_vis_settings(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    theme::subtle(
+        ui,
+        &palette,
+        &gettext(app.locale, "These are the settings of the view you are in. The title and lyrics tabs show in the full screen views."),
+    );
+    ui.add_space(6.0);
+    egui::ScrollArea::horizontal().id_salt("embedded-vis-scroll").show(ui, |ui| {
+        vis_menu_body(app, ui);
+    });
+}
+
 fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     {
@@ -1681,7 +1731,7 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
             // Each view keeps its own settings; the normal view has no lyrics
             // over its visualizer, so it has no lyrics tab.
             let view = app.vis_view_now.unwrap_or(0);
-            let last_tab: u8 = if view == 0 { 1 } else { 3 };
+            let last_tab: u8 = if matches!(view, 0 | 3) { 1 } else { 3 };
             let tab: u8 = ui.ctx().data(|data| data.get_temp::<u8>(tab_id)).unwrap_or(0);
             let tab = if tab == EQ_TAB { tab } else { tab.min(last_tab) };
             ui.horizontal(|ui| {
@@ -1720,12 +1770,12 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     for (name, opacity, count, height, gap) in [
-                        ("Fine", 70.0f32, 512u16, 0.8f32, 0.0f32),
+                        ("Fine", 50.0f32, 1024u16, 0.8f32, 0.0f32),
                         ("Classic", 100.0, 128, 1.0, 2.0),
                         ("Chunky", 100.0, 48, 1.6, 4.0),
                         ("Tall", 90.0, 96, 2.6, 1.0),
                     ] {
-                        if chip(ui, &palette, &gettext(app.locale, name), false, 48.0).clicked() {
+                        if chip(ui, &palette, &gettext(app.locale, name), false, 62.0).clicked() {
                             app.actions.push(Action::SetVisOpacity(true, opacity / 100.0));
                             app.actions.push(Action::SetVisBars(count));
                             app.actions.push(Action::SetVisBarHeight(height));
@@ -1788,7 +1838,7 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                 app.settings.player_bar_vis_gap(),
                 |value| app.actions.push(Action::SetVisGap(value)),
             );
-                if app.fullscreen_vis {
+                if app.fullscreen_vis || app.mini_active {
                     // Fullscreen bars hang from the edges you pick.
                     let sides = app.settings.vis_bar_sides_value();
                     ui.horizontal(|ui| {
@@ -1815,6 +1865,18 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
             }
             if shapes & crate::settings::Settings::SHAPE_FLOW != 0 {
                 super::widgets::menu_separator(ui, &palette);
+                // Which edges the flow rises from.
+                if app.fullscreen_vis || app.mini_active {
+                    let sides = app.settings.vis_flow_sides_value();
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        for (bit, label) in [(1u8, "Top"), (2, "Left"), (4, "Bottom"), (8, "Right")] {
+                            if chip(ui, &palette, &gettext(app.locale, label), sides & bit != 0, 48.0).clicked() {
+                                app.actions.push(Action::ToggleFlowSide(bit));
+                            }
+                        }
+                    });
+                }
                 // Ready-made looks: sheets, height, opacity, speed.
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
@@ -1824,7 +1886,7 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                         ("Dense", 10, 0.7, 85.0, 1.6),
                         ("Storm", 8, 1.1, 100.0, 3.5),
                     ] {
-                        if chip(ui, &palette, &gettext(app.locale, name), false, 56.0).clicked() {
+                        if chip(ui, &palette, &gettext(app.locale, name), false, 62.0).clicked() {
                             app.actions.push(Action::SetFlowSheets(sheets));
                             app.actions.push(Action::SetFlowDepth(depth));
                             app.actions.push(Action::SetVisOpacity(false, opacity / 100.0));
@@ -4243,6 +4305,10 @@ const FLOW_DRIFT: f32 = 0.13;
 /// defaults suit one bar and not another.
 #[derive(Clone, Copy)]
 struct FlowStyle {
+    /// Which edges it rises from (1 top, 2 left, 4 bottom, 8 right).
+    sides: u8,
+    /// The whole picture's area, for the edges other than the bottom.
+    full: Rect,
     sheets: usize,
     /// How far along the spectrum each sheet is shifted from the one in
     /// front of it, as a fraction of the whole run of readings. Zero has
@@ -4269,13 +4335,49 @@ fn flow_sheets(
     painter: &egui::Painter,
     rect: Rect,
     levels: &[f32],
-    (low, high): (Color32, Color32),
+    colours: (Color32, Color32),
     strength: f32,
     phase: f32,
     style: FlowStyle,
 ) {
+    // The bottom edge is the flow as it always was, in `rect`; any other
+    // edge is the same picture turned to rise from that edge of `style.full`.
+    let sides = if style.sides == 0 { 4 } else { style.sides };
+    let full = style.full;
+    for bit in [4u8, 1, 2, 8] {
+        if sides & bit == 0 {
+            continue;
+        }
+        let area = if bit == 4 { rect } else { full };
+        let Some(mut mesh) = flow_mesh(area, levels, colours, strength, phase, style) else {
+            continue;
+        };
+        if bit != 4 {
+            for vertex in &mut mesh.vertices {
+                // Across the edge (0 to 1) and how far it rises (0 to 1).
+                let across = (vertex.pos.x - area.left()) / area.width();
+                let rise = (area.bottom() - vertex.pos.y) / area.height();
+                vertex.pos = match bit {
+                    1 => pos2(vertex.pos.x, area.top() + rise * area.height()),
+                    2 => pos2(area.left() + rise * area.width(), area.top() + across * area.height()),
+                    _ => pos2(area.right() - rise * area.width(), area.top() + across * area.height()),
+                };
+            }
+        }
+        painter.add(egui::Shape::mesh(mesh));
+    }
+}
+
+fn flow_mesh(
+    rect: Rect,
+    levels: &[f32],
+    (low, high): (Color32, Color32),
+    strength: f32,
+    phase: f32,
+    style: FlowStyle,
+) -> Option<egui::Mesh> {
     if levels.is_empty() || rect.width() < 8.0 || rect.height() < 8.0 {
-        return;
+        return None;
     }
     let sheets = style.sheets.clamp(1, 12);
     let depth = style.depth.clamp(0.1, 1.4);
@@ -4347,7 +4449,7 @@ fn flow_sheets(
             mesh.add_triangle(crest, foot + step + 1, foot + step);
         }
     }
-    painter.add(egui::Shape::mesh(mesh));
+    Some(mesh)
 }
 
 /// The visualizer's two colours: the cover's own for the bass, and the same
@@ -4887,7 +4989,7 @@ pub fn now_playing_overlay(app: &mut App, ui: &mut egui::Ui, art: Rect, now: &No
     // and the artist links lay on top of them and took every click: the title
     // could not be pressed, and neither could an artist. Added first, it sits
     // underneath and only gets the clicks nothing else wants.
-    let art_response = ui.interact(art, egui::Id::new("sidebar-art-overlay"), Sense::click());
+    let art_response = ui.interact(art, egui::Id::new("sidebar-art-overlay"), Sense::click_and_drag());
 
     let margin = 6.0;
     let pad_x = 12.0;
@@ -4971,7 +5073,7 @@ pub fn now_playing_overlay(app: &mut App, ui: &mut egui::Ui, art: Rect, now: &No
     let title_pos = pos2(card.left() + pad_x, card.top() + pad_y);
     let title_rect = Rect::from_min_size(title_pos, title_extent);
     let title = ui
-        .interact(title_rect, egui::Id::new("now-playing-card-title"), Sense::click())
+        .interact(title_rect, egui::Id::new("now-playing-card-title"), Sense::click_and_drag())
         .on_hover_cursor(egui::CursorIcon::PointingHand);
     {
         let sway = app.settings.vis_sway_preset();
@@ -5063,6 +5165,21 @@ pub fn now_playing_overlay(app: &mut App, ui: &mut egui::Ui, art: Rect, now: &No
         } else if let Some(id) = &now.show_id {
             app.actions.push(Action::Open(Page::Show(id.clone())));
         }
+    }
+    // Drag the song name or the picture onto a playlist in the library.
+    if (title.drag_started_by(egui::PointerButton::Primary) || art_response.drag_started_by(egui::PointerButton::Primary))
+        && let Some(item) = app.now_playing_item().filter(|item| item.is_track())
+    {
+        egui::DragAndDrop::set_payload(
+            ui.ctx(),
+            crate::model::DragTrack {
+                title: item.name().to_string(),
+                image: item.image(64).map(str::to_string),
+                items: vec![item],
+                from: None,
+                source_playlist: None,
+            },
+        );
     }
     // Right-click the song name for the song's own menu too.
     if let Some(item) = app.now_playing_item() {

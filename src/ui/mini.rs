@@ -126,39 +126,32 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             // everywhere else (Visualizer settings in the right-click menu).
             // The mini player has its own look (Off, Bars, Flow or Swirl from
             // its menu), whatever the big visualizer is set to.
-            let saved_shapes = (app.settings.vis_shapes, app.settings.vis_shapes_set);
-            let shapes = [
-                0,
-                crate::settings::Settings::SHAPE_BARS,
-                crate::settings::Settings::SHAPE_FLOW,
-                crate::settings::Settings::SHAPE_SWIRL,
-            ][app.settings.mini_vis_mode() as usize];
-            app.settings.vis_shapes = shapes;
-            app.settings.vis_shapes_set = true;
+            // The mini player has settings of its own (the gear's panel edits
+            // them while it is open), and any mix of the three shapes.
+            let shapes = app.settings.vis_shapes_value();
             if shapes != 0 {
-                // Only what moves behind the words: never the big visualizer's
-                // cover or song name, which have no place in a window this small.
-                let backdrop = if shapes == crate::settings::Settings::SHAPE_FLOW {
-                    1
-                } else if shapes == crate::settings::Settings::SHAPE_SWIRL {
-                    2
-                } else {
-                    4
-                };
-                let moving =
-                    super::player_bar::lyrics_backdrop(app, ui, area, now.as_ref(), backdrop);
-                if shapes != crate::settings::Settings::SHAPE_BARS {
-                    // Flow and swirl fill the window: a light veil keeps
-                    // the words readable.
+                use crate::settings::Settings;
+                let mut moving = false;
+                // The back first: the swirl, then the flow, behind a light
+                // veil so the words stay readable, then the bars on top.
+                if shapes & Settings::SHAPE_SWIRL != 0 {
+                    moving |= super::player_bar::lyrics_backdrop(app, ui, area, now.as_ref(), 2);
+                }
+                if shapes & Settings::SHAPE_FLOW != 0 {
+                    moving |= super::player_bar::lyrics_backdrop(app, ui, area, now.as_ref(), 1);
+                }
+                if shapes & (Settings::SHAPE_SWIRL | Settings::SHAPE_FLOW) != 0 {
                     ui.painter()
                         .with_clip_rect(area)
                         .rect_filled(area, 0.0, Color32::from_black_alpha(80));
+                }
+                if shapes & Settings::SHAPE_BARS != 0 {
+                    moving |= super::player_bar::lyrics_backdrop(app, ui, area, now.as_ref(), 4);
                 }
                 if moving {
                     ui.ctx().request_repaint_after(std::time::Duration::from_micros(16_667));
                 }
             }
-            (app.settings.vis_shapes, app.settings.vis_shapes_set) = saved_shapes;
             // Right-click anywhere that is not a control for the mini
             // player's options. (Added first, so every control drawn after it
             // keeps its own clicks.)
@@ -215,9 +208,20 @@ fn options_menu(app: &mut App, page: &egui::Response) {
             if widgets::menu_item(ui, &palette, tick(app.settings.mini_volume), "Volume") {
                 app.actions.push(Action::ToggleMiniVolume);
             }
-            for (mode, label) in [(0u8, "Nothing moving"), (1, "Bars"), (2, "Flow"), (3, "Swirl")] {
-                if widgets::menu_item(ui, &palette, tick(app.settings.mini_vis_mode() == mode), label) {
-                    app.actions.push(Action::SetMiniVis(mode));
+            {
+                use crate::settings::Settings;
+                let shapes = app.settings.vis_shapes_value();
+                for (bit, label) in [
+                    (Settings::SHAPE_BARS, "Bars"),
+                    (Settings::SHAPE_FLOW, "Flow"),
+                    (Settings::SHAPE_SWIRL, "Swirl"),
+                ] {
+                    if widgets::menu_item(ui, &palette, tick(shapes & bit != 0), label) {
+                        app.actions.push(Action::ToggleVisShape(bit));
+                    }
+                }
+                if widgets::menu_item(ui, &palette, Some(Icon::Settings), "Settings") {
+                    app.actions.push(Action::ToggleVisPanel);
                 }
             }
             widgets::menu_separator(ui, &palette);

@@ -1366,6 +1366,25 @@ pub(super) fn controls_box_inner(app: &mut App, ui: &mut egui::Ui, top_left: egu
             app.actions.push(Action::ToggleVisPanel);
         }
     }
+    // A grip in the bottom right corner: drag it to make the controls
+    // bigger or smaller.
+    {
+        let corner = Rect::from_center_size(pos2(outer.right() - 9.0, outer.bottom() - 9.0), vec2(16.0, 16.0));
+        let response = ui.interact(corner, egui::Id::new("pop-out-resize"), Sense::drag());
+        let hot = response.hovered() || response.dragged();
+        if hot {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+        }
+        let colour = if hot { palette.text } else { palette.dim };
+        for (dx, dy) in [(0.0, 0.0), (-4.0, 0.0), (0.0, -4.0), (-8.0, 0.0), (-4.0, -4.0), (0.0, -8.0)] {
+            ui.painter().circle_filled(pos2(corner.center().x + dx + 3.0, corner.center().y + dy + 3.0), 0.9, colour);
+        }
+        if response.dragged() {
+            let scale = app.settings.controls_scale_value() + response.drag_delta().x / 260.0;
+            app.actions.push(Action::SetControlsScale(scale));
+        }
+        response.on_hover_text(gettext(app.locale, "Drag to resize").into_owned());
+    }
     // Beside it, the queue.
     {
         let spot = Rect::from_center_size(pos2(outer.right() - 31.0, outer.top() + 8.0), vec2(16.0, 14.0));
