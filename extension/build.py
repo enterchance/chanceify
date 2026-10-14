@@ -16,6 +16,8 @@ header = f"""// ==UserScript==
 // @version      {ver}
 // @description  Play any song on Last.fm in chanceify with one click.
 // @match        https://www.last.fm/*
+// @match        https://www.youtube.com/*
+// @match        https://music.youtube.com/*
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==

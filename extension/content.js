@@ -93,9 +93,50 @@
     host.parentNode.insertBefore(b, host.nextSibling);
   }
 
+  // YouTube: an "open in chanceify" button under the video. The title is
+  // cleaned into an artist and a song, and chanceify finds it on Spotify.
+  function youtubeSong() {
+    const raw = text(document.querySelector('ytd-watch-metadata h1, #title h1, h1.ytd-watch-metadata, ytmusic-player-bar .title'));
+    if (!raw) return null;
+    let channel = text(document.querySelector('ytd-watch-metadata ytd-channel-name a, #owner #channel-name a, ytmusic-player-bar .byline'));
+    let title = raw
+      .replace(/[\[(][^\])]*(official|lyric|audio|video|visuali[sz]er|hd|hq|4k|remaster|music video|mv)[^\])]*[\])]/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    let artist = '';
+    const split = title.split(/\s+[-\u2013\u2014|]\s+/);
+    if (split.length >= 2) {
+      artist = split[0].trim();
+      title = split.slice(1).join(' - ').trim();
+    } else {
+      artist = channel.replace(/\s*-\s*Topic$/i, '').replace(/VEVO$/i, '').trim();
+    }
+    title = title.replace(/\s*(ft\.?|feat\.?)\s.*$/i, '').trim();
+    return title ? { artist, title } : null;
+  }
+
+  function decorateYoutube() {
+    if (!/(^|\.)youtube\.com$/.test(location.hostname)) return;
+    const onWatch = location.pathname === '/watch' || location.hostname === 'music.youtube.com';
+    const old = document.querySelector('.cfy-yt');
+    if (!onWatch) { if (old) old.remove(); return; }
+    const song = youtubeSong();
+    if (!song) return;
+    const key = song.artist + '|' + song.title;
+    if (old && old.dataset.cfy === key) return;
+    if (old) old.remove();
+    const host = document.querySelector('ytd-watch-metadata #top-level-buttons-computed, ytd-watch-metadata #actions-inner, #above-the-fold #title');
+    if (!host) return;
+    const b = makeButton('play', song.artist, song.title, true);
+    b.classList.add('cfy-yt');
+    b.dataset.cfy = key;
+    b.querySelector('span').textContent = 'open in chanceify';
+    host.appendChild(b);
+  }
+
   function apply() {
     document.documentElement.classList.toggle('cfy-hide-play', !!opts.replace);
-    try { decorateRows(); decorateTrackPage(); } catch (e) { /* never break the page */ }
+    try { decorateRows(); decorateTrackPage(); decorateYoutube(); } catch (e) { /* never break the page */ }
   }
 
   let queued = false;

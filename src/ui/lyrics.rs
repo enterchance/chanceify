@@ -1333,6 +1333,17 @@ pub(super) fn controls_box_inner(app: &mut App, ui: &mut egui::Ui, top_left: egu
         egui::Stroke::new(1.0, palette.outline),
         egui::StrokeKind::Inside,
     );
+    // A small gear in the top right corner: the visualizer's settings (the
+    // equalizer is a tab in them).
+    {
+        let gear = Rect::from_center_size(pos2(outer.right() - 13.0, outer.top() + 8.0), vec2(16.0, 14.0));
+        let response = ui.interact(gear, egui::Id::new("pop-out-gear"), Sense::click());
+        let colour = if response.hovered() { palette.text } else { palette.dim };
+        theme::paint_icon(ui, Icon::Settings, gear, 11.0, colour);
+        if response.on_hover_text(gettext(app.locale, "Visualizer settings").into_owned()).clicked() {
+            app.actions.push(Action::ToggleVisPanel);
+        }
+    }
     let buttons_row = Rect::from_min_size(pos2(outer.left(), outer.top() + 10.0), vec2(width, buttons_h));
     let seek_row = Rect::from_min_size(
         pos2(outer.left(), buttons_row.bottom() + 4.0),

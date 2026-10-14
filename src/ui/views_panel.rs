@@ -240,7 +240,7 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
         }) || last.is_none();
         // Resting, the buttons stay easy to see; the pointer on any part of
         // the card or the controls brings it all to full.
-        fade_to(ctx, near, &format!("pop-out-seen-{vp:?}"), app.settings.float_idle.unwrap_or(0.5).clamp(0.05, 1.0))
+        fade_to(ctx, near, &format!("pop-out-seen-{vp:?}"), app.settings.float_idle.unwrap_or(0.5).clamp(0.0, 1.0))
     } else {
         1.0
     };
@@ -503,10 +503,15 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                 if app.fullscreen_vis {
                     // How much of the controls stays showing once the mouse
                     // has left them.
-                    let mut idle = app.settings.float_idle.unwrap_or(0.5).clamp(0.05, 1.0) * 100.0;
+                    let mut idle = app.settings.float_idle.unwrap_or(0.5).clamp(0.0, 1.0) * 100.0;
                     ui.label("opacity when the mouse is away");
-                    if ui.add(egui::Slider::new(&mut idle, 5.0..=100.0).suffix("%")).changed() {
+                    if ui.add(egui::Slider::new(&mut idle, 0.0..=100.0).suffix("%")).changed() {
                         app.settings.float_idle = Some(idle / 100.0);
+                        app.mark_settings_dirty();
+                    }
+                    let mut keep = app.settings.float_keep_play;
+                    if ui.checkbox(&mut keep, "keep the play button showing").changed() {
+                        app.settings.float_keep_play = keep;
                         app.mark_settings_dirty();
                     }
                     ui.separator();

@@ -1393,10 +1393,16 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
     };
     let tab_now = ctx
         .data(|data| data.get_temp::<u8>(egui::Id::new("vis-menu-tab")))
-        .unwrap_or(0)
-        .min(if app.vis_view_now.unwrap_or(0) == 0 { 2 } else { 3 });
+        .unwrap_or(0);
+    let tab_now = if tab_now == EQ_TAB {
+        tab_now
+    } else {
+        tab_now.min(if app.vis_view_now.unwrap_or(0) == 0 { 2 } else { 3 })
+    };
     let two_wide = tab_now == 2 || (tab_now == 3 && (app.lyrics_fullscreen.is_some() || app.settings.vis_lyrics));
-    let natural_w = if tab_now == 0 {
+    let natural_w = if tab_now == EQ_TAB {
+        500.0 + 28.0
+    } else if tab_now == 0 {
         3.0 * vis_col_w(0.0) + 36.0 + 28.0
     } else if two_wide {
         2.0 * VIS_SINGLE_W + 18.0 + 28.0
@@ -1442,14 +1448,10 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
             egui::emath::TSTransform::IDENTITY
         },
     );
-    let window = panel.show(ctx, |ui| {
-        egui::ScrollArea::vertical()
-            .id_salt(("vis-panel-scroll", app.mini_active))
-            .auto_shrink([true, true])
-            .max_height(f32::INFINITY)
-            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-            .show(ui, |ui| vis_menu_body(app, ui));
-    });
+    // No scroll area: the panel is drawn smaller to fit the window (see `fit`
+    // above), and a scroll area inside a window that sizes itself to its
+    // contents is what once squeezed the panel flat in the full screen views.
+    let window = panel.show(ctx, |ui| vis_menu_body(app, ui));
     let window = window.map(|window| {
         let local = window.response.rect;
         // A panel squeezed to a sliver can never recover by itself (its own
@@ -1859,6 +1861,9 @@ fn vis_col_w(_screen_w: f32) -> f32 {
 /// Width of the one column on the tabs that have only one.
 const VIS_SINGLE_W: f32 = 272.0;
 
+/// The visualizer settings' last tab, the equalizer, whatever the view.
+const EQ_TAB: u8 = 4;
+
 fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     {
@@ -1883,7 +1888,8 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
             // over its visualizer, so it has no lyrics tab.
             let view = app.vis_view_now.unwrap_or(0);
             let last_tab: u8 = if view == 0 { 2 } else { 3 };
-            let tab: u8 = ui.ctx().data(|data| data.get_temp::<u8>(tab_id)).unwrap_or(0).min(last_tab);
+            let tab: u8 = ui.ctx().data(|data| data.get_temp::<u8>(tab_id)).unwrap_or(0);
+            let tab = if tab == EQ_TAB { tab } else { tab.min(last_tab) };
             // Room is left at the right for the close X.
             ui.scope(|ui| {
                 ui.set_max_width((ui.available_width() - 30.0).max(100.0));
@@ -1904,8 +1910,15 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                         ui.ctx().data_mut(|data| data.insert_temp(tab_id, index as u8));
                     }
                 }
+                if chip(ui, &palette, "Equalizer", tab == EQ_TAB, 82.0).clicked() {
+                    ui.ctx().data_mut(|data| data.insert_temp(tab_id, EQ_TAB));
+                }
             });
             super::widgets::menu_separator(ui, &palette);
+            if tab == EQ_TAB {
+                super::settings::eq_panel(app, ui);
+                return;
+            }
             let mut columns = |ui: &mut egui::Ui| {
             ui.spacing_mut().item_spacing.x = 18.0;
             ui.vertical(|ui| {
@@ -5381,7 +5394,8 @@ fn transport_impl(
                 .max_rect(rect)
                 .layout(Layout::centered_and_justified(egui::Direction::LeftToRight)),
         );
-        child.set_opacity(fade);
+        // Multiplied, not set: the controls may be fading as a whole.
+        child.multiply_opacity(fade);
         child
     };
 
@@ -5417,6 +5431,9 @@ fn transport_impl(
             palette.text
         };
         let mut cell = centered(ui, disc);
+        if app.settings.float_keep_play {
+            cell.set_opacity(1.0);
+        }
         if theme::circle_button(
             &mut cell,
             icon,
