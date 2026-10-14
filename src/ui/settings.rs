@@ -1971,6 +1971,17 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     {
                         app.actions.push(Action::OpenMissingArtFolder);
                     }
+                    {
+                        let bytes = app.art_folder_size() as f64;
+                        let text = if bytes >= 1e9 {
+                            format!("{:.2} GB", bytes / 1e9)
+                        } else if bytes >= 1e6 {
+                            format!("{:.1} MB", bytes / 1e6)
+                        } else {
+                            format!("{:.0} KB", bytes / 1e3)
+                        };
+                        theme::subtle(ui, &palette, &format!("Album covers and artist pictures folder: {text}"));
+                    }
                     let auto_label = if app.settings.lastfm_art_auto {
                         "Save missing pictures automatically: on"
                     } else {

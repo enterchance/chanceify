@@ -450,6 +450,8 @@ pub struct App {
     art_asked: std::collections::HashSet<String>,
     /// The Last.fm picture check is running over the whole library.
     pub art_sweep: bool,
+    /// The Last.fm pictures folder size and when it was measured.
+    pub art_size_cache: Option<(Instant, u64)>,
     art_sweep_count: u32,
     /// The folder and file name each checked key is saved under.
     art_names: std::collections::HashMap<String, (crate::lastfm_art::Kind, String)>,
@@ -1146,6 +1148,7 @@ impl App {
             art_checker: crate::lastfm_art::Checker::default(),
             art_asked: std::collections::HashSet::new(),
             art_sweep: false,
+            art_size_cache: None,
             art_sweep_count: 0,
             art_names: std::collections::HashMap::new(),
             art_exports: Vec::new(),
@@ -6843,14 +6846,12 @@ impl App {
                     if page.snapshot_rechecks <= 3 {
                         self.backend.api(ApiRequest::Playlist { id, generation });
                     } else {
+                        // Spotify is slow to show the change. No error: the list
+                        // keeps what it already shows (the change is made), and
+                        // a later reload reads Spotify's own copy.
                         page.refresh_after_write = false;
-                        page.items.fail(
-                            gettext(
-                                self.locale,
-                                "Spotify hasn't confirmed your playlist changes yet. Try refreshing again.",
-                            )
-                            .into_owned(),
-                        );
+                        page.optimistic_snapshot = None;
+                        page.snapshot_rechecks = 0;
                     }
                     return;
                 }
