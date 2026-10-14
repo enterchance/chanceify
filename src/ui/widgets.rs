@@ -4833,6 +4833,23 @@ pub fn credit(ui: &mut Ui, palette: &Palette, locale: Locale) -> bool {
         let (uri, bytes) = credit_icon();
         ui.add_space(6.0);
         ui.add(egui::Image::from_bytes(uri, bytes).fit_to_exact_size(vec2(20.0, 20.0)));
+        // The source code, tiny, right beside the little picture.
+        ui.add_space(8.0);
+        let source = ui
+            .add(
+                egui::Label::new(
+                    egui::RichText::new(gettext(locale, "source code"))
+                        .font(theme::regular(10.0))
+                        .color(palette.dim)
+                        .underline(),
+                )
+                .sense(egui::Sense::click()),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if source.clicked() {
+            ui.ctx()
+                .open_url(egui::OpenUrl::new_tab(crate::build_info::GITHUB_URL));
+        }
     });
     theme::subtle(ui, palette, "Inspired by Spotify, Spotifast and Spicetify");
     clicked

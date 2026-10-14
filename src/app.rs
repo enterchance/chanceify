@@ -3992,6 +3992,23 @@ impl App {
         let now = Instant::now();
         if !self.zoom_applied {
             self.zoom_applied = true;
+            // chanceify:// links open chanceify without asking: set up once for
+            // this program's place (only under the current Windows user).
+            #[cfg(windows)]
+            {
+                if !cfg!(test)
+                    && let Ok(exe) = std::env::current_exe()
+                {
+                    let here = exe.display().to_string();
+                    if self.settings.links_registered_exe != here {
+                        self.settings.links_registered_exe = here;
+                        self.mark_settings_dirty();
+                        std::thread::spawn(|| {
+                            let _ = crate::link::register_links();
+                        });
+                    }
+                }
+            }
             let zoom = self.settings.zoom.clamp(ZOOM_STEPS[0], ZOOM_STEPS[ZOOM_STEPS.len() - 1]);
             if (zoom - 1.0).abs() > 0.001 {
                 ctx.set_zoom_factor(zoom);
@@ -11712,7 +11729,21 @@ impl App {
                 self.mark_settings_dirty();
             }
             Action::ToggleVisReverse => {
-                self.settings.vis_reverse = !self.settings.vis_reverse;
+                // The key turns every visualizer around, or puts them all back.
+                let any = self.settings.vis_reverse
+                    || self.settings.vis_reverse_flow
+                    || self.settings.vis_reverse_swirl;
+                self.settings.vis_reverse = !any;
+                self.settings.vis_reverse_flow = !any;
+                self.settings.vis_reverse_swirl = !any;
+                self.mark_settings_dirty();
+            }
+            Action::ToggleVisReverseOne(which) => {
+                match which {
+                    0 => self.settings.vis_reverse = !self.settings.vis_reverse,
+                    1 => self.settings.vis_reverse_flow = !self.settings.vis_reverse_flow,
+                    _ => self.settings.vis_reverse_swirl = !self.settings.vis_reverse_swirl,
+                }
                 self.mark_settings_dirty();
             }
             Action::ToggleMissingMarkBig => {

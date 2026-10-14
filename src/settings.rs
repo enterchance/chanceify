@@ -1086,6 +1086,10 @@ pub struct Settings {
     pub float_idle: Option<f32>,
     /// With the pop-out controls faded away, the play/pause button stays.
     pub float_keep_play: bool,
+    /// The program path chanceify:// links were last set up for (Windows); empty until then.
+    pub links_registered_exe: String,
+    /// A red dot on your picture when songs in your playlists are unavailable; off until chosen.
+    pub unavailable_dot: bool,
     /// That window's place on the screen.
     pub float_window: Option<[f32; 2]>,
     /// Width of the Views panel.
@@ -1271,6 +1275,9 @@ pub struct Settings {
     /// The visualizer runs from right to left instead of left to right.
     #[serde(default)]
     pub vis_reverse: bool,
+    /// Scroll direction of the flow and of the swirl on their own; `vis_reverse` is the bars'.
+    pub vis_reverse_flow: bool,
+    pub vis_reverse_swirl: bool,
     /// The missing-art mark also shows on the big album art.
     #[serde(default = "yes")]
     pub missing_mark_big: bool,
@@ -1517,7 +1524,7 @@ impl Default for Settings {
             extra_show_title: true,
             extra_show_artist: true,
             extra_show_heart: true,
-            discord_presence: false,
+            discord_presence: true,
             discord_client_id: String::new(),
             discord_status_line: 0,
             discord_cover: true,
@@ -1535,6 +1542,8 @@ impl Default for Settings {
             float_detached: false,
             float_idle: None,
             float_keep_play: false,
+            links_registered_exe: String::new(),
+            unavailable_dot: false,
             float_window: None,
             vis_panel_w: 0.0,
             vis_panel_h: 0.0,
@@ -1615,6 +1624,8 @@ impl Default for Settings {
             mini_vis: None,
             queue_click: 0,
             vis_reverse: false,
+            vis_reverse_flow: false,
+            vis_reverse_swirl: false,
             missing_mark_big: true,
             music_folders: Vec::new(),
             lastfm_api_key: String::new(),

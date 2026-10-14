@@ -1545,6 +1545,8 @@ pub enum Action {
     /// Checks Last.fm for the picture of every album and artist in the library, a few at a time.
     ToggleArtSweep,
     ToggleVisReverse,
+    /// One visualizer's own scroll direction: 0 bars, 1 flow, 2 swirl.
+    ToggleVisReverseOne(u8),
     ToggleMissingMarkBig,
     ToggleMiniOnTop,
     ToggleMiniFade,

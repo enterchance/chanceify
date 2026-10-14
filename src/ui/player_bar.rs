@@ -773,7 +773,7 @@ fn visualizer(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying>
         let strength = if dark { 1.0 } else { LIGHT_STRENGTH };
         let phase = swirl_phase(app, ui, now);
         // "Reverse the visualizer" turns the swirl's drift around too.
-        let phase = if app.settings.vis_reverse { -phase } else { phase };
+        let phase = if app.settings.vis_reverse_swirl { -phase } else { phase };
         let run = SwirlRun {
             bright: app.settings.swirl_tune_value(10) / 100.0,
             wash: app.settings.swirl_tune_value(11) / 100.0,
@@ -807,7 +807,7 @@ fn visualizer(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying>
             let height = (rect.height() * 0.16).clamp(40.0, 150.0);
             Rect::from_min_max(pos2(rect.left(), rect.bottom() - height), rect.max)
         } else if app.fullscreen_vis {
-            let below = fullscreen_cover(rect, app.settings.vis_title_layout.min(3)).bottom() + 20.0;
+            let below = fullscreen_cover(rect, 0).bottom() + 20.0;
             let height = (rect.bottom() - below).clamp(40.0, 300.0);
             Rect::from_min_max(pos2(rect.left(), rect.bottom() - height), rect.max)
         } else {
@@ -863,7 +863,7 @@ pub(super) fn lyrics_backdrop(
             let strength = if dark { 1.0 } else { LIGHT_STRENGTH };
             let phase = swirl_phase(app, ui, now);
         // "Reverse the visualizer" turns the swirl's drift around too.
-        let phase = if app.settings.vis_reverse { -phase } else { phase };
+        let phase = if app.settings.vis_reverse_swirl { -phase } else { phase };
             let run = SwirlRun {
                 bright: app.settings.swirl_tune_value(10) / 100.0,
                 wash: app.settings.swirl_tune_value(11) / 100.0,
@@ -947,7 +947,7 @@ fn fullscreen_edge_bars(
         // the words.
         (rect.width().min(rect.height()) * 0.14).clamp(30.0, 140.0)
     } else {
-        (fullscreen_cover(rect, app.settings.vis_title_layout.min(3)).left() - rect.left() - 16.0).max(10.0)
+        (fullscreen_cover(rect, 0).left() - rect.left() - 16.0).max(10.0)
     };
     let boost = if app.settings.vis_shapes_value() == crate::settings::Settings::SHAPE_BARS {
         1.0
@@ -1286,7 +1286,7 @@ pub(super) fn visualizer_shape(
             // it: a flow that has only the analyser's own resolution looks
             // like a bar chart with the corners filed off.
             let mut flow = spread_bands(&levels, FLOW_POINTS);
-            if app.settings.vis_reverse {
+            if app.settings.vis_reverse_flow {
                 flow.reverse();
             }
             flow_sheets(
@@ -1397,7 +1397,7 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
     let tab_now = if tab_now == EQ_TAB {
         tab_now
     } else {
-        tab_now.min(if app.vis_view_now.unwrap_or(0) == 0 { 2 } else { 3 })
+        tab_now.min(if app.vis_view_now.unwrap_or(0) == 0 { 1 } else { 3 })
     };
     let two_wide = tab_now == 2 || (tab_now == 3 && (app.lyrics_fullscreen.is_some() || app.settings.vis_lyrics));
     let natural_w = if tab_now == EQ_TAB {
@@ -1643,212 +1643,6 @@ fn audio_menu_body(app: &mut App, ui: &mut egui::Ui) {
                     share_rows(ui, app, &palette);
                 });
             }
-            let own_match = app
-                .settings
-                .custom_eqs
-                .iter()
-                .find(|(_, bands)| *bands == app.settings.eq_bands_db && app.settings.eq_on)
-                .map(|(name, _)| name.clone());
-            let eq_now = crate::eq::PRESETS
-                .iter()
-                .find(|preset| {
-                    preset.bands_db == app.settings.eq_bands_db
-                        && (app.settings.eq_on || preset.name == "Flat")
-                })
-                .map(|preset| preset.name.to_string())
-                .or(own_match)
-                .unwrap_or_else(|| {
-                    let base = if app.settings.eq_base.is_empty() {
-                        "Flat"
-                    } else {
-                        app.settings.eq_base.as_str()
-                    };
-                    format!("{base} edited")
-                });
-            let eq_collapse = egui::CollapsingHeader::new(
-                format!("{} \u{2014} {}", gettext(app.locale, "Equalizer"), eq_now),
-            )
-            .default_open(true)
-            .show(
-                ui,
-                |ui| {
-            // Hovering a curve plays it, so it can be judged by ear before it
-            // is chosen; moving away puts the real one back. Right-click a
-            // curve to remove it.
-            let mut hovered_eq: Option<[f32; 10]> = None;
-            let names: [&'static str; 25] = [
-                    "Flat",
-                    "Full Bass",
-                    "Bass Booster",
-                    "Techno",
-                    "Club",
-                    "Loudness",
-                    "Vocal Booster",
-                    "Spoken Word",
-                    "Laptop Speakers / Headphones",
-                    "Small Speakers",
-                    "Rock",
-                    "Pop",
-                    "Dance",
-                    "Classical",
-                    "Hip-Hop",
-                    "Jazz",
-                    "EDM",
-                    "Metal",
-                    "R&B",
-                    "Country",
-                    "Acoustic",
-                    "House",
-                    "Lo-fi",
-                    "Phonk",
-                    "Jump",
-                ];
-            // Every chip the same width, three to a row.
-            let chip_width = ((ui.available_width() - 12.0) / 3.0).floor().max(70.0);
-            // (shown name, key for removal, curve, is the reader's own)
-            let mut entries: Vec<(String, String, [f32; 10], bool)> = Vec::new();
-            for name in names {
-                if app.settings.hidden_presets.iter().any(|hidden| hidden == name) {
-                    continue;
-                }
-                if let Some(preset) = crate::eq::PRESETS.iter().find(|preset| preset.name == name) {
-                    entries.push((gettext(app.locale, name).to_string(), name.to_string(), preset.bands_db, false));
-                }
-            }
-            for (name, bands) in &app.settings.custom_eqs {
-                entries.push((name.clone(), name.clone(), *bands, true));
-            }
-            for row in entries.chunks(3) {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
-                    for (label, key, bands, own) in row {
-                        let active = *bands == app.settings.eq_bands_db
-                            && (app.settings.eq_on || key == "Flat");
-                        let response = chip(ui, &palette, label, active, chip_width);
-                        if response.hovered() {
-                            hovered_eq = Some(*bands);
-                        }
-                        if response.clicked() {
-                            if *own {
-                                app.actions.push(Action::SetEqBands(*bands, key.clone()));
-                            } else if let Some(preset) =
-                                crate::eq::PRESETS.iter().find(|preset| preset.name == key)
-                            {
-                                app.actions.push(Action::SetEqPreset(preset.name));
-                            }
-                        }
-                        remove_menu(
-                            app,
-                            &response,
-                            &palette,
-                            PresetInfo { key: key.clone(), speed: None, bands: *bands },
-                        );
-                    }
-                });
-            }
-            let preview_flag = egui::Id::new("eq-preview");
-            let ui_time = ui.input(|input| input.time);
-            let previewing = ui
-                .data(|data| data.get_temp::<bool>(preview_flag))
-                .unwrap_or(false);
-            if let Some(bands) = hovered_eq.filter(|_| app.settings.eq_on) {
-                let mut heard = crate::app::eq_settings(&app.settings);
-                heard.on = true;
-                heard.bands_db = bands;
-                if let Ok(mut shared) = app.audio.eq.lock() {
-                    *shared = heard;
-                }
-                ui.data_mut(|data| {
-                    data.insert_temp(preview_flag, true);
-                    data.insert_temp(egui::Id::new("eq-preview-at"), ui_time);
-                });
-            } else if previewing {
-                if let Ok(mut shared) = app.audio.eq.lock() {
-                    *shared = crate::app::eq_settings(&app.settings);
-                }
-                ui.data_mut(|data| data.insert_temp(preview_flag, false));
-            }
-                },
-            );
-            // Live / Not live: whether the equalizer is shaping the sound.
-            {
-                let row = eq_collapse.header_response.rect;
-                let live = app.settings.eq_on;
-                let label = if live {
-                    gettext(app.locale, "Live").to_string()
-                } else {
-                    gettext(app.locale, "Not live").to_string()
-                };
-                let pill = Rect::from_min_size(
-                    pos2(ui.max_rect().right() - 74.0, row.top() + 1.0),
-                    vec2(72.0, (row.height() - 2.0).max(18.0)),
-                );
-                let response = ui.interact(pill, egui::Id::new("eq-live-pill"), Sense::click());
-                let colour = if live { palette.accent } else { palette.dim };
-                ui.painter().rect_filled(
-                    pill,
-                    egui::CornerRadius::same(9),
-                    colour.gamma_multiply(if response.hovered() { 0.3 } else { 0.18 }),
-                );
-                ui.painter()
-                    .circle_filled(pos2(pill.left() + 11.0, pill.center().y), 3.5, colour);
-                ui.painter().text(
-                    pos2(pill.left() + 20.0, pill.center().y),
-                    egui::Align2::LEFT_CENTER,
-                    label,
-                    theme::regular(12.0),
-                    if live { palette.text } else { palette.secondary },
-                );
-                if response.clicked() {
-                    app.actions.push(Action::ToggleEq);
-                }
-                response.on_hover_text(gettext(app.locale, "Turn the equalizer on or off").to_string());
-            }
-            // Right-click the Equalizer heading to draw your own curve; it
-            // then reads "<preset> edited", and Reset puts the preset back.
-            egui::Popup::context_menu(&eq_collapse.header_response)
-                .frame(super::widgets::menu_frame(&palette))
-                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                .show(|ui| {
-                    ui.set_width(330.0);
-                    theme::subtle(ui, &palette, &gettext(app.locale, "YOUR EQUALIZER"));
-                    let freqs = ["60", "170", "310", "600", "1k", "3k", "6k", "12k", "14k", "16k"];
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 6.0;
-                        for (band, freq) in freqs.iter().enumerate() {
-                            ui.vertical(|ui| {
-                                ui.spacing_mut().slider_width = 110.0;
-                                let mut gain = app.settings.eq_bands_db[band];
-                                if ui
-                                    .add(
-                                        egui::Slider::new(
-                                            &mut gain,
-                                            -crate::eq::RANGE_DB..=crate::eq::RANGE_DB,
-                                        )
-                                        .vertical()
-                                        .show_value(false),
-                                    )
-                                    .changed()
-                                {
-                                    app.actions.push(Action::SetEqBand(band, gain));
-                                }
-                                ui.label(egui::RichText::new(*freq).size(10.5));
-                            });
-                        }
-                    });
-                    ui.add_space(4.0);
-                    let base: &'static str = crate::eq::PRESETS
-                        .iter()
-                        .find(|preset| preset.name == app.settings.eq_base)
-                        .map_or("Flat", |preset| preset.name);
-                    if super::widgets::menu_item(ui, &palette, None, &gettext(app.locale, "Reset to default")) {
-                        app.actions.push(Action::SetEqPreset(base));
-                    }
-                    super::widgets::menu_separator(ui, &palette);
-                    theme::subtle(ui, &palette, &gettext(app.locale, "SAVE, SHARE"));
-                    save_row(ui, app, &palette, false);
-                    share_rows(ui, app, &palette);
-                });
         }
     }
 }
@@ -1887,25 +1681,13 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
             // Each view keeps its own settings; the normal view has no lyrics
             // over its visualizer, so it has no lyrics tab.
             let view = app.vis_view_now.unwrap_or(0);
-            let last_tab: u8 = if view == 0 { 2 } else { 3 };
+            let last_tab: u8 = if view == 0 { 1 } else { 3 };
             let tab: u8 = ui.ctx().data(|data| data.get_temp::<u8>(tab_id)).unwrap_or(0);
             let tab = if tab == EQ_TAB { tab } else { tab.min(last_tab) };
-            // Room is left at the right for the close X.
-            ui.scope(|ui| {
-                ui.set_max_width((ui.available_width() - 30.0).max(100.0));
-                theme::subtle(
-                    ui,
-                    &palette,
-                    &format!(
-                        "these settings are for the {} only",
-                        ["normal view", "full screen visualizer", "full screen lyrics"][view.min(2) as usize]
-                    ),
-                );
-            });
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                for (index, label) in ["Shapes", "Bass and colour", "Title", "Lyrics"].iter().take(last_tab as usize + 1).enumerate() {
-                    let width = [64.0, 104.0, 50.0, 58.0][index];
+                for (index, label) in ["Visualizer", "Bass and colour", "Title", "Lyrics"].iter().take(last_tab as usize + 1).enumerate() {
+                    let width = [78.0, 104.0, 50.0, 58.0][index];
                     if chip(ui, &palette, label, tab == index as u8, width).clicked() {
                         ui.ctx().data_mut(|data| data.insert_temp(tab_id, index as u8));
                     }
@@ -1962,7 +1744,7 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                 )
                 .clicked()
                 {
-                    app.actions.push(Action::ToggleVisReverse);
+                    app.actions.push(Action::ToggleVisReverseOne(0));
                 }
                 slider_row(
                 ui,
@@ -2066,6 +1848,17 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                     app.settings.player_bar_vis_flow_offset(),
                     |value| app.actions.push(Action::SetFlowOffset(value)),
                 );
+                if chip(
+                    ui,
+                    &palette,
+                    if app.settings.vis_reverse_flow { "Scrolls right to left" } else { "Scrolls left to right" },
+                    app.settings.vis_reverse_flow,
+                    ui.available_width().min(290.0),
+                )
+                .clicked()
+                {
+                    app.actions.push(Action::ToggleVisReverseOne(1));
+                }
             }
             });
             ui.vertical(|ui| {
@@ -2170,17 +1963,17 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                     (9.0 / app.settings.swirl_drift_secs()) as f32,
                     |value| app.actions.push(Action::SetSwirlDrift(value)),
                 );
-                // The same direction switch as the bars have (and the same key).
+                // The swirl's own direction; the bars and the flow keep theirs.
                 if chip(
                     ui,
                     &palette,
-                    if app.settings.vis_reverse { "Scrolls right to left" } else { "Scrolls left to right" },
-                    app.settings.vis_reverse,
+                    if app.settings.vis_reverse_swirl { "Scrolls right to left" } else { "Scrolls left to right" },
+                    app.settings.vis_reverse_swirl,
                     ui.available_width().min(290.0),
                 )
                 .clicked()
                 {
-                    app.actions.push(Action::ToggleVisReverse);
+                    app.actions.push(Action::ToggleVisReverseOne(2));
                 }
                 if super::widgets::menu_item(ui, &palette, None, &gettext(app.locale, "Reset swirl")) {
                     app.actions.push(Action::ResetSwirlTune);
@@ -2205,6 +1998,26 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 if chip(ui, &palette, &gettext(app.locale, "On"), app.settings.vis_jump_on, 60.0).clicked() {
                     app.actions.push(Action::ToggleJumpAuto);
+                }
+            });
+            // Ready-made feels: react, strength, sensitivity, rest, cutoff, follow.
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                for (name, react, shake, sens, gap, floor, adapt) in [
+                    ("Gentle", 0u8, 0.4f32, 0.8f32, 50.0f32, 5.0f32, 5.0f32),
+                    ("Steady", 1, 0.5, 1.0, 32.0, 3.0, 5.0),
+                    ("Punchy", 1, 1.2, 1.4, 24.0, 2.0, 8.0),
+                    ("Beat", 2, 1.0, 1.2, 28.0, 3.0, 10.0),
+                    ("Wild", 2, 2.2, 2.0, 14.0, 0.0, 15.0),
+                ] {
+                    if chip(ui, &palette, &gettext(app.locale, name), false, 56.0).clicked() {
+                        app.actions.push(Action::SetJumpReact(react));
+                        app.actions.push(Action::SetJumpShake(shake));
+                        app.actions.push(Action::SetJumpTune(0, sens));
+                        app.actions.push(Action::SetJumpTune(1, gap));
+                        app.actions.push(Action::SetJumpTune(2, floor));
+                        app.actions.push(Action::SetJumpTune(3, adapt));
+                    }
                 }
             });
             ui.horizontal(|ui| {
@@ -2424,22 +2237,6 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
             .clicked()
             {
                 app.actions.push(Action::ToggleVisArtist);
-            }
-            {
-                theme::subtle(ui, &palette, "TITLE LAYOUT");
-                let current = (app.settings.vis_title_layout as usize).min(2);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    for (index, glyph, tip) in [
-                        (0usize, Glyph::TitleUnder, "Under the cover"),
-                        (1, Glyph::TitleBeside, "Beside the cover"),
-                        (2, Glyph::TitleBig, "Beside it, big"),
-                    ] {
-                        if glyph_button(ui, &palette, glyph, tip, current == index).clicked() {
-                            app.actions.push(Action::SetVisTitleLayout(index as u8));
-                        }
-                    }
-                });
             }
             font_grid(app, ui);
             }); }); }
@@ -3877,7 +3674,7 @@ fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying
     let Some(now) = now else {
         return;
     };
-    let resting = fullscreen_cover(rect, app.settings.vis_title_layout.min(3));
+    let resting = fullscreen_cover(rect, 0);
     // The art bounces to the music, as the full screen lyrics' does, when
     // that is switched on: the card swells a little with the bass while the
     // words keep to its resting size.
@@ -3945,7 +3742,7 @@ fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying
     // Where the words go depends on the layout the reader chose: under the
     // cover (0), beside it (1), beside it and big (2), or above it with the
     // artist below (3).
-    let layout = app.settings.vis_title_layout.min(3);
+    let layout = 0;
     let beside = layout == 1 || layout == 2;
     let title_text = now.title.to_uppercase();
     let chars: Vec<char> = title_text.chars().collect();

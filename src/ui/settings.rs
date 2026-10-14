@@ -1305,6 +1305,14 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                 .wrap(),
             );
             ui.add_space(8.0);
+            {
+                let mut on = app.settings.unavailable_dot;
+                if widgets::switch_labeled(ui, &palette, "Show a red dot on my picture when songs are unavailable", &mut on).changed() {
+                    app.settings.unavailable_dot = on;
+                    app.mark_settings_dirty();
+                }
+                ui.add_space(8.0);
+            }
             let scanning = app
                 .unavailable_scan
                 .as_ref()
@@ -1613,25 +1621,6 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
             });
-            if cfg!(windows) {
-                ui.add_space(8.0);
-                if theme::soft_button(ui, &palette, None, "Let chanceify:// links open chanceify (Windows)", false)
-                    .on_hover_text("Adds one entry for your Windows user, so links from the chanceify web page open the song here.")
-                    .clicked()
-                {
-                    app.actions.push(Action::RegisterLinks);
-                }
-            }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                if theme::soft_button(ui, &palette, Some(Icon::ExternalLink), &source_code, false)
-                    .clicked()
-                {
-                    ui.ctx()
-                        .open_url(egui::OpenUrl::new_tab(crate::build_info::GITHUB_URL));
-                }
-            });
             ui.add_space(8.0);
             ui.add_space(8.0);
             ui.label(
@@ -1722,6 +1711,39 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                 }
             });
             ui.add_space(8.0);
+        });
+    }
+
+    if needle.is_empty() || "discord rich presence status buttons".contains(needle.as_str()) {
+        any_visible = true;
+        section(ui, &palette, "Discord", |ui| {
+            {
+                let mut on = app.settings.discord_presence;
+                if widgets::switch_labeled(ui, &palette, "Show what I'm listening to on Discord", &mut on).changed() {
+                    app.settings.discord_presence = on;
+                    app.mark_settings_dirty();
+                }
+                if app.settings.discord_presence {
+                    ui.add_space(4.0);
+                    ui.add_space(6.0);
+                    {
+                        let (text, colour) = match crate::discord::link_state() {
+                            2 => ("Discord connected, song sent.", palette.accent),
+                            1 => ("Discord: found. Waiting for a song to send.", palette.secondary),
+                            _ => (
+                                "Discord: not found yet. Open the Discord desktop app (not the website), and turn on Settings > Activity Privacy > Share my activity in Discord.",
+                                palette.secondary,
+                            ),
+                        };
+                        theme::text(ui, text, theme::regular(12.5), colour);
+                        let problem = crate::discord::last_error();
+                        if !problem.is_empty() {
+                            theme::text(ui, &problem, theme::regular(12.0), palette.warning);
+                        }
+                        ui.ctx().request_repaint_after(std::time::Duration::from_secs(2));
+                    }
+                }
+            }
         });
     }
 
@@ -1917,39 +1939,6 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
                 missing_lists(ui, app, &palette);
-            }
-        });
-    }
-
-    if needle.is_empty() || "discord rich presence status buttons".contains(needle.as_str()) {
-        any_visible = true;
-        section(ui, &palette, "Discord", |ui| {
-            {
-                let mut on = app.settings.discord_presence;
-                if widgets::switch_labeled(ui, &palette, "Show what I'm listening to on Discord", &mut on).changed() {
-                    app.settings.discord_presence = on;
-                    app.mark_settings_dirty();
-                }
-                if app.settings.discord_presence {
-                    ui.add_space(4.0);
-                    ui.add_space(6.0);
-                    {
-                        let (text, colour) = match crate::discord::link_state() {
-                            2 => ("Discord connected, song sent.", palette.accent),
-                            1 => ("Discord: found. Waiting for a song to send.", palette.secondary),
-                            _ => (
-                                "Discord: not found yet. Open the Discord desktop app (not the website), and turn on Settings > Activity Privacy > Share my activity in Discord.",
-                                palette.secondary,
-                            ),
-                        };
-                        theme::text(ui, text, theme::regular(12.5), colour);
-                        let problem = crate::discord::last_error();
-                        if !problem.is_empty() {
-                            theme::text(ui, &problem, theme::regular(12.0), palette.warning);
-                        }
-                        ui.ctx().request_repaint_after(std::time::Duration::from_secs(2));
-                    }
-                }
             }
         });
     }

@@ -785,7 +785,7 @@ pub fn vis_overlay(app: &mut App, ui: &mut egui::Ui) {
         _ => return,
     };
     let rect = ui.ctx().content_rect();
-    let layout = app.settings.vis_title_layout.min(3);
+    let layout = 0;
     let cover = super::player_bar::fullscreen_cover(rect, layout);
     let left = cover.right() + rect.width() * 0.05;
     let right = rect.right() - rect.width() * 0.08;
