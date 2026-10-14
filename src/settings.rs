@@ -1281,6 +1281,8 @@ pub struct Settings {
     pub mini_on_top: bool,
     /// Whether the main window stays on top of other windows.
     pub main_on_top: bool,
+    /// Write the visualizer's colours to `lights.json` for light apps.
+    pub lights_feed: bool,
     /// Whether the extra visualizer window stays on top.
     pub extra_on_top: bool,
     /// Whether the floating mini player fades while the pointer is away.
@@ -1644,6 +1646,7 @@ impl Default for Settings {
             mini_volume: true,
             mini_on_top: false,
             main_on_top: false,
+            lights_feed: false,
             extra_on_top: false,
             mini_fade: true,
             mini_vis: None,

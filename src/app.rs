@@ -663,6 +663,7 @@ pub struct App {
     /// The big window's size from before the mini player took over.
     /// Whether the always-on-top level was last sent on for the mini player.
     mini_top_sent: bool,
+    pub lights: crate::lights::Feed,
     /// The app icon last sent to the window, so a change is sent once.
     icon_sent: Option<u8>,
     /// The cover colour the album-following icon was last drawn in.
@@ -1274,6 +1275,7 @@ impl App {
             last_window_size: None,
             mini_active: false,
             mini_top_sent: false,
+            lights: Default::default(),
             icon_sent: None,
             icon_tint_sent: None,
             icon_spin_sent: None,
@@ -3970,7 +3972,41 @@ impl App {
         }
     }
 
+    /// The lights feed (see `lights.rs`): what the visualizer shows now.
+    fn lights_tick(&mut self, ctx: &egui::Context) {
+        if !self.settings.lights_feed {
+            self.lights.stop();
+            return;
+        }
+        let time = ctx.input(|input| input.time);
+        let colours = self.swirl_colours();
+        let pair = crate::ui::player_bar::lights_pair(self, time);
+        let gradient = !self.settings.vis_no_gradient;
+        let now = self.now_playing();
+        let (low, high) = match pair {
+            Some((low, high)) => (Some(low), Some(if gradient { high } else { low })),
+            None => (None, None),
+        };
+        let hex = |c: Option<egui::Color32>| c.map(crate::lights::hex);
+        let body = serde_json::json!({
+            "title": now.as_ref().map(|n| n.title.clone()).unwrap_or_default(),
+            "artist": now.as_ref().map(|n| n.subtitle.clone()).unwrap_or_default(),
+            "playing": now.as_ref().is_some_and(|n| n.playing),
+            "colours": colours.iter().map(|c| crate::lights::hex(*c)).collect::<Vec<_>>(),
+            "mode": if self.settings.swirl_colours_fixed { "fixed" } else { "auto" },
+            "pick": self.settings.player_bar_vis_colour_pick,
+            "gradient": gradient,
+            "low": hex(low),
+            "high": hex(high),
+        });
+        let state = self.dirs.state.clone();
+        self.lights.publish(&state, body);
+        // The Auto blend moves between frames even when nothing else repaints.
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    }
+
     fn tick(&mut self, ctx: &egui::Context) {
+        self.lights_tick(ctx);
         if self
             .lyrics_retry_at
             .is_some_and(|at| std::time::Instant::now() >= at)

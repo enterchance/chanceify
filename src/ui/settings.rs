@@ -1748,6 +1748,24 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
         });
     }
 
+    if needle.is_empty() || "lights feed keyboard microphone led colours rgb".contains(needle.as_str()) {
+        any_visible = true;
+        section(ui, &palette, "Lights feed", |ui| {
+            let mut on = app.settings.lights_feed;
+            if widgets::switch_labeled(ui, &palette, "Share the visualizer's colours with light apps", &mut on).changed() {
+                app.settings.lights_feed = on;
+                app.mark_settings_dirty();
+            }
+            let path = crate::lights::Feed::path_for(&app.dirs.state);
+            note(ui, &palette, "Writes the colours on screen (cover colours, Auto drift, your swatch pick, gradient) to one small file, many times a second, so a keyboard or microphone light app can match them. Nothing goes over the network. Off by default; the file is removed when this is off.");
+            ui.horizontal_wrapped(|ui| {
+                theme::subtle(ui, &palette, "File:");
+                ui.label(egui::RichText::new(path.display().to_string()).font(theme::regular(12.0)).color(palette.secondary));
+            });
+            ui.add_space(8.0);
+        });
+    }
+
     if needle.is_empty() || "discord rich presence status buttons".contains(needle.as_str()) {
         any_visible = true;
         section(ui, &palette, "Discord", |ui| {

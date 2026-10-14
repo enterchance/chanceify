@@ -1098,6 +1098,12 @@ fn swirl_phase(app: &mut App, ui: &egui::Ui, now: Option<&NowPlaying>) -> f64 {
     phase
 }
 
+/// The two colours the visualizer's colour pair is at this moment (what the
+/// bars and flow run between), for the lights feed.
+pub(crate) fn lights_pair(app: &App, time: f64) -> Option<(Color32, Color32)> {
+    swirl_wash(app, time).map(|(a, b)| (within_brightness(a, true), within_brightness(b, true)))
+}
+
 fn swirl_wash(app: &App, time: f64) -> Option<(Color32, Color32)> {
     let colours = app.swirl_colours();
     if colours.len() < 2 {
