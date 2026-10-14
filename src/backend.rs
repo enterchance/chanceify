@@ -130,9 +130,10 @@ pub enum ApiRequest {
     TopArtists {
         generation: u64,
     },
+    /// Songs like these (artist, title), from Last.fm, found on Spotify.
     Recommendations {
-        seed_tracks: Vec<String>,
-        seed_artists: Vec<String>,
+        seeds: Vec<(String, String)>,
+        lastfm_key: String,
         generation: u64,
     },
     Discover {
@@ -271,6 +272,7 @@ pub enum ApiRequest {
     /// The newest albums and singles of one artist, for the new-releases check.
     ArtistRecent {
         id: String,
+        name: String,
     },
     RelatedArtists {
         id: String,
@@ -3594,8 +3596,8 @@ fn operation_for(api: &ApiGateway, request: &ApiRequest) -> Operation {
         | ApiRequest::ReorderPlaylist { playlist_id, .. } => {
             Operation::PlaylistMutation(api.playlist_access(playlist_id))
         }
-        ApiRequest::Recommendations { .. }
-        | ApiRequest::ArtistTopTracks { .. }
+        ApiRequest::Recommendations { .. } => Operation::CatalogSearch,
+        ApiRequest::ArtistTopTracks { .. }
         | ApiRequest::RelatedArtists { .. } => Operation::UnsupportedDevelopmentMode,
         ApiRequest::Artist { .. }
         | ApiRequest::ArtistAlbums { .. }
@@ -3856,13 +3858,59 @@ async fn handle(
             result: routed!(top_artists("medium_term", 20)).map(|page| page.items),
         },
         ApiRequest::Recommendations {
-            seed_tracks,
-            seed_artists,
+            seeds,
+            lastfm_key,
             generation,
-        } => ApiResponse::Recommendations {
-            generation,
-            result: routed!(recommendations(&seed_tracks, &seed_artists, 20)),
-        },
+        } => {
+            use crate::open_sources::same_name;
+            // Spotify's own recommendations are closed to apps like this one.
+            // Last.fm names the songs; Spotify is only asked to find them.
+            let result = match crate::open_sources::client() {
+                None => Err(ApiError::Network("no network client".into())),
+                Some(http) => {
+                    let pairs = crate::open_sources::similar_tracks(&http, &lastfm_key, &seeds).await;
+                    if pairs.is_empty() {
+                        Err(ApiError::Network("Last.fm had no suggestions".into()))
+                    } else {
+                        let mut tracks: Vec<crate::api::models::Track> = Vec::new();
+                        let mut failure = None;
+                        for (artist, title) in pairs.iter().take(30) {
+                            if tracks.len() >= 16 {
+                                break;
+                            }
+                            let query = format!("track:\"{title}\" artist:\"{artist}\"");
+                            match routed!(search(&query, &["track"])) {
+                                Ok(found) => {
+                                    let hit = found
+                                        .tracks
+                                        .map(|page| page.items)
+                                        .unwrap_or_default()
+                                        .into_iter()
+                                        .find(|track| {
+                                            same_name(&track.name, title)
+                                                && track.artists.iter().any(|a| same_name(&a.name, artist))
+                                        });
+                                    if let Some(track) = hit
+                                        && !tracks.iter().any(|held| held.uri == track.uri)
+                                    {
+                                        tracks.push(track);
+                                    }
+                                }
+                                Err(error) => {
+                                    failure = Some(error);
+                                    break;
+                                }
+                            }
+                        }
+                        match failure {
+                            Some(error) if tracks.is_empty() => Err(error),
+                            _ => Ok(tracks),
+                        }
+                    }
+                }
+            };
+            ApiResponse::Recommendations { generation, result }
+        }
         ApiRequest::Discover { term, generation } => {
             let result = routed!(search(&term, &["playlist"]))
                 .map(|results| results.playlists.map(|page| page.items).unwrap_or_default());
@@ -4186,10 +4234,54 @@ async fn handle(
             result: routed!(artist_top_tracks(&id)),
             id,
         },
-        ApiRequest::ArtistRecent { id } => ApiResponse::ArtistRecent {
-            result: routed!(artist_albums(&id, "album,single", 0, 6)).map(|page| page.items),
-            id,
-        },
+        ApiRequest::ArtistRecent { id, name } => {
+            // Deezer's open API says what is new (no limits to speak of);
+            // Spotify is only asked about the few releases that turn up, so
+            // they can be played. Spotify's own list is the fallback.
+            let cutoff = crate::releases::cutoff(
+                jiff::Timestamp::now().as_second(),
+                crate::releases::NEW_FOR_DAYS,
+            );
+            let deezer = match crate::open_sources::client() {
+                Some(http) if !name.is_empty() => {
+                    Some(crate::open_sources::recent_releases(&http, &name, &cutoff).await)
+                }
+                _ => None,
+            };
+            let result = match deezer {
+                Some(Ok(list)) => {
+                    let mut albums = Vec::new();
+                    let mut failure = None;
+                    for item in list {
+                        let query = format!("album:\"{}\" artist:\"{}\"", item.title, name);
+                        match routed!(search(&query, &["album"])) {
+                            Ok(found) => {
+                                if let Some(album) = found
+                                    .albums
+                                    .map(|page| page.items)
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .find(|album| crate::open_sources::same_name(&album.name, &item.title))
+                                {
+                                    albums.push(album);
+                                }
+                            }
+                            Err(error) => {
+                                failure = Some(error);
+                                break;
+                            }
+                        }
+                    }
+                    match failure {
+                        Some(error) if albums.is_empty() => Err(error),
+                        _ => Ok(albums),
+                    }
+                }
+                Some(Err(crate::open_sources::DeezerError::Busy)) => Err(ApiError::RateLimited),
+                _ => routed!(artist_albums(&id, "album,single", 0, 6)).map(|page| page.items),
+            };
+            ApiResponse::ArtistRecent { result, id }
+        }
         ApiRequest::ArtistAlbums { id, groups, offset } => ApiResponse::ArtistAlbums {
             result: routed!(artist_albums(&id, &groups, offset, 50)),
             id,

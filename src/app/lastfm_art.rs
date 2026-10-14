@@ -27,7 +27,7 @@ impl App {
         self.dirs.index_dir().join("lastfm-art")
     }
 
-    fn art_key(&self) -> String {
+    pub(super) fn art_key(&self) -> String {
         let own = self.settings.lastfm_api_key.trim();
         if own.is_empty() || self.settings.lastfm_secret.trim().is_empty() {
             crate::lastfm::DEFAULT_API_KEY.to_string()

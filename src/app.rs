@@ -2468,6 +2468,80 @@ impl App {
         }
     }
 
+    fn recs_cache_path(&self) -> PathBuf {
+        self.dirs.cache.join("home-recommendations.json")
+    }
+
+    /// The songs suggested earlier, if they are less than six hours old and
+    /// for this account.
+    fn recs_cache_load(&self) -> Option<Vec<crate::api::models::Track>> {
+        let value: serde_json::Value = serde_json::from_slice(&std::fs::read(self.recs_cache_path()).ok()?).ok()?;
+        let user = self.user.as_ref().map(|user| user.id.clone()).unwrap_or_default();
+        let at = value.get("at")?.as_u64()?;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+        if value.get("user")?.as_str()? != user || now.saturating_sub(at) > 6 * 3600 {
+            return None;
+        }
+        let tracks: Vec<crate::api::models::Track> = serde_json::from_value(value.get("tracks")?.clone()).ok()?;
+        (!tracks.is_empty()).then_some(tracks)
+    }
+
+    fn recs_cache_save(&self, tracks: &[crate::api::models::Track]) {
+        let user = self.user.as_ref().map(|user| user.id.clone()).unwrap_or_default();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let body = serde_json::json!({ "at": now, "user": user, "tracks": tracks });
+        let path = self.recs_cache_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let temp = path.with_extension("json.tmp");
+        if std::fs::write(&temp, body.to_string()).is_ok() {
+            let _ = std::fs::rename(&temp, &path);
+        }
+    }
+
+    fn discover_cache_load(&mut self) {
+        let path = self.dirs.cache.join("home-discover.json");
+        let Some(map) = std::fs::read(path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<std::collections::HashMap<String, Vec<Playlist>>>(&bytes).ok())
+        else {
+            return;
+        };
+        for (term, list) in map {
+            if DISCOVER_TERMS.contains(&term.as_str()) && !list.is_empty() {
+                self.home.discover.insert(term, Loadable::Loaded(list));
+            }
+        }
+    }
+
+    fn discover_cache_save(&self) {
+        let map: std::collections::HashMap<&String, &Vec<Playlist>> = self
+            .home
+            .discover
+            .iter()
+            .filter_map(|(term, entry)| match entry {
+                Loadable::Loaded(list) if !list.is_empty() => Some((term, list)),
+                _ => None,
+            })
+            .collect();
+        if map.is_empty() {
+            return;
+        }
+        let path = self.dirs.cache.join("home-discover.json");
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(bytes) = serde_json::to_vec(&map) {
+            let temp = path.with_extension("json.tmp");
+            if std::fs::write(&temp, bytes).is_ok() {
+                let _ = std::fs::rename(&temp, &path);
+            }
+        }
+    }
+
     /// Starts looking for new releases by the artists in all the playlists
     /// (`None`) or in one. The artists come from an open playlist page or the
     /// last playlist scan; with neither, the scan runs first.
@@ -2573,9 +2647,9 @@ impl App {
             scan.paused_until = None;
         }
         match scan.queue.last().cloned() {
-            Some((id, _)) => {
+            Some((id, name)) => {
                 scan.asked = true;
-                self.backend.api(ApiRequest::ArtistRecent { id });
+                self.backend.api(ApiRequest::ArtistRecent { id, name });
             }
             None => {
                 let found = std::mem::take(&mut scan.found);
@@ -2618,7 +2692,7 @@ impl App {
                         crate::releases::add(&mut scan.found, release);
                     }
                 }
-                scan.paused_until = Some(Instant::now() + Duration::from_millis(700));
+                scan.paused_until = Some(Instant::now() + Duration::from_millis(300));
             }
             Err(error) if error.is_rate_limited() => {
                 scan.paused_until = Some(Instant::now() + Duration::from_secs(30));
@@ -5111,6 +5185,9 @@ impl App {
             generation,
         });
         self.home.discover_pending.clear();
+        if self.home.discover.is_empty() {
+            self.discover_cache_load();
+        }
         for term in DISCOVER_TERMS {
             self.home
                 .discover_pending
@@ -6529,18 +6606,28 @@ impl App {
                     && let Ok(page) = result
                 {
                     let tracks = page.items;
-                    let seeds: Vec<String> = tracks
+                    let seeds: Vec<(String, String)> = tracks
                         .iter()
-                        .filter_map(|track| track.id.clone())
+                        .filter(|track| !track.name.is_empty())
+                        .filter_map(|track| {
+                            track
+                                .artists
+                                .first()
+                                .map(|artist| (artist.name.clone(), track.name.clone()))
+                        })
                         .take(5)
                         .collect();
-                    if !seeds.is_empty() {
+                    // A recent answer is reused: it costs Spotify searches.
+                    if let Some(cached) = self.recs_cache_load() {
+                        self.home.recommendations = Loadable::Loaded(cached);
+                    } else if !seeds.is_empty() {
                         if self.home.recommendations.get().is_none() {
                             self.home.recommendations = Loadable::Loading;
                         }
+                        let lastfm_key = self.art_key();
                         self.backend.api(ApiRequest::Recommendations {
-                            seed_tracks: seeds,
-                            seed_artists: Vec::new(),
+                            seeds,
+                            lastfm_key,
                             generation,
                         });
                     }
@@ -6568,6 +6655,9 @@ impl App {
                 if let Ok(tracks) = &result {
                     let uris: Vec<String> = tracks.iter().map(|track| track.uri.clone()).collect();
                     self.request_contains(uris);
+                    if !tracks.is_empty() {
+                        self.recs_cache_save(tracks);
+                    }
                 }
                 self.home.recommendations.refresh(result);
             }
@@ -6603,7 +6693,17 @@ impl App {
                         .is_some_and(|result| !result.is_loading())
                 });
                 if complete {
-                    self.home.discover = std::mem::take(&mut self.home.discover_pending);
+                    let mut fresh = std::mem::take(&mut self.home.discover_pending);
+                    // A term that failed this time keeps what it showed before.
+                    for (term, entry) in fresh.iter_mut() {
+                        if matches!(entry, Loadable::Failed(_))
+                            && let Some(Loadable::Loaded(old)) = self.home.discover.get(term)
+                        {
+                            *entry = Loadable::Loaded(old.clone());
+                        }
+                    }
+                    self.home.discover = fresh;
+                    self.discover_cache_save();
                 }
             }
             // A reload reads the playlists from the top again under a new
