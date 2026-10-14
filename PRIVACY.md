@@ -13,7 +13,7 @@ This app only uses services you already know: <br />
 
 ## Terms
 
-chanceify™ needs a Spotify Premium account. <br />
+chanceify™ needs a Spotify Premium account only to stream from Spotify. Your local library works without one. <br />
 chanceify™ is a free personal project, provided as is, with no warranty. <br />
 
 Don't be malicious towards other people or break things. I can change or stop it at any time. <br />
