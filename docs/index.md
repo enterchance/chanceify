@@ -4,7 +4,9 @@ hero: true
 tagline: music reimagined
 ---
 
-needs spotify premium.
+a spotify player for windows.  
+needs spotify premium to stream.  
+local library works great with no premium.
 
 ## get it
 
@@ -43,7 +45,7 @@ needs spotify premium.
 
 ## questions
 
-**do i need premium?** yes. blame spotify.
+**do i need premium?** only to stream spotify (blame spotify). your local library works great without it.
 
 **where is everything saved?** in the folder beside `chanceify.exe`.
 
