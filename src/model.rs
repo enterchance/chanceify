@@ -1179,6 +1179,8 @@ pub enum Action {
     ShufflePlay(String),
     /// Shuffle a loaded playlist so neighbouring songs have similar tempos.
     SmartShufflePlay(String),
+    /// Shuffle a list, leaning towards the songs not heard for the longest.
+    FreshShufflePlay(String),
     TogglePlay,
     /// Plays if paused; does nothing if already playing.
     PlayOnly,
@@ -1538,6 +1540,7 @@ pub enum Action {
     /// Turn the compact mini player on or off, resizing the window to match.
     ToggleMiniPlayer,
     ToggleMiniQueue,
+    ToggleMiniLyrics,
     ToggleMiniVolume,
     SetMiniVis(u8),
     /// Cycles what clicking a song with a modifier held does: queue with Ctrl, with Alt, or nothing.

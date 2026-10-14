@@ -10103,6 +10103,36 @@ impl App {
                     });
                 }
             }
+            Action::FreshShufflePlay(uri) => {
+                let uris = self.context_track_uris(&uri).unwrap_or_default();
+                let total = self.context_len(&uri).unwrap_or(0) as usize;
+                let uris: Vec<String> = uris
+                    .into_iter()
+                    .filter(|uri| uri.starts_with("spotify:track:"))
+                    .collect();
+                if uris.len() < 2 || (total > uris.len() + 2) {
+                    self.toast("Open the list and let it finish loading first");
+                } else {
+                    let now = jiff::Timestamp::now().as_second();
+                    let last = self.stats.last_played();
+                    // The longer since a song was heard, the earlier it tends to come
+                    // (a song never heard counts as ten years); still random.
+                    let mut keyed: Vec<(f32, String)> = uris
+                        .into_iter()
+                        .map(|uri| {
+                            let days = last.get(uri.as_str()).map_or(3650.0, |t| ((now - t) as f32 / 86_400.0).max(0.0));
+                            let key = rand::random_range(0.05f32..1.0) / (1.0 + (1.0 + days).ln());
+                            (key, uri)
+                        })
+                        .collect();
+                    keyed.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    self.toast("Playing songs you haven't heard in a while first");
+                    self.actions.push(Action::PlayUris {
+                        uris: keyed.into_iter().map(|(_, uri)| uri).collect(),
+                        index: 0,
+                    });
+                }
+            }
             Action::ShufflePlay(uri) => {
                 // The random starting song is picked in `play_request`,
                 // which every shuffled play goes through.
@@ -11774,7 +11804,22 @@ impl App {
                 self.mark_settings_dirty();
             }
             Action::ToggleMiniQueue => {
-                self.settings.mini_queue = !self.settings.mini_queue;
+                if self.settings.mini_queue && self.settings.mini_lyrics {
+                    // The lyrics are in the queue's place: show the queue.
+                    self.settings.mini_lyrics = false;
+                } else {
+                    self.settings.mini_queue = !self.settings.mini_queue;
+                }
+                self.mark_settings_dirty();
+            }
+            Action::ToggleMiniLyrics => {
+                self.settings.mini_lyrics = !self.settings.mini_lyrics;
+                if self.settings.mini_lyrics {
+                    // The lyrics take the queue's place.
+                    self.settings.mini_queue = true;
+                    self.lyrics_following = true;
+                    self.request_lyrics();
+                }
                 self.mark_settings_dirty();
             }
             Action::PlayLocalFiles {

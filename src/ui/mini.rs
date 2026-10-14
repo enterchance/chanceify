@@ -80,6 +80,20 @@ pub fn window(app: &mut App, ctx: &egui::Context) {
         close_button(app, ui);
         super::window_resize(ui);
         app.mini_active = false;
+        // The fade is the window's own see-through level, so it is set on
+        // this window (found by its title) rather than the main one.
+        #[cfg(windows)]
+        {
+            let level = fade_level(app, &ctx).clamp(0.2, 1.0);
+            let alpha = (level * 255.0).round() as u8;
+            let sent_id = egui::Id::new("mini-alpha-sent");
+            if ctx.data(|data| data.get_temp::<u8>(sent_id)) != Some(alpha) {
+                if let Some(hwnd) = crate::window::find_window("chanceify mini player") {
+                    crate::window::set_window_alpha(hwnd, alpha);
+                }
+                ctx.data_mut(|data| data.insert_temp(sent_id, alpha));
+            }
+        }
         let (outer, inner) = ctx.input(|input| (input.viewport().outer_rect, input.viewport().inner_rect));
         if let (Some(outer), Some(inner)) = (outer, inner) {
             geometry = Some([outer.min.x, outer.min.y, inner.width(), inner.height()]);
@@ -242,6 +256,19 @@ fn strip_buttons(app: &mut App, ui: &mut egui::Ui, strip: Rect) {
     {
         app.actions.push(Action::ToggleMiniQueue);
     }
+    let lyrics = app.settings.mini_queue && app.settings.mini_lyrics;
+    if theme::icon_button(
+        &mut row,
+        Icon::Mic,
+        15.0,
+        if lyrics { palette.accent } else { palette.secondary },
+        if lyrics { palette.accent_hover } else { palette.text },
+        if lyrics { "Show the queue instead" } else { "Show the lyrics" },
+    )
+    .clicked()
+    {
+        app.actions.push(Action::ToggleMiniLyrics);
+    }
     let volume = app.settings.mini_volume;
     if theme::icon_button(
         &mut row,
@@ -255,12 +282,25 @@ fn strip_buttons(app: &mut App, ui: &mut egui::Ui, strip: Rect) {
     {
         app.actions.push(Action::ToggleMiniVolume);
     }
+    // Its own button: keep the mini player above every other window.
+    let pinned = app.settings.mini_on_top;
+    if theme::icon_button(
+        &mut row,
+        Icon::Pin,
+        15.0,
+        if pinned { palette.accent } else { palette.secondary },
+        if pinned { palette.accent_hover } else { palette.text },
+        if pinned { "Stop keeping it on top" } else { "Keep it on top" },
+    )
+    .clicked()
+    {
+        app.actions.push(Action::ToggleMiniOnTop);
+    }
 }
 
 /// How opaque the floating mini player is, 0 to 1: solid while the pointer
 /// is on it (and for a moment after), see-through once it has been away.
 /// Always 1 unless the mini player floats over everything with the fade on.
-#[allow(dead_code)]
 pub fn fade_level(app: &App, ctx: &egui::Context) -> f32 {
     const AWAY: f32 = 0.42;
     const LINGER: f64 = 1.0;
@@ -327,7 +367,11 @@ fn portrait(app: &mut App, ui: &mut egui::Ui, body: Rect, now: Option<&NowPlayin
         let left = body.bottom() - ui.cursor().top();
         if left >= 90.0 {
             ui.add_space(8.0);
-            queue_list(app, ui, body, palette);
+            if app.settings.mini_lyrics {
+                lyrics_list(app, ui, body, palette);
+            } else {
+                queue_list(app, ui, body, palette);
+            }
         }
     }
 }
@@ -680,6 +724,32 @@ fn queue_list(app: &mut App, ui: &mut egui::Ui, body: Rect, palette: theme::Pale
         .show(&mut scroll_ui, |ui| {
             super::queue::contents(app, ui, true);
         });
+}
+
+/// The lyrics, in the room the queue would have, drawn like the side lyrics
+/// (timestamps, the sung line lit).
+fn lyrics_list(app: &mut App, ui: &mut egui::Ui, body: Rect, palette: theme::Palette) {
+    app.request_lyrics();
+    let height = (body.bottom() - ui.cursor().top()).max(40.0);
+    let list = Rect::from_min_size(
+        pos2(body.left(), ui.cursor().top()),
+        vec2(body.width(), height),
+    );
+    let mut child = ui.new_child(
+        UiBuilder::new()
+            .max_rect(list)
+            .layout(Layout::top_down(Align::Min)),
+    );
+    child.set_clip_rect(list.intersect(ui.clip_rect()));
+    child
+        .painter()
+        .rect_filled(list, egui::CornerRadius::same(10), palette.panel);
+    let mut inner = child.new_child(
+        UiBuilder::new()
+            .max_rect(list.shrink(6.0))
+            .layout(Layout::top_down(Align::Min)),
+    );
+    super::lyrics::contents(app, &mut inner);
 }
 
 /// A small close button in the top-right corner, drawn only while the

@@ -11,6 +11,7 @@ pub mod auth;
 pub mod autoscroll;
 pub mod backend;
 pub mod bidi;
+pub mod phonetic;
 pub mod beat;
 pub mod bpm;
 pub mod discord;

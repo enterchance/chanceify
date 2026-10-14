@@ -497,6 +497,33 @@ fn stat_tile(
             app.actions.push(Action::Search(row.name.clone()));
         }
     }
+    // Right-click: the same menu as anywhere else (add to a playlist, queue...).
+    let menu_uri = if song {
+        row.uri.clone()
+    } else if !row.artist_id.is_empty() {
+        format!("spotify:artist:{}", row.artist_id)
+    } else {
+        String::new()
+    };
+    if !menu_uri.is_empty() {
+        egui::Popup::context_menu(&response)
+            .id(ui.make_persistent_id(("stat-tile-menu", &menu_uri, song)))
+            .frame(widgets::menu_frame(&palette))
+            .show(|ui| {
+                if song {
+                    // A song gets the song menu: queue, add to a playlist...
+                    let track = crate::api::models::Track {
+                        id: menu_uri.rsplit(':').next().map(str::to_string),
+                        name: row.name.clone(),
+                        uri: menu_uri.clone(),
+                        ..Default::default()
+                    };
+                    widgets::item_menu(ui, app, &PlayableItem::Track(track), None, None);
+                } else {
+                    widgets::context_menu_items(ui, app, &menu_uri, &row.name, None);
+                }
+            });
+    }
     response.on_hover_text(if song {
         "Click to play. Click the artist to open them."
     } else {
@@ -808,10 +835,9 @@ fn recently_played(app: &mut App, ui: &mut egui::Ui) {
         });
     }
     let shelf_title = if total > 16 { String::new() } else { gettext(app.locale, "Recently played").into_owned() };
-    widgets::shelf(
+    widgets::grid_shelf(
         ui,
         &palette,
-        "recent",
         &shelf_title,
         |ui| {
             for entry in &tracks {
@@ -1030,10 +1056,9 @@ fn top_artists(app: &mut App, ui: &mut egui::Ui) {
     if artists.is_empty() {
         return;
     }
-    widgets::shelf(
+    widgets::grid_shelf(
         ui,
         &palette,
-        "top-artists",
         &gettext(app.locale, "Your top artists"),
         |ui| {
             for artist in &artists {

@@ -59,6 +59,7 @@ impl App {
             .now_playing()
             .filter(|now| now.uri.starts_with("spotify:track:") && !now.title.is_empty());
         if let Some(now) = &playing
+            && self.settings.lastfm_art_auto
             && self.art_seen_for.as_deref() != Some(now.uri.as_str())
         {
             self.art_seen_for = Some(now.uri.clone());

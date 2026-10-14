@@ -1638,6 +1638,11 @@ pub fn context_menu_items(
     {
         app.actions.push(Action::SmartShufflePlay(uri.to_string()));
     }
+    if (kind == "playlist" || uri.ends_with(":collection"))
+        && menu_item(ui, &palette, Some(Icon::Shuffle), "Shuffle: songs I haven't heard lately")
+    {
+        app.actions.push(Action::FreshShufflePlay(uri.to_string()));
+    }
     if kind == "playlist"
         && menu_item(ui, &palette, Some(Icon::ListMusic), "Save list to index (offline)")
     {
@@ -4306,6 +4311,21 @@ pub fn shelf(
             });
         },
     );
+    ui.add_space(12.0);
+}
+
+/// Like `shelf`, but the cards wrap onto more rows and the page scrolls
+/// down, instead of the row scrolling sideways.
+pub fn grid_shelf(
+    ui: &mut Ui,
+    palette: &Palette,
+    title: &str,
+    add_contents: impl FnOnce(&mut Ui),
+) {
+    ui.add_space(8.0);
+    theme::section_title(ui, palette, title);
+    ui.add_space(4.0);
+    grid(ui, add_contents);
     ui.add_space(12.0);
 }
 

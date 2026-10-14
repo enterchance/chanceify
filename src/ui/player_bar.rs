@@ -1649,7 +1649,7 @@ fn audio_menu_body(app: &mut App, ui: &mut egui::Ui) {
 
 /// How wide one column of the visualizer menu is for a window this wide.
 fn vis_col_w(_screen_w: f32) -> f32 {
-    240.0
+    220.0
 }
 
 /// Width of the one column on the tabs that have only one.
@@ -1716,6 +1716,23 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
             crate::crash::stage("menu: bars column");
             if shapes & crate::settings::Settings::SHAPE_BARS != 0 {
                 super::widgets::menu_separator(ui, &palette);
+                // Ready-made looks: opacity, count, height, gap.
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    for (name, opacity, count, height, gap) in [
+                        ("Fine", 70.0f32, 512u16, 0.8f32, 0.0f32),
+                        ("Classic", 100.0, 128, 1.0, 2.0),
+                        ("Chunky", 100.0, 48, 1.6, 4.0),
+                        ("Tall", 90.0, 96, 2.6, 1.0),
+                    ] {
+                        if chip(ui, &palette, &gettext(app.locale, name), false, 48.0).clicked() {
+                            app.actions.push(Action::SetVisOpacity(true, opacity / 100.0));
+                            app.actions.push(Action::SetVisBars(count));
+                            app.actions.push(Action::SetVisBarHeight(height));
+                            app.actions.push(Action::SetVisGap(gap));
+                        }
+                    }
+                });
                 slider_row(
                     ui,
                     &palette,
@@ -1798,6 +1815,23 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
             }
             if shapes & crate::settings::Settings::SHAPE_FLOW != 0 {
                 super::widgets::menu_separator(ui, &palette);
+                // Ready-made looks: sheets, height, opacity, speed.
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    for (name, sheets, depth, opacity, speed) in [
+                        ("Calm", 3u8, 0.5f32, 70.0f32, 0.6f32),
+                        ("Rolling", 5, 0.86, 100.0, 1.0),
+                        ("Dense", 10, 0.7, 85.0, 1.6),
+                        ("Storm", 8, 1.1, 100.0, 3.5),
+                    ] {
+                        if chip(ui, &palette, &gettext(app.locale, name), false, 56.0).clicked() {
+                            app.actions.push(Action::SetFlowSheets(sheets));
+                            app.actions.push(Action::SetFlowDepth(depth));
+                            app.actions.push(Action::SetVisOpacity(false, opacity / 100.0));
+                            app.actions.push(Action::SetFlowSpeed(speed));
+                        }
+                    }
+                });
 
                 // The flow has settings of its own, and none of the bars':
                 // its sheets are folded out of a fixed number of readings,
@@ -2000,18 +2034,39 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                     app.actions.push(Action::ToggleJumpAuto);
                 }
             });
-            // Ready-made feels: react, strength, sensitivity, rest, cutoff, follow.
+            // Ready-made feels for the reaction picked below: strength,
+            // sensitivity, rest, cutoff, follow.
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                for (name, react, shake, sens, gap, floor, adapt) in [
-                    ("Gentle", 0u8, 0.4f32, 0.8f32, 50.0f32, 5.0f32, 5.0f32),
-                    ("Steady", 1, 0.5, 1.0, 32.0, 3.0, 5.0),
-                    ("Punchy", 1, 1.2, 1.4, 24.0, 2.0, 8.0),
-                    ("Beat", 2, 1.0, 1.2, 28.0, 3.0, 10.0),
-                    ("Wild", 2, 2.2, 2.0, 14.0, 0.0, 15.0),
-                ] {
+                let react = app.settings.vis_jump_react.min(3);
+                let sets: [(&str, f32, f32, f32, f32, f32); 4] = match react {
+                    0 => [
+                        ("Gentle", 0.4, 0.8, 50.0, 5.0, 5.0),
+                        ("Swell", 0.8, 1.2, 40.0, 4.0, 10.0),
+                        ("Surge", 1.4, 1.6, 28.0, 2.0, 8.0),
+                        ("Crash", 2.2, 2.2, 18.0, 1.0, 14.0),
+                    ],
+                    1 => [
+                        ("Soft", 0.4, 0.9, 45.0, 4.0, 5.0),
+                        ("Steady", 0.5, 1.0, 32.0, 3.0, 5.0),
+                        ("Thump", 1.2, 1.4, 24.0, 2.0, 8.0),
+                        ("Wild", 2.2, 2.0, 14.0, 0.0, 15.0),
+                    ],
+                    2 => [
+                        ("Light", 0.4, 0.9, 40.0, 4.0, 8.0),
+                        ("Groove", 0.8, 1.1, 30.0, 3.0, 10.0),
+                        ("Snap", 1.4, 1.5, 22.0, 2.0, 12.0),
+                        ("Frantic", 2.2, 2.1, 12.0, 0.0, 18.0),
+                    ],
+                    _ => [
+                        ("Faint", 0.3, 1.0, 30.0, 0.0, 5.0),
+                        ("Pulse", 0.6, 1.0, 30.0, 0.0, 5.0),
+                        ("Pound", 1.2, 1.0, 30.0, 0.0, 5.0),
+                        ("Slam", 2.2, 1.0, 30.0, 0.0, 5.0),
+                    ],
+                };
+                for (name, shake, sens, gap, floor, adapt) in sets {
                     if chip(ui, &palette, &gettext(app.locale, name), false, 56.0).clicked() {
-                        app.actions.push(Action::SetJumpReact(react));
                         app.actions.push(Action::SetJumpShake(shake));
                         app.actions.push(Action::SetJumpTune(0, sens));
                         app.actions.push(Action::SetJumpTune(1, gap));
@@ -2026,8 +2081,9 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
                     (0u8, Glyph::Icon(Icon::Volume2), "Jumps with the loudness"),
                     (1, Glyph::Icon(Icon::Speaker), "Jumps with the bass"),
                     (2, Glyph::Icon(Icon::Zap), "Jumps on the beat"),
+                    (3, Glyph::Icon(Icon::Music), "Jumps on the song's tempo (BPM)"),
                 ] {
-                    if glyph_button(ui, &palette, glyph, tip, app.settings.vis_jump_react.min(2) == value).clicked() {
+                    if glyph_button(ui, &palette, glyph, tip, app.settings.vis_jump_react.min(3) == value).clicked() {
                         app.actions.push(Action::SetJumpReact(value));
                     }
                 }
@@ -2135,6 +2191,27 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui) {
             if tab == 2 { ui.horizontal_top(|ui| { ui.vertical(|ui| {
             ui.set_width(VIS_SINGLE_W);
             theme::subtle(ui, &palette, &gettext(app.locale, "TITLE"));
+            // Ready-made feels for the vibration and the art border.
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                // name, still, react, sens, strength, border
+                for (name, still, react, sens, strength, border) in [
+                    ("Still", true, 0u8, 1.0f32, 1.0f32, false),
+                    ("Soft", false, 0, 0.8, 0.5, false),
+                    ("Lively", false, 1, 1.3, 1.2, true),
+                    ("Heavy", false, 2, 1.8, 2.2, true),
+                ] {
+                    if chip(ui, &palette, &gettext(app.locale, name), false, 52.0).clicked() {
+                        app.settings.vis_text_still = still;
+                        app.settings.vis_sway_react = react;
+                        app.settings.vis_sway_beat = react == 2;
+                        app.settings.sway_sens = sens;
+                        app.settings.vis_sway_amount = strength;
+                        app.settings.vis_art_border = border;
+                        app.mark_settings_dirty();
+                    }
+                }
+            });
             if chip_i(
                 ui,
                 &palette,
@@ -3906,11 +3983,18 @@ fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying
     };
     let contrast = if ink == Color32::WHITE { Color32::BLACK } else { Color32::WHITE };
     let outline = !app.settings.vis_text_no_outline;
-    let show_artist = !app.settings.vis_text_no_artist && !now.subtitle.is_empty();
+    // The artists as the song lists them; the subtitle is only a fallback
+    // (it can be empty for a song whose artists are listed separately).
+    let artist_line = if now.artists.is_empty() {
+        now.subtitle.clone()
+    } else {
+        now.artists.iter().map(|artist| artist.name.as_str()).collect::<Vec<_>>().join(", ")
+    };
+    let show_artist = !app.settings.vis_text_no_artist && !artist_line.is_empty();
     let artist_size = (title_size * 0.5).max(12.0);
     let artist = show_artist.then(|| {
         let mut job = egui::text::LayoutJob::single_section(
-            now.subtitle.clone(),
+            artist_line.clone(),
             format(artist_size, 0.75),
         );
         job.wrap.max_width = max_width;
@@ -4979,6 +5063,14 @@ pub fn now_playing_overlay(app: &mut App, ui: &mut egui::Ui, art: Rect, now: &No
         } else if let Some(id) = &now.show_id {
             app.actions.push(Action::Open(Page::Show(id.clone())));
         }
+    }
+    // Right-click the song name for the song's own menu too.
+    if let Some(item) = app.now_playing_item() {
+        let context = app.editable_context_playlist();
+        egui::Popup::context_menu(&title)
+            .id(egui::Id::new("overlay-title-menu"))
+            .frame(super::widgets::menu_frame(&palette))
+            .show(|ui| super::widgets::item_menu(ui, app, &item, context.as_ref(), None));
     }
     // The heart sits at the end of the title, in the cover's colour once liked.
     if let Some(item) = &liked_item {

@@ -191,7 +191,7 @@ fn tab_of(title: &str) -> Option<u8> {
         Some(0)
     } else if has(&["playback", "equalizer"]) {
         Some(1)
-    } else if has(&["appearance", "song lists", "gradient"]) {
+    } else if has(&["appearance", "song lists", "gradient", "lyrics"]) {
         Some(2)
     } else if has(&["storage", "unavailable"]) {
         Some(3)
@@ -1714,6 +1714,32 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
         });
     }
 
+    if needle.is_empty() || "lyrics timestamps phonetic romanize line size".contains(needle.as_str()) {
+        any_visible = true;
+        section(ui, &palette, "Lyrics", |ui| {
+            use crate::settings::Settings;
+            let mut stamps = !app.settings.side_lyrics_flag(Settings::LYRICS_HIDE_STAMPS);
+            if widgets::switch_labeled(ui, &palette, "Timestamps beside the lyrics", &mut stamps).changed() {
+                app.actions.push(Action::ToggleSideLyricsFlag(Settings::LYRICS_HIDE_STAMPS));
+            }
+            let mut phonetic = app.settings.lyrics_phonetic;
+            if widgets::switch_labeled(ui, &palette, "Phonetic lyrics (Latin letters under each line)", &mut phonetic).changed() {
+                app.settings.lyrics_phonetic = phonetic;
+                app.mark_settings_dirty();
+            }
+            note(ui, &palette, "Russian, Korean and Chinese are written out in Latin letters; German and Turkish are respelled the way an English reader would say them.");
+            ui.horizontal(|ui| {
+                theme::subtle(ui, &palette, "Side lyrics size");
+                for (value, label) in [(1u8, "Smaller"), (0, "Normal"), (2, "Larger")] {
+                    if theme::pill_button(ui, &palette, label, app.settings.side_lyrics_size == value).clicked() {
+                        app.actions.push(Action::SetSideLyricsSize(value));
+                    }
+                }
+            });
+            ui.add_space(8.0);
+        });
+    }
+
     if needle.is_empty() || "discord rich presence status buttons".contains(needle.as_str()) {
         any_visible = true;
         section(ui, &palette, "Discord", |ui| {
@@ -1918,6 +1944,18 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                         .clicked()
                     {
                         app.actions.push(Action::OpenMissingArtFolder);
+                    }
+                    let auto_label = if app.settings.lastfm_art_auto {
+                        "Save missing pictures automatically: on"
+                    } else {
+                        "Save missing pictures automatically: off"
+                    };
+                    if theme::soft_button(ui, &palette, None, auto_label, app.settings.lastfm_art_auto)
+                        .on_hover_text("As songs play, the covers and artist pictures Last.fm lacks are saved to the lists below.")
+                        .clicked()
+                    {
+                        app.settings.lastfm_art_auto = !app.settings.lastfm_art_auto;
+                        app.mark_settings_dirty();
                     }
                     let sweep_label = if app.art_sweep { "Stop checking my library" } else { "Check my whole library" };
                     if theme::soft_button(ui, &palette, None, sweep_label, app.art_sweep)
@@ -2453,20 +2491,24 @@ fn missing_lists(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
         lists.push(names);
     }
     ui.add_space(4.0);
-    ui.columns(2, |columns| {
-        for (index, ui) in columns.iter_mut().enumerate() {
-            let artists = index == 1;
-            let names = lists[index].clone();
-            let title = if artists {
-                format!("Missing artist pictures ({})", names.len())
-            } else {
-                format!("Missing album covers ({})", names.len())
-            };
-            theme::text(ui, title, theme::semibold(13.5), palette.text);
-            ui.add_space(2.0);
+    // Each list is folded away until opened, so its names are only laid out
+    // (and its pictures only loaded) while it is on show.
+    for index in 0..2 {
+        let artists = index == 1;
+        let names = lists[index].clone();
+        let title = if artists {
+            format!("Missing artist pictures ({})", names.len())
+        } else {
+            format!("Missing album covers ({})", names.len())
+        };
+        let folder = root.join(if artists { "artists-missing" } else { "albums-missing" });
+        egui::CollapsingHeader::new(egui::RichText::new(title).font(theme::semibold(13.5)).color(palette.text))
+            .id_salt(("missing-fold", artists))
+            .default_open(false)
+            .show(ui, |ui| {
             if names.is_empty() {
                 theme::subtle(ui, palette, "None yet. They are added as you listen.");
-                continue;
+                return;
             }
             egui::ScrollArea::vertical()
                 .id_salt(("missing-scroll", artists))
@@ -2476,6 +2518,13 @@ fn missing_lists(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
                 .show(ui, |ui| {
                     for name in names.iter() {
                         ui.horizontal(|ui| {
+                            // The picture to upload, beside its name.
+                            let path = folder.join(format!("{name}.jpg"));
+                            ui.add(
+                                egui::Image::new(format!("file://{}", path.display()))
+                                    .fit_to_exact_size(egui::vec2(40.0, 40.0))
+                                    .corner_radius(4.0),
+                            );
                             let url = if artists {
                                 format!("https://www.last.fm/music/{}", last_fm_part(name))
                             } else if let Some((artist, album)) = name.split_once(" - ") {
@@ -2519,8 +2568,8 @@ fn missing_lists(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
                         });
                     }
                 });
-        }
-    });
+            });
+    }
 }
 
 

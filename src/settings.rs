@@ -1262,6 +1262,12 @@ pub struct Settings {
     pub mini_player: bool,
     /// Whether the mini player lists the queue under the controls.
     pub mini_queue: bool,
+    /// The mini player shows the lyrics where the queue would be.
+    pub mini_lyrics: bool,
+    /// Save the covers and artist pictures Last.fm lacks as songs play.
+    pub lastfm_art_auto: bool,
+    /// Lyrics also show a Latin-letter respelling under each line.
+    pub lyrics_phonetic: bool,
     /// Show the volume bar in the mini player.
     pub mini_volume: bool,
     /// Whether the mini player stays on top of other windows.
@@ -1618,6 +1624,9 @@ impl Default for Settings {
             app_icon: 1,
             mini_player: false,
             mini_queue: true,
+            mini_lyrics: false,
+            lastfm_art_auto: true,
+            lyrics_phonetic: false,
             mini_volume: true,
             mini_on_top: false,
             mini_fade: true,
