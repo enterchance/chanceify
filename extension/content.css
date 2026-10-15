@@ -12,3 +12,6 @@
 .cfy-web{margin-left:0;background:linear-gradient(135deg,#475569,#334155);box-shadow:0 2px 8px rgba(51,65,85,.45)}
 .cfy-web svg{margin-left:0}
 .cfy-web:hover{box-shadow:0 4px 14px rgba(51,65,85,.65)}
+.cfy-pair{display:inline-flex;flex-direction:row;flex-wrap:nowrap;align-items:center;gap:3px;white-space:nowrap}
+.cfy-pair .cfy-btn{width:26px;height:26px;margin:0;flex:none}
+.cfy-pair .cfy-btn svg{width:12px;height:12px}

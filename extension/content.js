@@ -112,9 +112,12 @@
       if (!slot) return;
       const b = makeButton('play', artist, title, false);
       const old = slot.querySelector('.chartlist-play-button, .chartlist-play-image');
-      if (old && opts.replace) slot.insertBefore(b, old);
-      else slot.appendChild(b);
-      b.after(makeWebButton(artist, title, false));
+      // The two buttons side by side, whatever width the cell gives them.
+      const pair = document.createElement('span');
+      pair.className = 'cfy-pair';
+      pair.append(b, makeWebButton(artist, title, false));
+      if (old && opts.replace) slot.insertBefore(pair, old);
+      else slot.appendChild(pair);
     });
   }
 

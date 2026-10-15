@@ -53,7 +53,41 @@ export default {
     if (url.pathname === "/find") {
       const a = (url.searchParams.get("a") || "").slice(0, 150);
       const t = (url.searchParams.get("t") || "").slice(0, 150);
-      if (a || t) return new Response(page({ title: t || a, artist: t ? a : "", id: null, find: t ? "play" : "artist" }), html());
+      if (a || t) {
+        // A picture from the iTunes catalogue (free, no key), when it knows the song.
+        let image = "";
+        try {
+          const term = encodeURIComponent((t ? a + " " + t : a).trim());
+          const found = await fetch(
+            "https://itunes.apple.com/search?media=music&limit=1&entity=" + (t ? "song" : "album") + "&term=" + term,
+            { cf: { cacheTtl: 86400, cacheEverything: true } },
+          );
+          const art = (await found.json()).results?.[0]?.artworkUrl100;
+          if (typeof art === "string" && /^https:\/\/[a-z0-9.-]+\.mzstatic\.com\//.test(art)) {
+            image = url.origin + "/f?u=" + encodeURIComponent(art.replace(/\/\d+x\d+bb\./, "/600x600bb."));
+          }
+        } catch (_) {}
+        return new Response(page({ title: t || a, artist: t ? a : "", id: null, image, find: t ? "play" : "artist" }), html());
+      }
+    }
+    // The picture itself, passed through so the swirl may read its pixels.
+    if (url.pathname === "/f") {
+      const wanted = url.searchParams.get("u") || "";
+      if (/^https:\/\/[a-z0-9.-]+\.mzstatic\.com\//.test(wanted)) {
+        try {
+          const picture = await fetch(wanted, { cf: { cacheTtl: 86400, cacheEverything: true } });
+          if (picture.ok) {
+            return new Response(picture.body, {
+              headers: {
+                "content-type": picture.headers.get("content-type") || "image/jpeg",
+                "access-control-allow-origin": "*",
+                "cache-control": "public, max-age=86400",
+              },
+            });
+          }
+        } catch (_) {}
+      }
+      return new Response("", { status: 404 });
     }
     const match = url.pathname.match(/^\/([tapu])\/([A-Za-z0-9._-]{2,40})\/?$/);
     if (!match) {
@@ -176,7 +210,7 @@ ${kind === "u" ? "" : `<iframe class="play" title="Play a preview" src="https://
   function say(m){}
   say("starting");
   var gl=cv.getContext("webgl",{antialias:false});
-  var urls=${JSON.stringify(id ? ["/c/" + kind + "/" + id, image || ""].filter(Boolean) : [])};
+  var urls=${JSON.stringify(id ? ["/c/" + kind + "/" + id, image || ""].filter(Boolean) : image ? [image] : [])};
   if(!gl){say("this browser has no WebGL (gradient only)");return}
   var still=matchMedia("(prefers-reduced-motion: reduce)").matches;
   function sh(type,src){var o=gl.createShader(type);gl.shaderSource(o,src);gl.compileShader(o);return o}
