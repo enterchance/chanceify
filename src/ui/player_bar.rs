@@ -1100,6 +1100,7 @@ fn swirl_phase(app: &mut App, ui: &egui::Ui, now: Option<&NowPlaying>) -> f64 {
 
 /// The two colours the visualizer's colour pair is at this moment (what the
 /// bars and flow run between), for the lights feed.
+#[allow(dead_code)]
 pub(crate) fn lights_pair(app: &App, time: f64) -> Option<(Color32, Color32)> {
     swirl_wash_raw(app, time).map(|(a, b)| (within_brightness(a, true), within_brightness(b, true)))
 }
@@ -1114,14 +1115,17 @@ fn swirl_wash(app: &App, time: f64) -> Option<(Color32, Color32)> {
 /// A colour darkened to a depth (0 leaves it alone), hue kept, so the
 /// picture can sit as dark as the cover itself instead of washed to pastel.
 pub(crate) fn deepen(colour: Color32, depth: u8) -> Color32 {
-    let factor = match depth {
-        0 => return colour,
-        1 => 0.5,
-        _ => 0.3,
-    };
+    if depth == 0 {
+        return colour;
+    }
+    let look = &crate::settings::VIS_LOOKS[(depth as usize).min(crate::settings::VIS_LOOKS.len() - 1)];
     let mut hsva = egui::ecolor::Hsva::from(colour);
-    hsva.v *= factor;
-    hsva.s = (hsva.s * 1.08).min(1.0);
+    // A grey cover stays grey: only its brightness moves.
+    if hsva.s >= MONOCHROME_SATURATION {
+        hsva.h = (hsva.h + look.hue).rem_euclid(1.0);
+        hsva.s = (hsva.s * look.sat).max(look.sat_min).min(1.0);
+    }
+    hsva.v = (hsva.v * look.value).min(1.0);
     Color32::from(hsva)
 }
 
@@ -1165,14 +1169,25 @@ pub(super) fn vis_gradient(
     ui: &egui::Ui,
     mode: crate::settings::PlayerBarVis,
 ) -> (Color32, Color32) {
+    vis_gradient_ctx(app, ui.ctx(), ui.visuals().dark_mode, mode)
+}
+
+/// [`vis_gradient`] without a `Ui`, so the lights feed gets exactly the two
+/// colours the bars are drawn between (the picked colour, the gradient
+/// switch, the look) rather than its own idea of them.
+pub(crate) fn vis_gradient_ctx(
+    app: &mut App,
+    ctx: &egui::Context,
+    dark: bool,
+    mode: crate::settings::PlayerBarVis,
+) -> (Color32, Color32) {
     use crate::settings::PlayerBarVis;
-    let dark = ui.visuals().dark_mode;
     // The bars take the cover's own accent by default; a reader who wants
     // them to hold still can name a colour instead.
     let base = match app.settings.player_bar_vis_color {
         crate::settings::VisColor::AlbumArt => {
             // The cover's own vivid colour; asking is what starts the work.
-            app.swirl_art(ui.ctx());
+            app.swirl_art(ctx);
             app.swirl_accent()
                 .or_else(|| app.now_playing_cover_colour())
                 .unwrap_or(app.palette.accent)
@@ -1186,7 +1201,7 @@ pub(super) fn vis_gradient(
             app.settings.player_bar_vis_color,
             crate::settings::VisColor::AlbumArt
         ) {
-        swirl_wash(app, ui.input(|input| input.time)).map_or(base, |(first, _)| first)
+        swirl_wash(app, ctx.input(|input| input.time)).map_or(base, |(first, _)| first)
     } else {
         base
     };
@@ -1199,7 +1214,7 @@ pub(super) fn vis_gradient(
         crate::settings::VisColor::AlbumArt
     );
     let (low, high) = if album {
-        let time = ui.input(|input| input.time);
+        let time = ctx.input(|input| input.time);
         let second = if matches!(mode, PlayerBarVis::Flow | PlayerBarVis::Spectrum)
             && !app.settings.swirl_colours_fixed
         {
@@ -2201,11 +2216,11 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             // How dark the colours run, for all three shapes: Bright is the
             // cover lifted to full colour, Deep and Night keep it nearer
             // the cover's own darkness.
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                for (value, label) in [(0u8, "Bright"), (1, "Deep"), (2, "Night")] {
-                    if chip(ui, &palette, &gettext(app.locale, label), app.settings.vis_depth == value, 62.0).clicked() {
-                        app.actions.push(Action::SetVisDepth(value));
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+                for (value, look) in crate::settings::VIS_LOOKS.iter().enumerate() {
+                    if chip(ui, &palette, &gettext(app.locale, look.name), app.settings.vis_depth as usize == value, 62.0).clicked() {
+                        app.actions.push(Action::SetVisDepth(value as u8));
                     }
                 }
             });
@@ -4948,7 +4963,14 @@ pub(super) fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, 
         app.toast("Song name copied");
     }
     if title_response.clicked() {
-        if let Some(id) = &now.album_id {
+        // Playing from a list: jump to the song's place in it.
+        let from_list = app
+            .playing_context_uri()
+            .and_then(|context| Page::from_uri(&context))
+            .is_some_and(|page| matches!(page, Page::Playlist(_) | Page::Album(_)));
+        if from_list && !now.uri.is_empty() {
+            app.actions.push(Action::RevealSong { uri: now.uri.clone() });
+        } else if let Some(id) = &now.album_id {
             app.actions.push(Action::Open(Page::Album(id.clone())));
         } else if let Some(id) = &now.show_id {
             app.actions.push(Action::Open(Page::Show(id.clone())));

@@ -3575,6 +3575,39 @@ pub struct CachedRootlist {
     pub entries: Vec<crate::player::RootlistEntry>,
 }
 
+/// A colour look for the visualizer: how the cover's colours are brought
+/// to the picture. Each keeps the cover's hue (bar the ones that turn it).
+pub struct VisLook {
+    pub name: &'static str,
+    /// Brightness multiplier.
+    pub value: f32,
+    /// Saturation multiplier, and the least saturation a coloured cover gets.
+    pub sat: f32,
+    pub sat_min: f32,
+    /// A turn of the hue wheel, in whole turns.
+    pub hue: f32,
+    /// Sets the single-colour (no gradient) switch when chosen.
+    pub solid: Option<bool>,
+}
+
+pub const VIS_LOOKS: [VisLook; 15] = [
+    VisLook { name: "Bright", value: 1.0, sat: 1.0, sat_min: 0.0, hue: 0.0, solid: None },
+    VisLook { name: "Deep", value: 0.5, sat: 1.08, sat_min: 0.0, hue: 0.0, solid: None },
+    VisLook { name: "Night", value: 0.3, sat: 1.08, sat_min: 0.0, hue: 0.0, solid: None },
+    VisLook { name: "OG", value: 0.58, sat: 0.92, sat_min: 0.0, hue: 0.0, solid: Some(true) },
+    VisLook { name: "Ink", value: 0.2, sat: 1.2, sat_min: 0.0, hue: 0.0, solid: None },
+    VisLook { name: "Saturated", value: 0.85, sat: 1.5, sat_min: 0.5, hue: 0.0, solid: None },
+    VisLook { name: "Neon", value: 1.0, sat: 1.8, sat_min: 0.85, hue: 0.0, solid: None },
+    VisLook { name: "Pastel", value: 1.0, sat: 0.4, sat_min: 0.0, hue: 0.0, solid: None },
+    VisLook { name: "Muted", value: 0.7, sat: 0.5, sat_min: 0.0, hue: 0.0, solid: None },
+    VisLook { name: "Dusk", value: 0.55, sat: 0.8, sat_min: 0.0, hue: 0.06, solid: None },
+    VisLook { name: "Warm", value: 0.8, sat: 1.1, sat_min: 0.0, hue: 0.04, solid: None },
+    VisLook { name: "Cool", value: 0.8, sat: 1.1, sat_min: 0.0, hue: -0.06, solid: None },
+    VisLook { name: "Flip", value: 0.8, sat: 1.2, sat_min: 0.0, hue: 0.5, solid: None },
+    VisLook { name: "Smoke", value: 0.4, sat: 0.2, sat_min: 0.0, hue: 0.0, solid: None },
+    VisLook { name: "Ember", value: 0.6, sat: 1.3, sat_min: 0.5, hue: 0.02, solid: None },
+];
+
 /// Restorable UI session: what was open when the app last closed.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

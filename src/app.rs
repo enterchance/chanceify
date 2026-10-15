@@ -3363,6 +3363,7 @@ impl App {
                 {
                     self.unavailable_at.clear();
                     self.last_unavailable_reconnect = Some(now);
+                    crate::crash::trail("reconnecting the Spotify session after refused or unavailable audio");
                     self.backend.send(Command::Reconnect);
                     self.toast(gettext(
                         self.locale,
@@ -4065,13 +4066,19 @@ impl App {
         }
         let time = ctx.input(|input| input.time);
         let colours = self.swirl_colours();
-        let pair = crate::ui::player_bar::lights_pair(self, time);
+        let _ = time;
+        // Exactly what the bars are drawn between: the picked colour, the
+        // gradient switch and the look all count.
+        let dark = self.palette.dark;
+        let (low, high) = crate::ui::player_bar::vis_gradient_ctx(
+            self,
+            ctx,
+            dark,
+            crate::settings::PlayerBarVis::Spectrum,
+        );
+        let (low, high) = (Some(low), Some(high));
         let gradient = !self.settings.vis_no_gradient;
         let now = self.now_playing();
-        let (low, high) = match pair {
-            Some((low, high)) => (Some(low), Some(if gradient { high } else { low })),
-            None => (None, None),
-        };
         let hex = |c: Option<egui::Color32>| c.map(crate::lights::hex);
         let body = serde_json::json!({
             "title": now.as_ref().map(|n| n.title.clone()).unwrap_or_default(),
@@ -11874,7 +11881,11 @@ impl App {
                 self.mark_settings_dirty();
             }
             Action::SetVisDepth(depth) => {
-                self.settings.vis_depth = depth.min(2);
+                let depth = depth.min(crate::settings::VIS_LOOKS.len() as u8 - 1);
+                self.settings.vis_depth = depth;
+                if let Some(solid) = crate::settings::VIS_LOOKS[depth as usize].solid {
+                    self.settings.vis_no_gradient = solid;
+                }
                 self.mark_settings_dirty();
             }
             Action::SetVisSway(index) => {

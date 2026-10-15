@@ -376,20 +376,46 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                 let title_h = title.size().y;
                 let title_w = title.size().x;
                 let first_row = title_h / title.rows.len().max(1) as f32;
-                let words = Rect::from_min_size(egui::pos2(text_left, y), egui::vec2(text_w, block));
-                let cut = title.rows.len() > 1 || title_w >= text_w - 2.0 || artist.size().x >= text_w - 2.0;
-                let mut words_click = ui
-                    .interact(words, Id::new("pop-out-card-words"), egui::Sense::click())
+                let artist_size = artist.size();
+                let cut = title.rows.len() > 1 || title_w >= text_w - 2.0 || artist_size.x >= text_w - 2.0;
+                // The name and the artist each take their own click: the
+                // name jumps to the song's place in the list it is playing
+                // from (or opens its album), the artist opens the artist.
+                let title_area = Rect::from_min_size(egui::pos2(text_left, y), egui::vec2(title_w.min(text_w).max(24.0), title_h));
+                let artist_area = Rect::from_min_size(
+                    egui::pos2(text_left, y + title_h + 4.0),
+                    egui::vec2(artist_size.x.min(text_w).max(24.0), artist_size.y),
+                );
+                let mut title_click = ui
+                    .interact(title_area, Id::new("pop-out-card-title"), egui::Sense::click())
                     .on_hover_cursor(egui::CursorIcon::PointingHand);
                 if cut {
                     // Too long to show whole: the full name is on hover.
-                    words_click = words_click.on_hover_text(format!("{}\n{}", now.title, now.subtitle));
+                    title_click = title_click.on_hover_text(format!("{}\n{}", now.title, now.subtitle));
                 }
-                if words_click.clicked() {
-                    open_song(app);
+                if title_click.clicked() {
+                    let from_list = app
+                        .playing_context_uri()
+                        .and_then(|context| crate::model::Page::from_uri(&context))
+                        .is_some_and(|page| matches!(page, crate::model::Page::Playlist(_) | crate::model::Page::Album(_)));
+                    if from_list && !now.uri.is_empty() {
+                        app.actions.push(Action::RevealSong { uri: now.uri.clone() });
+                    } else {
+                        open_song(app);
+                    }
                 }
                 if let Some(song) = &song {
-                    words_click.context_menu(|ui| super::widgets::item_menu(ui, app, song, None, None));
+                    title_click.context_menu(|ui| super::widgets::item_menu(ui, app, song, None, None));
+                }
+                let artist_click = ui
+                    .interact(artist_area, Id::new("pop-out-card-artist"), egui::Sense::click())
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                if artist_click.clicked() {
+                    if let Some(id) = now.artists.first().and_then(|artist| artist.id.clone()) {
+                        app.actions.push(Action::Open(crate::model::Page::Artist(id)));
+                    } else if let Some(id) = &now.show_id {
+                        app.actions.push(Action::Open(crate::model::Page::Show(id.clone())));
+                    }
                 }
                 ui.painter().galley(egui::pos2(text_left, y), title, palette.text);
                 // The like heart, right after the song's name.
