@@ -1404,10 +1404,20 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
         _ => screen.right() - (screen.width() * 0.5).min(560.0) - 14.0,
     };
     // One page: as wide as its three columns.
-    let natural_w = 3.0 * vis_col_w(0.0) + 36.0 + 28.0;
+    // Measured from what was really drawn last frame, so a column that
+    // came out wider than planned widens the window instead of being cut.
+    let content_w = ctx
+        .data(|data| data.get_temp::<f32>(egui::Id::new(("vis-panel-content-w", app.mini_active))))
+        .unwrap_or(0.0);
+    let natural_w = (3.0 * vis_col_w(0.0) + 36.0).max(content_w.min(1400.0)) + 28.0;
+    let outer_id = egui::Id::new(("vis-panel-outer-w", app.mini_active));
+    let outer_w = ctx
+        .data(|data| data.get_temp::<f32>(outer_id))
+        .unwrap_or(natural_w + 24.0)
+        .clamp(natural_w, natural_w + 80.0);
     let height_id = egui::Id::new(("vis-panel-natural-h", app.mini_active));
     let natural_h = ctx.data(|data| data.get_temp::<f32>(height_id)).unwrap_or(440.0).max(120.0);
-    let room = ((screen.width() - 16.0) / natural_w).min((screen.height() - 16.0) / natural_h);
+    let room = ((screen.width() - 16.0) / outer_w).min((screen.height() - 16.0) / natural_h);
     // The reader's own size for the panel (the grip in its corner), never
     // bigger than the window has room for.
     let user = if app.settings.vis_panel_w > 0.0 { app.settings.vis_panel_w.clamp(0.4, 1.4) } else { 1.0 };
@@ -1417,13 +1427,13 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
     // until then, the old place.
     let pos_id = egui::Id::new(("vis-panel-pos", win_id));
     let default_pos = egui::pos2(
-        default_x.clamp(screen.left() + 8.0, (screen.right() - natural_w * fit - 8.0).max(screen.left() + 8.0)),
+        default_x.clamp(screen.left() + 8.0, (screen.right() - outer_w * fit - 8.0).max(screen.left() + 8.0)),
         (screen_h - above - natural_h * fit)
             .clamp(screen.top() + 8.0, (screen.bottom() - 8.0 - natural_h * fit).max(screen.top() + 8.0)),
     );
     let stored: Option<egui::Pos2> = ctx.data(|data| data.get_temp(pos_id));
     // Never off the window: the whole panel stays inside, whatever its size.
-    let max_x = (screen.right() - natural_w * fit - 2.0).max(screen.left());
+    let max_x = (screen.right() - outer_w * fit - 2.0).max(screen.left());
     let max_y = (screen.bottom() - natural_h * fit - 2.0).max(screen.top());
     let keep_inside = |at: egui::Pos2| egui::pos2(at.x.clamp(screen.left(), max_x), at.y.clamp(screen.top(), max_y));
     let fixed_pos = keep_inside(stored.unwrap_or(default_pos));
@@ -1434,6 +1444,7 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
         .resizable(false)
         .min_width(natural_w)
         .max_width(natural_w)
+        .min_height(150.0)
         .movable(false)
         .constrain(false)
         .fixed_pos(fixed_pos);
@@ -1446,12 +1457,12 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
     let window = panel.show(ctx, |ui| vis_menu_body(app, ui, true));
     let window = window.map(|window| {
         let local = window.response.rect;
-        // A panel squeezed to a sliver can never recover by itself (its own
-        // remembered size holds it there), so the windows start fresh.
-        if local.height() < 90.0 {
-            ctx.memory_mut(|memory| memory.reset_areas());
-        }
-        ctx.data_mut(|data| data.insert_temp(height_id, local.height()));
+        // (Never reset every window's state here: that hid the control bar
+        // and the window buttons along with the panel.)
+        ctx.data_mut(|data| {
+            data.insert_temp(height_id, local.height().max(150.0));
+            data.insert_temp(outer_id, local.width());
+        });
         // Where it really is on the screen.
         let shown = if scaled {
             egui::Rect::from_min_size(local.min, local.size() * fit)
@@ -1714,6 +1725,7 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui, in_panel: bool) {
         return;
     }
     let palette = app.palette;
+    let mini_flag = app.mini_active;
     theme::subtle(ui, &palette, &gettext(app.locale, "VISUALIZER SETTINGS"));
     let fit = ui
         .ctx()
@@ -1728,7 +1740,13 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui, in_panel: bool) {
         .id_salt("vis-panel-scroll")
         .max_height(max_h)
         .auto_shrink([false, true])
-        .show(ui, |ui| vis_menu_inner(app, ui));
+        .show(ui, |ui| {
+            let id = egui::Id::new(("vis-panel-content-w", mini_flag));
+            let start = ui.min_rect().left();
+            vis_menu_inner(app, ui);
+            let wide = ui.min_rect().right() - start;
+            ui.ctx().data_mut(|data| data.insert_temp(id, wide));
+        });
 }
 
 fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
@@ -1963,49 +1981,6 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                 crate::crash::stage("menu: swirl column");
                 super::widgets::menu_separator(ui, &palette);
                 let art_scroll = app.settings.swirl_art_scroll;
-                // Pictures, no words: what the swirl is made of, then what it moves with.
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    if glyph_button(ui, &palette, Glyph::Scroll, "Scrolling album art instead of waves", art_scroll).clicked() {
-                        app.actions.push(Action::ToggleSwirlArtScroll);
-                    }
-                    if art_scroll
-                        && glyph_button(
-                            ui,
-                            &palette,
-                            Glyph::Mirror,
-                            "Mirrored covers (off: one cover, not mirrored)",
-                            !app.settings.swirl_art_single,
-                        )
-                        .clicked()
-                    {
-                        app.actions.push(Action::ToggleSwirlArtSingle);
-                    }
-                });
-                if art_scroll {
-                    slider_row(
-                        ui,
-                        &palette,
-                        &gettext(app.locale, "Soft edges between covers"),
-                        0.0..=100.0,
-                        app.settings.swirl_art_edge_value(),
-                        |value| app.actions.push(Action::SetSwirlArtEdge(value)),
-                    );
-                }
-                theme::subtle(ui, &palette, &gettext(app.locale, "MOVES WITH"));
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    for (value, glyph, tip) in [
-                        (0u8, Glyph::Icon(Icon::Volume2), "Loudness"),
-                        (1, Glyph::Icon(Icon::Speaker), "Bass"),
-                        (2, Glyph::Icon(Icon::Zap), "Beat"),
-                        (3, Glyph::Nothing, "Nothing"),
-                    ] {
-                        if glyph_button(ui, &palette, glyph, tip, app.settings.swirl_react_mode.min(3) == value).clicked() {
-                            app.actions.push(Action::SetSwirlReact(value));
-                        }
-                    }
-                });
                 for (index, (label, low, high, _)) in
                     crate::settings::Settings::SWIRL_TUNE.iter().enumerate()
                 {
@@ -2033,6 +2008,49 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                     (9.0 / app.settings.swirl_drift_secs()) as f32,
                     |value| app.actions.push(Action::SetSwirlDrift(value)),
                 );
+                if art_scroll {
+                    slider_row(
+                        ui,
+                        &palette,
+                        &gettext(app.locale, "Soft edges between covers"),
+                        0.0..=100.0,
+                        app.settings.swirl_art_edge_value(),
+                        |value| app.actions.push(Action::SetSwirlArtEdge(value)),
+                    );
+                }
+                // Pictures, no words: what the swirl is made of, then what it moves with.
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    if glyph_button(ui, &palette, Glyph::Scroll, "Scrolling album art instead of waves", art_scroll).clicked() {
+                        app.actions.push(Action::ToggleSwirlArtScroll);
+                    }
+                    if art_scroll
+                        && glyph_button(
+                            ui,
+                            &palette,
+                            Glyph::Mirror,
+                            "Mirrored covers (off: one cover, not mirrored)",
+                            !app.settings.swirl_art_single,
+                        )
+                        .clicked()
+                    {
+                        app.actions.push(Action::ToggleSwirlArtSingle);
+                    }
+                });
+                theme::subtle(ui, &palette, &gettext(app.locale, "MOVES WITH"));
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    for (value, glyph, tip) in [
+                        (0u8, Glyph::Icon(Icon::Volume2), "Loudness"),
+                        (1, Glyph::Icon(Icon::Speaker), "Bass"),
+                        (2, Glyph::Icon(Icon::Zap), "Beat"),
+                        (3, Glyph::Nothing, "Nothing"),
+                    ] {
+                        if glyph_button(ui, &palette, glyph, tip, app.settings.swirl_react_mode.min(3) == value).clicked() {
+                            app.actions.push(Action::SetSwirlReact(value));
+                        }
+                    }
+                });
                 // The swirl's own direction; the bars and the flow keep theirs.
                 if chip(
                     ui,
@@ -2063,9 +2081,6 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                     ) {
                         app.actions.push(Action::SetSwirlPreset(index));
                     }
-                }
-                if super::widgets::menu_item(ui, &palette, None, &gettext(app.locale, "Reset swirl")) {
-                    app.actions.push(Action::ResetSwirlTune);
                 }
             }
             });
