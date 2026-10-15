@@ -116,6 +116,11 @@ pub fn show(app: &mut App, ctx: &Context) {
                 }
             }
         }
+        // The keybinds list (T) floats over this window too, and can be
+        // used from here: rebinding reads this window's keys.
+        if matches!(app.dialog, Some(crate::model::Dialog::Shortcuts)) {
+            super::dialogs::show(app, &ctx);
+        }
         // How much of the right side the queue takes, so the lyrics move over.
         let queue_width = if app.extra_queue_open {
             (ctx.content_rect().width() - 24.0).clamp(220.0, 360.0) + 24.0
