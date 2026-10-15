@@ -8,4 +8,7 @@
 .cfy-hide-play .chartlist-play-button,.cfy-hide-play .chartlist-play-image{display:none!important}
 .cfy-toast{position:fixed;left:50%;bottom:28px;transform:translate(-50%,20px);opacity:0;z-index:2147483647;background:#17131f;color:#fff;border:1px solid #3b2a66;border-radius:999px;padding:10px 18px;font:500 14px/1 system-ui,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.45);transition:opacity .2s ease,transform .2s ease;pointer-events:none}
 .cfy-toast.cfy-on{opacity:1;transform:translate(-50%,0)}
-.cfy-yt{margin:0 8px;height:36px;border-radius:18px;white-space:nowrap}
+.cfy-yt,.cfy-ytweb{margin:0 8px;height:36px;border-radius:18px;white-space:nowrap}
+.cfy-web{margin-left:0;background:linear-gradient(135deg,#475569,#334155);box-shadow:0 2px 8px rgba(51,65,85,.45)}
+.cfy-web svg{margin-left:0}
+.cfy-web:hover{box-shadow:0 4px 14px rgba(51,65,85,.65)}

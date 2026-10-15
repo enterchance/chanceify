@@ -48,6 +48,13 @@ export default {
     if (url.pathname === "/version") {
       return new Response(JSON.stringify({ worker: VERSION }), { headers: { "content-type": "application/json", "access-control-allow-origin": "*", "cache-control": "no-store" } });
     }
+    // /find?a=<artist>&t=<song>: a page made from names alone, for the browser
+    // extension, which knows a song's name but not its Spotify id.
+    if (url.pathname === "/find") {
+      const a = (url.searchParams.get("a") || "").slice(0, 150);
+      const t = (url.searchParams.get("t") || "").slice(0, 150);
+      if (a || t) return new Response(page({ title: t || a, artist: t ? a : "", id: null, find: t ? "play" : "artist" }), html());
+    }
     const match = url.pathname.match(/^\/([tapu])\/([A-Za-z0-9._-]{2,40})\/?$/);
     if (!match) {
       return new Response(page({ title: "chanceify™", artist: "A Spotify player by chance", id: null }), html());
@@ -87,7 +94,21 @@ function lastfmLink(kind, artist, title) {
   return "https://www.last.fm/search?q=" + part(title);
 }
 
-function page({ title, artist, id, image, kind = "t" }) {
+// The buttons of a names-only page: open it in chanceify, or look it up.
+function findButtons(mode, artist, title) {
+  const part = (text) => encodeURIComponent(text);
+  const query = mode === "artist" ? title : (artist ? artist + " " : "") + title;
+  const open = mode === "artist"
+    ? `chanceify://artist?artist=${part(title)}`
+    : `chanceify://play?artist=${part(artist)}&track=${part(title)}`;
+  return `<div class="row stack"><a class="btn" href="${esc(open)}">Open in chanceify</a>
+<a class="btn sp" href="https://open.spotify.com/search/${part(query)}" target="_blank" rel="noopener">Search on Spotify</a>
+<a class="btn lf" href="${esc(lastfmLink(mode === "artist" ? "a" : "t", artist, title))}" target="_blank" rel="noopener">Open on Last.fm</a>
+<a class="btn yt" href="https://www.youtube.com/results?search_query=${part(query)}" target="_blank" rel="noopener">Search on YouTube</a>
+<a class="btn sc" href="https://soundcloud.com/search?q=${part(query)}" target="_blank" rel="noopener">Search on SoundCloud</a></div>`;
+}
+
+function page({ title, artist, id, image, kind = "t", find = "" }) {
   const spotify = id ? `https://open.spotify.com/${KIND[kind]}/${id}` : "https://github.com/madlygeeked/chanceify";
   const line = artist ? `${artist}` : "Listening on chanceify™";
   const desc = artist ? `${artist}. Listening on chanceify™` : "Listening on chanceify™";
@@ -136,6 +157,7 @@ p{margin:0;color:#c4b5fd;font-size:16px}
 <div class="cover"${image ? ` style="background-image:url('${esc(image)}')"` : ""}></div>
 <h1>${esc(title)}</h1>
 <p>${esc(line)}</p>
+${find ? findButtons(find, artist, title) : ""}
 ${id ? `<div class="row stack">${kind !== "u" ? `<a class="btn" href="chanceify://${KIND[kind]}/${esc(id)}">Open in chanceify</a>` : ""}
 ${kind === "t" || kind === "a" ? `<a class="btn yt" href="https://www.youtube.com/results?search_query=${encodeURIComponent((artist ? artist + " " : "") + title)}" target="_blank" rel="noopener">Search on YouTube</a>
 <a class="btn sc" href="https://soundcloud.com/search?q=${encodeURIComponent((artist ? artist + " " : "") + title)}" target="_blank" rel="noopener">Search on SoundCloud</a>` : ""}

@@ -6,6 +6,10 @@
 
   const ICON_PLAY = '<svg viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z"/></svg>';
   const ICON_QUEUE = '<svg viewBox="0 0 24 24"><path d="M3 6h13v2H3zm0 5h13v2H3zm0 5h8v2H3zm14-1v-3h2v3h3v2h-3v3h-2v-3h-3v-2z"/></svg>';
+  const ICON_WEB = '<svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm6.9 9h-3.1a15.7 15.7 0 0 0-1.3-6A8 8 0 0 1 18.9 11zM12 4c.8 1 1.7 3 1.8 7h-3.6c.1-4 1-6 1.8-7zM9.5 5a15.7 15.7 0 0 0-1.3 6H5.1A8 8 0 0 1 9.5 5zM5.1 13h3.1c.1 2.3.6 4.4 1.3 6A8 8 0 0 1 5.1 13zm5.1 0h3.6c-.1 4-1 6-1.8 7-.8-1-1.7-3-1.8-7zm4.3 6c.7-1.6 1.2-3.7 1.3-6h3.1a8 8 0 0 1-4.4 6z"/></svg>';
+  // chanceify's web page for a song or artist: it opens the song in chanceify
+  // or looks it up on Spotify, Last.fm, YouTube and SoundCloud.
+  const WORKER = 'https://chanceify-embed.chance-a10.workers.dev';
   const defaults = { replace: true, toast: true };
   let opts = { ...defaults };
   const api = typeof browser !== 'undefined' ? browser : typeof chrome !== 'undefined' ? chrome : null;
@@ -38,6 +42,19 @@
     a.click();
     a.remove();
     toast(mode === 'queue' ? `added to queue: ${track}` : `playing in chanceify: ${mode === 'artist' ? artist : track}`);
+  }
+
+  function makeWebButton(artist, track, hero) {
+    const b = document.createElement('a');
+    b.className = 'cfy-btn cfy-web' + (hero ? ' cfy-hero' : '');
+    b.href = `${WORKER}/find?a=${encodeURIComponent(artist)}` + (track ? `&t=${encodeURIComponent(track)}` : '');
+    b.target = '_blank';
+    b.rel = 'noopener';
+    b.title = 'open chanceify\u2019s web page for this';
+    b.setAttribute('aria-label', b.title);
+    b.innerHTML = ICON_WEB + (hero ? '<span>web page</span>' : '');
+    b.addEventListener('click', (e) => e.stopPropagation());
+    return b;
   }
 
   function makeButton(mode, artist, track, hero) {
@@ -77,6 +94,9 @@
         b.setAttribute('aria-label', b.title);
         b.style.marginLeft = '10px';
         nameLink.parentNode.insertBefore(b, nameLink.nextSibling);
+        const web = makeWebButton(artistName, '', false);
+        web.style.marginLeft = '0';
+        b.after(web);
         return;
       }
       const title = text(row.querySelector('.chartlist-name a, .chartlist-name'));
@@ -94,6 +114,7 @@
       const old = slot.querySelector('.chartlist-play-button, .chartlist-play-image');
       if (old && opts.replace) slot.insertBefore(b, old);
       else slot.appendChild(b);
+      b.after(makeWebButton(artist, title, false));
     });
   }
 
@@ -107,6 +128,7 @@
     if (!host) return;
     const b = makeButton('play', artist, track, true);
     host.parentNode.insertBefore(b, host.nextSibling);
+    b.after(makeWebButton(artist, track, true));
   }
 
   // YouTube: an "open in chanceify" button under the video. The title is
@@ -138,12 +160,13 @@
     if (!/(^|\.)youtube\.com$/.test(location.hostname)) return;
     const onWatch = location.pathname === '/watch' || location.hostname === 'music.youtube.com';
     const old = document.querySelector('.cfy-yt');
-    if (!onWatch) { if (old) old.remove(); return; }
+    if (!onWatch) { if (old) old.remove(); document.querySelectorAll('.cfy-ytweb').forEach((e) => e.remove()); return; }
     const song = youtubeSong();
     if (!song) return;
     const key = song.artist + '|' + song.title;
     if (old && old.dataset.cfy === key) return;
     if (old) old.remove();
+    document.querySelectorAll('.cfy-ytweb').forEach((e) => e.remove());
     const host = document.querySelector('ytd-watch-metadata #top-level-buttons-computed, ytd-watch-metadata #actions-inner, #above-the-fold #title');
     if (!host) return;
     const b = makeButton('play', song.artist, song.title, true);
@@ -151,6 +174,9 @@
     b.dataset.cfy = key;
     b.querySelector('span').textContent = 'open in chanceify';
     host.appendChild(b);
+    const web = makeWebButton(song.artist, song.title, true);
+    web.classList.add('cfy-ytweb');
+    b.after(web);
   }
 
   function apply() {
