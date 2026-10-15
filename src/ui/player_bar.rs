@@ -1455,7 +1455,7 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
     let height_id = egui::Id::new(("vis-panel-natural-h", app.mini_active));
     let natural_h = ctx
         .data(|data| data.get_temp::<f32>(height_id))
-        .filter(|h| *h >= 150.0)
+        .map(|h| h.max(VIS_PANEL_MIN_H + 40.0))
         .unwrap_or(440.0);
     // Only the width decides the scale; the page scrolls if it is too tall.
     let room = (screen.width() - 16.0) / outer_w;
@@ -1500,7 +1500,7 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
         // (Never reset every window's state here: that hid the control bar
         // and the window buttons along with the panel.)
         ctx.data_mut(|data| {
-            data.insert_temp(height_id, local.height());
+            data.insert_temp(height_id, local.height().max(VIS_PANEL_MIN_H + 40.0));
             data.insert_temp(outer_id, local.width());
         });
         // One line a second in the trail, so a bad panel can be read from it.
@@ -1754,6 +1754,10 @@ fn vis_col_w(_screen_w: f32) -> f32 {
     220.0
 }
 
+/// The least height the visualizer settings are ever shown at, so they can
+/// never be reduced to a few pixels.
+const VIS_PANEL_MIN_H: f32 = 340.0;
+
 /// Width of the one column on the tabs that have only one.
 const VIS_SINGLE_W: f32 = 272.0;
 
@@ -1777,6 +1781,9 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui, in_panel: bool) {
     egui::ScrollArea::vertical()
         .id_salt("vis-panel-scroll")
         .max_height(max_h)
+        // Never squeezed to a sliver, whatever room the place it opened at
+        // leaves: it keeps a usable height and the window is moved up to fit.
+        .min_scrolled_height(VIS_PANEL_MIN_H.min(max_h))
         .auto_shrink([false, true])
         .show(ui, |ui| vis_menu_inner(app, ui));
 }

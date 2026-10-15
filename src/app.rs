@@ -4064,9 +4064,19 @@ impl App {
             self.lights.stop();
             return;
         }
+        // Ten times a second is plenty for a light: between ticks this costs
+        // nothing, and the frame is not asked to run any more often than that.
         let time = ctx.input(|input| input.time);
+        let last_id = egui::Id::new("lights-last-tick");
+        if let Some(last) = ctx.data(|data| data.get_temp::<f64>(last_id))
+            && time - last < 0.1
+            && time >= last
+        {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            return;
+        }
+        ctx.data_mut(|data| data.insert_temp(last_id, time));
         let colours = self.swirl_colours();
-        let _ = time;
         // Exactly what the bars are drawn between: the picked colour, the
         // gradient switch and the look all count.
         let dark = self.palette.dark;
