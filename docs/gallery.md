@@ -12,20 +12,24 @@ permalink: /gallery/
 .grid figcaption{font-size:.82rem;opacity:.7;margin-top:5px}
 .soon{aspect-ratio:16/9;border:2px dashed rgba(255,255,255,.2);border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;opacity:.6;padding:8px;font-size:.9rem}
 .soon span{font-size:.72rem;opacity:.8}
-.feature{margin-top:40px;padding:18px 20px;border-radius:12px;background:rgba(10,9,20,.6);border:1px solid rgba(255,255,255,.12)}
+.feature{margin:14px 0 8px;padding:18px 20px;border-radius:12px;background:rgba(10,9,20,.6);border:1px solid rgba(255,255,255,.12)}
 dialog.lb{border:0;background:transparent;padding:0;max-width:96vw;max-height:96vh}
 dialog.lb::backdrop{background:rgba(0,0,0,.88)}
 dialog.lb img{display:block;max-width:96vw;max-height:94vh;width:auto;height:auto;border-radius:8px;cursor:zoom-out}
 </style>
 
-<p class="gal-sub"><a href="{{ '/' | relative_url }}">back to chanceify</a>. tap a picture to make it bigger, tap again to close.</p>
+<p class="gal-sub"><a href="{{ '/' | relative_url }}">back to chanceify</a></p>
+
+
 
 # gallery
+
+<div class="feature"><b>want to be featured?</b> show off how yours looks. <a href="https://github.com/madlygeeked/chanceify/issues/new?template=get-featured.yml">submit your screenshot</a> (a free github account is needed). good ones go up here.</div>
 
 <h2>normal view</h2>
 <div class="grid"><figure><a href="{{ '/gallery-images/normal-blue-lyrics.jpg' | relative_url }}" data-full><img src="{{ '/gallery-images/normal-blue-lyrics.jpg' | relative_url }}" alt="lyrics and queue beside the list" loading="lazy"></a><figcaption>lyrics and queue beside the list</figcaption></figure><figure><a href="{{ '/gallery-images/normal-green.jpg' | relative_url }}" data-full><img src="{{ '/gallery-images/normal-green.jpg' | relative_url }}" alt="green theme, swirl behind" loading="lazy"></a><figcaption>green theme, swirl behind</figcaption></figure><figure><a href="{{ '/gallery-images/popout-controls.jpg' | relative_url }}" data-full><img src="{{ '/gallery-images/popout-controls.jpg' | relative_url }}" alt="pop-out controls over the list" loading="lazy"></a><figcaption>pop-out controls over the list</figcaption></figure><figure><a href="{{ '/gallery-images/normal-red-lyrics.jpg' | relative_url }}" data-full><img src="{{ '/gallery-images/normal-red-lyrics.jpg' | relative_url }}" alt="red theme with lyrics" loading="lazy"></a><figcaption>red theme with lyrics</figcaption></figure><figure><a href="{{ '/gallery-images/normal-pink.jpg' | relative_url }}" data-full><img src="{{ '/gallery-images/normal-pink.jpg' | relative_url }}" alt="dark theme, pink cover" loading="lazy"></a><figcaption>dark theme, pink cover</figcaption></figure><figure><a href="{{ '/gallery-images/normal-tigerlily.jpg' | relative_url }}" data-full><img src="{{ '/gallery-images/normal-tigerlily.jpg' | relative_url }}" alt="playlist page" loading="lazy"></a><figcaption>playlist page</figcaption></figure><figure><a href="{{ '/gallery-images/normal-yump.jpg' | relative_url }}" data-full><img src="{{ '/gallery-images/normal-yump.jpg' | relative_url }}" alt="green theme, bars" loading="lazy"></a><figcaption>green theme, bars</figcaption></figure></div>
 <h2>full screen visualizer</h2>
-<div class="grid"><figure><a href="{{ '/gallery-images/full-vis-gray.jpg' | relative_url }}" data-full><img src="{{ '/gallery-images/full-vis-gray.jpg' | relative_url }}" alt="gray swirl, song card and controls" loading="lazy"></a><figcaption>gray swirl, song card and controls</figcaption></figure><figure><a href="{{ '/gallery-images/full-vis-orange.jpg' | relative_url }}" data-full><img src="{{ '/gallery-images/full-vis-orange.jpg' | relative_url }}" alt="orange swirl, song card and controls" loading="lazy"></a><figcaption>orange swirl, song card and controls</figcaption></figure><figure><a href="{{ '/gallery-images/full-vis-swans.jpg' | relative_url }}" data-full><img src="{{ '/gallery-images/full-vis-swans.jpg' | relative_url }}" alt="swirl with a quiet bar" loading="lazy"></a><figcaption>swirl with a quiet bar</figcaption></figure><figure><a href="{{ '/gallery-images/full-vis-dieyoung.jpg' | relative_url }}" data-full><img src="{{ '/gallery-images/full-vis-dieyoung.jpg' | relative_url }}" alt="scrolling cover art" loading="lazy"></a><figcaption>scrolling cover art</figcaption></figure><div class="soon"><span>coming soon</span>full screen lyrics</div><div class="soon"><span>coming soon</span>full screen lyrics with a visualizer behind</div></div>
+<div class="grid"><figure><a href="{{ '/gallery-images/full-vis-psychedelic.jpg' | relative_url }}" data-full><img src="{{ '/gallery-images/full-vis-psychedelic.jpg' | relative_url }}" alt="psychedelic swirl" loading="lazy"></a><figcaption>psychedelic swirl</figcaption></figure><figure><a href="{{ '/gallery-images/full-vis-orange.jpg' | relative_url }}" data-full><img src="{{ '/gallery-images/full-vis-orange.jpg' | relative_url }}" alt="orange swirl, song card and controls" loading="lazy"></a><figcaption>orange swirl, song card and controls</figcaption></figure><figure><a href="{{ '/gallery-images/full-vis-swans.jpg' | relative_url }}" data-full><img src="{{ '/gallery-images/full-vis-swans.jpg' | relative_url }}" alt="swirl with a quiet bar" loading="lazy"></a><figcaption>swirl with a quiet bar</figcaption></figure><figure><a href="{{ '/gallery-images/full-vis-dieyoung.jpg' | relative_url }}" data-full><img src="{{ '/gallery-images/full-vis-dieyoung.jpg' | relative_url }}" alt="scrolling cover art" loading="lazy"></a><figcaption>scrolling cover art</figcaption></figure><div class="soon"><span>coming soon</span>full screen lyrics</div><div class="soon"><span>coming soon</span>full screen lyrics with a visualizer behind</div></div>
 <h2>calm mode</h2>
 <div class="grid"><div class="soon"><span>coming soon</span>calm mode</div></div>
 <h2>mini player</h2>
@@ -42,10 +46,12 @@ dialog.lb img{display:block;max-width:96vw;max-height:94vh;width:auto;height:aut
 <div class="grid"><figure><a href="{{ '/gallery-images/settings-playback.jpg' | relative_url }}" data-full><img src="{{ '/gallery-images/settings-playback.jpg' | relative_url }}" alt="playback settings" loading="lazy"></a><figcaption>playback settings</figcaption></figure><div class="soon"><span>coming soon</span>look and themes</div><div class="soon"><span>coming soon</span>accounts</div><div class="soon"><span>coming soon</span>library</div><div class="soon"><span>coming soon</span>network</div><div class="soon"><span>coming soon</span>about</div><div class="soon"><span>coming soon</span>last.fm</div><div class="soon"><span>coming soon</span>keybinds</div><div class="soon"><span>coming soon</span>first-run tour</div></div>
 <h2>discord</h2>
 <div class="grid"><div class="soon"><span>coming soon</span>discord presence</div></div>
+<h2>web worker pages</h2>
+<div class="grid"><div class="soon"><span>coming soon</span>web worker page</div></div>
 <h2>wallpaper engine</h2>
-<div class="grid"><figure><a href="{{ '/gallery-images/wallpaper-engine.jpg' | relative_url }}" data-full><img src="{{ '/gallery-images/wallpaper-engine.jpg' | relative_url }}" alt="chanceify at 1080p on an ultrawide wallpaper" loading="lazy"></a><figcaption>chanceify at 1080p on an ultrawide wallpaper</figcaption></figure></div><p class="plug">chanceify as a live wallpaper. link coming soon.</p>
+<div class="grid"><figure><a href="{{ '/gallery-images/wallpaper-engine.jpg' | relative_url }}" data-full><img src="{{ '/gallery-images/wallpaper-engine.jpg' | relative_url }}" alt="chanceify at 1080p on an ultrawide wallpaper" loading="lazy"></a><figcaption>chanceify at 1080p on an ultrawide wallpaper</figcaption></figure></div><p class="plug">chanceify as a live wallpaper: <a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3791429763">madgeeked mediaviz 1080p</a> and <a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3791421783">madgeeked mediaviz ultra wide</a>.</p>
 
-<div class="feature"><b>want to be featured?</b> show off how yours looks. <a href="https://github.com/madlygeeked/chanceify/issues/new?template=get-featured.yml">submit your screenshot</a> (a free github account is needed). good ones go up here.</div>
+
 
 <dialog class="lb" id="lb"><img id="lbimg" alt=""></dialog>
 <script>

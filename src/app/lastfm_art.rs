@@ -27,7 +27,33 @@ impl App {
         self.dirs.index_dir().join("lastfm-art")
     }
 
-    fn art_key(&self) -> String {
+    /// The whole Last.fm pictures folder, in bytes (measured at most every
+    /// twenty seconds, so drawing the settings page stays cheap).
+    pub(crate) fn art_folder_size(&mut self) -> u64 {
+        if let Some((at, size)) = self.art_size_cache
+            && at.elapsed() < Duration::from_secs(20)
+        {
+            return size;
+        }
+        fn walk(path: &std::path::Path) -> u64 {
+            let Ok(entries) = std::fs::read_dir(path) else {
+                return 0;
+            };
+            entries
+                .flatten()
+                .map(|entry| match entry.file_type() {
+                    Ok(kind) if kind.is_dir() => walk(&entry.path()),
+                    Ok(kind) if kind.is_file() => entry.metadata().map_or(0, |meta| meta.len()),
+                    _ => 0,
+                })
+                .sum()
+        }
+        let size = walk(&self.art_root());
+        self.art_size_cache = Some((Instant::now(), size));
+        size
+    }
+
+    pub(super) fn art_key(&self) -> String {
         let own = self.settings.lastfm_api_key.trim();
         if own.is_empty() || self.settings.lastfm_secret.trim().is_empty() {
             crate::lastfm::DEFAULT_API_KEY.to_string()
@@ -59,6 +85,7 @@ impl App {
             .now_playing()
             .filter(|now| now.uri.starts_with("spotify:track:") && !now.title.is_empty());
         if let Some(now) = &playing
+            && self.settings.lastfm_art_auto
             && self.art_seen_for.as_deref() != Some(now.uri.as_str())
         {
             self.art_seen_for = Some(now.uri.clone());

@@ -538,7 +538,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 }
                 // A small red dot when songs in your playlists can no longer
                 // be played; Settings lists them.
-                let missing = {
+                let missing = if !app.settings.unavailable_dot {
+                    0
+                } else {
                     let user = app.user.as_ref().map(|u| u.id.clone()).unwrap_or_default();
                     app.unavailable.entries_for(&user).len()
                 };
@@ -557,40 +559,50 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     .frame(super::widgets::menu_frame(&palette))
                     .align(egui::RectAlign::BOTTOM_END)
                     .show(|ui| {
-                        ui.set_width(200.0);
+                        // As narrow as the rows under it: the name sits on top
+                        // (smaller if it is long), the plan right under it.
+                        ui.set_width(150.0);
                         ui.add_space(4.0);
                         let product = app.user.as_ref().and_then(|user| user.product.clone());
+                        let wide = ui
+                            .painter()
+                            .layout_no_wrap(name.clone(), theme::semibold(14.0), palette.text)
+                            .size()
+                            .x;
+                        let size = if wide > 130.0 { (14.0 * 130.0 / wide).clamp(10.0, 14.0) } else { 14.0 };
                         ui.horizontal(|ui| {
                             ui.add_space(10.0);
-                            theme::text(ui, &name, theme::semibold(14.0), palette.text);
-                            if let Some(product) = product {
-                                // Plan on the same line, right-anchored, in the
-                                // chanceify purple that melts into the theme accent.
-                                let label = product.to_lowercase();
-                                let font = theme::semibold(12.0);
-                                let from = egui::Color32::from_rgb(150, 90, 255);
-                                let to = palette.accent;
-                                let count = label.chars().count().max(2) - 1;
-                                let mut job = egui::text::LayoutJob::default();
-                                for (index, letter) in label.chars().enumerate() {
-                                    job.append(
-                                        &letter.to_string(),
-                                        0.0,
-                                        egui::text::TextFormat::simple(
-                                            font.clone(),
-                                            from.lerp_to_gamma(to, index as f32 / count as f32),
-                                        ),
-                                    );
-                                }
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        ui.add_space(10.0);
-                                        ui.add(egui::Label::new(job).selectable(false));
-                                    },
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&name).font(theme::semibold(size)).color(palette.text),
+                                )
+                                .truncate()
+                                .selectable(false),
+                            );
+                        });
+                        if let Some(product) = product {
+                            // In the chanceify purple that melts into the theme accent.
+                            let label = product.to_lowercase();
+                            let font = theme::semibold(12.0);
+                            let from = egui::Color32::from_rgb(150, 90, 255);
+                            let to = palette.accent;
+                            let count = label.chars().count().max(2) - 1;
+                            let mut job = egui::text::LayoutJob::default();
+                            for (index, letter) in label.chars().enumerate() {
+                                job.append(
+                                    &letter.to_string(),
+                                    0.0,
+                                    egui::text::TextFormat::simple(
+                                        font.clone(),
+                                        from.lerp_to_gamma(to, index as f32 / count as f32),
+                                    ),
                                 );
                             }
-                        });
+                            ui.horizontal(|ui| {
+                                ui.add_space(10.0);
+                                ui.add(egui::Label::new(job).selectable(false));
+                            });
+                        }
                         super::widgets::menu_separator(ui, &palette);
                         if super::widgets::menu_item(
                             ui,

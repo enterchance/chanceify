@@ -255,6 +255,18 @@ pub fn can_restore(pos: [f32; 2], pixels_per_point: f32) -> bool {
     .contains(anchor)
 }
 
+/// The handle of the window with this exact title, if one is open.
+#[cfg(windows)]
+pub fn find_window(title: &str) -> Option<isize> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW;
+    let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: a null class name and a NUL-ended title; the call only looks
+    // the window up.
+    let hwnd = unsafe { FindWindowW(std::ptr::null(), wide.as_ptr()) };
+    let hwnd = hwnd as isize;
+    (hwnd != 0).then_some(hwnd)
+}
+
 /// Makes a window see-through, `alpha` from 0 (gone) to 255 (solid). Windows
 /// only; the layered-window style is added while it is see-through and taken
 /// off again when it is solid, so the window costs nothing the rest of the

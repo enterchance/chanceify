@@ -25,6 +25,8 @@ pub(super) struct Hero<'a> {
     pub description: Option<String>,
     pub byline: Vec<(String, Option<Page>)>,
     pub round: bool,
+    /// A playlist the user can edit: right-clicking its title offers it.
+    pub edit: Option<Playlist>,
 }
 
 #[derive(Default)]
@@ -66,6 +68,21 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
         .images
         .thumbnail
         .and_then(|uri| app.softened_covers.texture(ui.ctx(), &art, uri));
+    let backdrop_slot = ui.painter().add(egui::Shape::Noop);
+    let sharp = [hero.images.image, hero.images.previous]
+        .into_iter()
+        .flatten()
+        .find_map(|url| widgets::ready_cover_texture(ui, url, app.backend.art()));
+    let source = sharp.or_else(|| {
+        softened
+            .as_ref()
+            .map(egui::load::SizedTexture::from_handle)
+    });
+    let (text_main, text_soft) = if source.is_some() {
+        (egui::Color32::WHITE, egui::Color32::from_white_alpha(200))
+    } else {
+        (palette.text, palette.secondary)
+    };
     ui.add_space(12.0);
     let cover_size = if ui.available_width() > 720.0 {
         212.0
@@ -103,7 +120,7 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
             ui.set_width(width);
             ui.spacing_mut().item_spacing.y = 6.0;
             ui.add_space(cover_size * 0.08);
-            theme::text(ui, hero.kind.as_ref(), theme::medium(12.5), palette.text);
+            theme::text(ui, hero.kind.as_ref(), theme::medium(12.5), text_main);
             let mut size = if cover_size > 200.0 {
                 56.0
             } else if cover_size > 130.0 {
@@ -115,14 +132,41 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
                 let galley = ui.painter().layout_no_wrap(
                     hero.title.to_string(),
                     theme::bold(size),
-                    palette.text,
+                    text_main,
                 );
                 if galley.size().x <= width || size <= 22.0 {
                     break;
                 }
                 size -= 6.0;
             }
-            theme::text(ui, hero.title, theme::bold(size), palette.text);
+            let title_response =
+                theme::text(ui, hero.title, theme::bold(size), text_main);
+            if let Some(playlist) = hero.edit.clone() {
+                let title_response =
+                    ui.interact(title_response.rect, ui.id().with("hero-title-menu"), Sense::click());
+                egui::Popup::context_menu(&title_response).show(|ui| {
+                    ui.set_min_width(180.0);
+                    if widgets::menu_item(
+                        ui,
+                        &palette,
+                        Some(Icon::Pencil),
+                        &gettext(app.locale, "Edit details"),
+                    ) {
+                        app.actions.push(Action::ShowDialog(Dialog::EditPlaylist {
+                            cover: Default::default(),
+                            id: playlist.id.clone(),
+                            name: playlist.name.clone(),
+                            description: playlist
+                                .description
+                                .as_deref()
+                                .map(util::strip_html)
+                                .unwrap_or_default(),
+                            public: playlist.public,
+                        }));
+                        ui.close();
+                    }
+                });
+            }
             if let Some(description) = &hero.description
                 && !description.is_empty()
             {
@@ -130,24 +174,24 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
                     ui,
                     description.as_str(),
                     theme::regular(13.5),
-                    palette.secondary,
+                    text_soft,
                 );
             }
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 for (index, (text, page)) in hero.byline.iter().enumerate() {
                     if index > 0 {
-                        theme::text(ui, "•", theme::regular(13.5), palette.secondary);
+                        theme::text(ui, "•", theme::regular(13.5), text_soft);
                     }
                     match page {
                         Some(page) => {
-                            if theme::link(ui, text, theme::semibold(13.5), palette.text).clicked()
+                            if theme::link(ui, text, theme::semibold(13.5), text_main).clicked()
                             {
                                 app.actions.push(Action::Open(page.clone()));
                             }
                         }
                         None => {
-                            theme::text(ui, text, theme::regular(13.5), palette.secondary);
+                            theme::text(ui, text, theme::regular(13.5), text_soft);
                         }
                     }
                 }
@@ -155,6 +199,69 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
         });
     });
     ui.add_space(20.0);
+    // The cover across the whole visible page, cropped square (so a tall or
+    // wide upload still looks right), darkened so the page's own elements
+    // stay readable, and held still while the list scrolls past.
+    if let Some(texture) = source {
+        let area = ui.clip_rect();
+        if area.width() > 1.0 && area.height() > 1.0 {
+            let side = area.width().max(area.height());
+            let square = Rect::from_min_size(
+                pos2(area.center().x - side / 2.0, area.top()),
+                Vec2::splat(side),
+            );
+            let aspect = texture.size.x / texture.size.y;
+            let uv = if aspect > 1.0 {
+                let inset = (1.0 - 1.0 / aspect) / 2.0;
+                Rect::from_min_max(pos2(inset, 0.0), pos2(1.0 - inset, 1.0))
+            } else {
+                let inset = (1.0 - aspect) / 2.0;
+                Rect::from_min_max(pos2(0.0, inset), pos2(1.0, 1.0 - inset))
+            };
+            let (top, bottom) = if palette.dark {
+                (
+                    egui::Color32::from_gray(105),
+                    egui::Color32::from_gray(48),
+                )
+            } else {
+                (egui::Color32::from_gray(110), palette.panel)
+            };
+            // Light themes fade back to the page colour by mid-window so dark
+            // list text stays readable.
+            let fade_to = if palette.dark { 1.0 } else { 0.55 };
+            let mid = Rect::from_min_max(
+                square.left_top(),
+                pos2(square.right(), area.top() + area.height() * fade_to),
+            );
+            let mut mesh = egui::Mesh::with_texture(texture.id);
+            let v = |pos: egui::Pos2, uv: egui::Pos2, color: egui::Color32| {
+                egui::epaint::Vertex { pos, uv, color }
+            };
+            let uv_at = |y: f32| {
+                let t = ((y - square.top()) / side).clamp(0.0, 1.0);
+                uv.min.y + (uv.max.y - uv.min.y) * t
+            };
+            let mid_y = mid.bottom();
+            let end_y = square.bottom();
+            let mid_uv = uv_at(mid_y);
+            mesh.vertices.push(v(square.left_top(), uv.left_top(), top));
+            mesh.vertices.push(v(square.right_top(), uv.right_top(), top));
+            mesh.vertices
+                .push(v(pos2(square.right(), mid_y), pos2(uv.max.x, mid_uv), bottom));
+            mesh.vertices
+                .push(v(pos2(square.left(), mid_y), pos2(uv.min.x, mid_uv), bottom));
+            mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+            if end_y > mid_y + 0.5 {
+                mesh.vertices
+                    .push(v(pos2(square.right(), end_y), uv.right_bottom(), bottom));
+                mesh.vertices
+                    .push(v(pos2(square.left(), end_y), uv.left_bottom(), bottom));
+                mesh.indices.extend_from_slice(&[3, 2, 4, 3, 4, 5]);
+            }
+            let clipped = ui.painter().with_clip_rect(area);
+            clipped.set(backdrop_slot, egui::Shape::mesh(mesh));
+        }
+    }
 }
 
 pub struct Actions<'a> {
@@ -2097,6 +2204,10 @@ fn playlist_hero<'a>(
             description: playlist.description.as_deref().map(util::strip_html),
             byline,
             round: false,
+            edit: {
+                let user_id = app.user_id().unwrap_or("").to_string();
+                playlist.owned_by(&user_id).then(|| playlist.clone())
+            },
         },
     );
 }
@@ -2222,6 +2333,7 @@ fn album_hero(
             description: None,
             byline,
             round: false,
+            edit: None,
         },
     );
 }
@@ -2273,6 +2385,7 @@ pub fn liked(app: &mut App, ui: &mut egui::Ui) {
             description: None,
             byline: vec![(user, None), (count_text, None)],
             round: false,
+            edit: None,
         },
     );
     let collection_uri = app

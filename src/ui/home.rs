@@ -44,9 +44,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         }
     } else {
         stats_section(app, ui);
-        top_artists(app, ui);
-        top_tracks(app, ui);
-        recently_played(app, ui);
     }
 }
 
@@ -90,6 +87,16 @@ fn new_releases(app: &mut App, ui: &mut egui::Ui) {
         theme::section_title(ui, &palette, &gettext(app.locale, "New from your artists"));
         if folded && !releases.is_empty() {
             theme::subtle(ui, &palette, &format!("{} new", releases.len()));
+        }
+        {
+            let mut only = app.settings.releases_spotify_only;
+            if widgets::switch_labeled(ui, &palette, "Spotify only", &mut only)
+                .on_hover_text("Look for new releases on Spotify alone (slower and can hit Spotify's limits) instead of finding them on Deezer first.")
+                .changed()
+            {
+                app.settings.releases_spotify_only = only;
+                app.mark_settings_dirty();
+            }
         }
         {
             let mut ask = app.settings.release_confirm_remove;
@@ -345,6 +352,19 @@ fn ranked_shelf(app: &mut App, ui: &mut egui::Ui, songs: bool, now: i64) {
                 app.mark_settings_dirty();
             }
         }
+        // Grid of small tiles, or one column.
+        let list = app.settings.home.stats_list;
+        if theme::pill_button(
+            ui,
+            &palette,
+            &gettext(app.locale, if list { "Grid" } else { "List" }),
+            false,
+        )
+        .clicked()
+        {
+            app.settings.home.stats_list = !list;
+            app.mark_settings_dirty();
+        }
     });
     ui.add_space(4.0);
     let (artists, tracks) = app.stats.ranking(now, crate::stats::local_offset(), range);
@@ -357,7 +377,11 @@ fn ranked_shelf(app: &mut App, ui: &mut egui::Ui, songs: bool, now: i64) {
     // A grid that fills the page's width, no sideways scrolling.
     let gap = 10.0;
     let available = ui.available_width();
-    let columns = ((available / 260.0).floor() as usize).clamp(1, 6);
+    let columns = if app.settings.home.stats_list {
+        1
+    } else {
+        ((available / 175.0).floor() as usize).clamp(1, 10)
+    };
     let width = (available - gap * (columns as f32 - 1.0)) / columns as f32;
     let mut index = 0;
     for chunk in rows.chunks(columns) {
@@ -372,6 +396,8 @@ fn ranked_shelf(app: &mut App, ui: &mut egui::Ui, songs: bool, now: i64) {
     ui.add_space(14.0);
 }
 
+const TILE: f32 = 36.0;
+
 /// One ranked artist or song. Clicking it opens the artist or plays the
 /// song; clicking the artist's name under a song opens that artist.
 fn stat_tile(
@@ -383,7 +409,7 @@ fn stat_tile(
     width: f32,
 ) {
     let palette = app.palette;
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 60.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(width, TILE), Sense::click());
     if !ui.is_rect_visible(rect) {
         return;
     }
@@ -394,7 +420,7 @@ fn stat_tile(
         CornerRadius::same(6),
         if hovered { palette.surface_hover } else { palette.surface },
     );
-    let badge = Rect::from_min_size(rect.min, Vec2::splat(60.0));
+    let badge = Rect::from_min_size(rect.min, Vec2::splat(TILE));
     widgets::paint_cover(
         ui,
         &palette,
@@ -405,28 +431,28 @@ fn stat_tile(
         Some(app.backend.art()),
     );
     // The rank, on a small dark chip so it reads over any picture.
-    let chip = Rect::from_min_size(badge.min + vec2(3.0, 3.0), vec2(20.0, 16.0));
+    let chip = Rect::from_min_size(badge.min + vec2(2.0, 2.0), vec2(16.0, 13.0));
     ui.painter()
         .rect_filled(chip, CornerRadius::same(4), egui::Color32::from_black_alpha(150));
     ui.painter().text(
         chip.center(),
         egui::Align2::CENTER_CENTER,
         format!("{}", index + 1),
-        theme::semibold(11.0),
+        theme::semibold(9.5),
         egui::Color32::WHITE,
     );
     let text = Rect::from_min_max(
-        pos2(badge.right() + 10.0, rect.top()),
-        pos2(rect.right() - 10.0, rect.bottom()),
+        pos2(badge.right() + 8.0, rect.top()),
+        pos2(rect.right() - 6.0, rect.bottom()),
     );
     let painter = ui.painter().with_clip_rect(text);
     crate::bidi::paint_line(
         &painter,
         text.left(),
         text.right(),
-        rect.center().y - 11.0,
+        rect.center().y - 8.0,
         &row.name,
-        theme::bold(13.5),
+        theme::bold(12.5),
         palette.text,
     );
     if song && !row.uri.is_empty() && response.hovered() {
@@ -439,9 +465,9 @@ fn stat_tile(
             &painter,
             text.left(),
             text.right(),
-            rect.center().y + 3.0,
+            rect.center().y + 8.0,
             &row.sub,
-            theme::regular(12.0),
+            theme::regular(11.0),
             if row.artist_id.is_empty() { palette.secondary } else { palette.text },
         );
         if !row.artist_id.is_empty() {
@@ -456,13 +482,14 @@ fn stat_tile(
             }
             artist_clicked = link.clicked();
         }
+        let plays_left = (sub_rect.right() + 6.0).min(text.right());
         crate::bidi::paint_line(
             &painter,
-            text.left(),
+            plays_left,
             text.right(),
-            rect.center().y + 19.0,
+            rect.center().y + 8.0,
             &plays,
-            theme::regular(11.5),
+            theme::regular(10.5),
             palette.dim,
         );
     } else {
@@ -470,9 +497,9 @@ fn stat_tile(
             &painter,
             text.left(),
             text.right(),
-            rect.center().y + 9.0,
+            rect.center().y + 8.0,
             &plays,
-            theme::regular(12.0),
+            theme::regular(11.0),
             palette.secondary,
         );
     }
@@ -496,6 +523,33 @@ fn stat_tile(
         } else {
             app.actions.push(Action::Search(row.name.clone()));
         }
+    }
+    // Right-click: the same menu as anywhere else (add to a playlist, queue...).
+    let menu_uri = if song {
+        row.uri.clone()
+    } else if !row.artist_id.is_empty() {
+        format!("spotify:artist:{}", row.artist_id)
+    } else {
+        String::new()
+    };
+    if !menu_uri.is_empty() {
+        egui::Popup::context_menu(&response)
+            .id(ui.make_persistent_id(("stat-tile-menu", &menu_uri, song)))
+            .frame(widgets::menu_frame(&palette))
+            .show(|ui| {
+                if song {
+                    // A song gets the song menu: queue, add to a playlist...
+                    let track = crate::api::models::Track {
+                        id: menu_uri.rsplit(':').next().map(str::to_string),
+                        name: row.name.clone(),
+                        uri: menu_uri.clone(),
+                        ..Default::default()
+                    };
+                    widgets::item_menu(ui, app, &PlayableItem::Track(track), None, None);
+                } else {
+                    widgets::context_menu_items(ui, app, &menu_uri, &row.name, None);
+                }
+            });
     }
     response.on_hover_text(if song {
         "Click to play. Click the artist to open them."
@@ -753,7 +807,7 @@ fn made_for_you(app: &mut App, ui: &mut egui::Ui) {
     );
 }
 
-fn recently_played(app: &mut App, ui: &mut egui::Ui) {
+pub(super) fn recently_played(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let history = match app.home.recently_played.clone() {
         Loadable::Loaded(history) => history,
@@ -808,10 +862,9 @@ fn recently_played(app: &mut App, ui: &mut egui::Ui) {
         });
     }
     let shelf_title = if total > 16 { String::new() } else { gettext(app.locale, "Recently played").into_owned() };
-    widgets::shelf(
+    widgets::grid_shelf(
         ui,
         &palette,
-        "recent",
         &shelf_title,
         |ui| {
             for entry in &tracks {
@@ -1000,6 +1053,7 @@ fn podcasts(app: &mut App, ui: &mut egui::Ui) {
     );
 }
 
+#[allow(dead_code)]
 fn top_artists(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let artists = match app.home.top_artists.clone() {
@@ -1030,10 +1084,9 @@ fn top_artists(app: &mut App, ui: &mut egui::Ui) {
     if artists.is_empty() {
         return;
     }
-    widgets::shelf(
+    widgets::grid_shelf(
         ui,
         &palette,
-        "top-artists",
         &gettext(app.locale, "Your top artists"),
         |ui| {
             for artist in &artists {
@@ -1156,6 +1209,7 @@ fn track_list(
     ui.add_space(16.0);
 }
 
+#[allow(dead_code)]
 fn top_tracks(app: &mut App, ui: &mut egui::Ui) {
     let tracks = app.home.top_tracks.clone();
     let title = gettext(app.locale, "Your top songs");
@@ -1185,10 +1239,30 @@ fn recommendations(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
         }
+        // The same song under another release counts too: matched by name and artist.
+        let key = |name: &str, artists: &str| format!("{}|{}", name.trim().to_lowercase(), artists.trim().to_lowercase());
+        let mut known_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for page in app.playlist_pages.values() {
+            for item in &page.items.items {
+                if let Some(crate::api::models::PlayableItem::Track(track)) = item.playable() {
+                    known_names.insert(key(&track.name, &track.artist_names()));
+                }
+            }
+        }
+        if let Loadable::Loaded(top) = &app.home.top_tracks {
+            for track in top {
+                known_names.insert(key(&track.name, &track.artist_names()));
+            }
+        }
         let kept: Vec<_> = list
             .iter()
             .filter(|track| {
-                app.saved.get(&track.uri) != Some(&true) && !owned.contains(track.uri.as_str())
+                app.saved.get(&track.uri) != Some(&true)
+                    && !owned.contains(track.uri.as_str())
+                    // In any of the reader's playlists (the background index
+                    // knows all of them, opened or not).
+                    && app.library.membership.get(&track.uri).is_empty()
+                    && !known_names.contains(&key(&track.name, &track.artist_names()))
             })
             .cloned()
             .collect();

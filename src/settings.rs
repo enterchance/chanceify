@@ -393,6 +393,8 @@ pub struct HomeSettings {
     /// Top artists and songs: 0 last 30 days, 1 last 7 days, 2 all time.
     pub artist_range: u8,
     pub song_range: u8,
+    /// Top artists and songs as one column (true) or a grid of small tiles.
+    pub stats_list: bool,
     /// How many recommended songs show: 0 is the usual 20.
     pub recommended_shown: u8,
     /// Whether the full Recently played shelf is open.
@@ -666,7 +668,7 @@ pub struct VisPreset {
 impl Settings {
     /// The settings that make up a visualizer look.
     fn is_vis_key(key: &str) -> bool {
-        key.starts_with("player_bar_vis") || key.starts_with("swirl_") || key.starts_with("vis_") && key != "vis_presets" && key != "vis_views"
+        key.starts_with("player_bar_vis") || key.starts_with("swirl_") || key.starts_with("vis_") && key != "vis_presets" && key != "vis_views" && key != "vis_view_mini"
     }
 
     /// The settings each view keeps for itself (see `vis_views`).
@@ -685,13 +687,18 @@ impl Settings {
             return;
         };
         let own: serde_json::Map<_, _> = all.into_iter().filter(|(key, _)| Self::is_view_key(key)).collect();
-        self.vis_views[view.min(2) as usize] = Some(own);
+        if view == 3 {
+            self.vis_view_mini = Some(own);
+        } else {
+            self.vis_views[view.min(2) as usize] = Some(own);
+        }
     }
 
     /// Put a view's own settings in place. A view never opened before keeps
     /// the values as they are, so it starts as a copy of the one before.
     pub fn load_view(&mut self, view: u8) {
-        let Some(profile) = self.vis_views[view.min(2) as usize].clone() else {
+        let stored = if view == 3 { self.vis_view_mini.clone() } else { self.vis_views[view.min(2) as usize].clone() };
+        let Some(profile) = stored else {
             return;
         };
         let Ok(serde_json::Value::Object(mut all)) = serde_json::to_value(&*self) else {
@@ -826,6 +833,8 @@ pub struct Settings {
     /// 4 bottom, 8 right. Never set means top and left.
     #[serde(default)]
     pub vis_bar_sides: Option<u8>,
+    /// Which edges the flow rises from (1 top, 2 left, 4 bottom, 8 right).
+    pub vis_flow_sides: Option<u8>,
     /// Where the player bar's bars take their colour.
     pub player_bar_vis_color: VisColor,
     /// That colour, as `#rrggbb`, used when the source is `Fixed`.
@@ -862,6 +871,8 @@ pub struct Settings {
     /// Built-in presets and scenes the reader removed from the lists.
     #[serde(default)]
     pub hidden_presets: Vec<String>,
+    /// The built-in equalizer presets are left out of the equalizer's list.
+    pub eq_hide_defaults: bool,
     /// Which of the cover's colours the bars take: 0 is the main one.
     pub player_bar_vis_colour_pick: u8,
     /// How many sheets the flow folds together, front to back.
@@ -945,6 +956,8 @@ pub struct Settings {
     pub unavailable_confirm_one: bool,
     /// Ask before taking a song off "New from your artists".
     pub release_confirm_remove: bool,
+    /// New releases are looked up on Spotify alone (slower), not found on Deezer first.
+    pub releases_spotify_only: bool,
     /// Show the time as "1:23 / 3:45" before the bar instead of at both ends.
     #[serde(default)]
     pub seek_time_joined: bool,
@@ -1004,6 +1017,11 @@ pub struct Settings {
     /// second colour.
     #[serde(default)]
     pub vis_no_gradient: bool,
+    /// How dark the visualizer's colours run: 0 bright (as it was), 1 deep,
+    /// 2 night. Deep keeps the cover's own hues but at the brightness a
+    /// wallpaper would have, instead of lifted towards pastel.
+    #[serde(default)]
+    pub vis_depth: u8,
     /// Lyrics drawn over the full-screen visualizer.
     #[serde(default)]
     pub vis_lyrics: bool,
@@ -1082,8 +1100,14 @@ pub struct Settings {
     /// The pop-out controls live in a window of their own, off the app.
     pub float_detached: bool,
     /// How visible the pop-out controls stay in the full screen visualizer
-    /// once the pointer has left them (0.05 to 1). Half when unset.
+    /// once the pointer has left them (0 to 1). Half when unset.
     pub float_idle: Option<f32>,
+    /// With the pop-out controls faded away, the play/pause button stays.
+    pub float_keep_play: bool,
+    /// The program path chanceify:// links were last set up for (Windows); empty until then.
+    pub links_registered_exe: String,
+    /// A red dot on your picture when songs in your playlists are unavailable; off until chosen.
+    pub unavailable_dot: bool,
     /// That window's place on the screen.
     pub float_window: Option<[f32; 2]>,
     /// Width of the Views panel.
@@ -1256,10 +1280,22 @@ pub struct Settings {
     pub mini_player: bool,
     /// Whether the mini player lists the queue under the controls.
     pub mini_queue: bool,
+    /// The mini player shows the lyrics where the queue would be.
+    pub mini_lyrics: bool,
+    /// Save the covers and artist pictures Last.fm lacks as songs play.
+    pub lastfm_art_auto: bool,
+    /// Lyrics also show a Latin-letter respelling under each line.
+    pub lyrics_phonetic: bool,
     /// Show the volume bar in the mini player.
     pub mini_volume: bool,
     /// Whether the mini player stays on top of other windows.
     pub mini_on_top: bool,
+    /// Whether the main window stays on top of other windows.
+    pub main_on_top: bool,
+    /// Write the visualizer's colours to `lights.json` for light apps.
+    pub lights_feed: bool,
+    /// Whether the extra visualizer window stays on top.
+    pub extra_on_top: bool,
     /// Whether the floating mini player fades while the pointer is away.
     pub mini_fade: bool,
     /// The click that adds a song to the queue without playing it: 0 Ctrl
@@ -1269,6 +1305,9 @@ pub struct Settings {
     /// The visualizer runs from right to left instead of left to right.
     #[serde(default)]
     pub vis_reverse: bool,
+    /// Scroll direction of the flow and of the swirl on their own; `vis_reverse` is the bars'.
+    pub vis_reverse_flow: bool,
+    pub vis_reverse_swirl: bool,
     /// The missing-art mark also shows on the big album art.
     #[serde(default = "yes")]
     pub missing_mark_big: bool,
@@ -1394,6 +1433,8 @@ pub struct Settings {
     /// The plain fields above always hold the open view's own values; moving
     /// to another view saves them here and loads that view's.
     pub vis_views: [Option<serde_json::Map<String, serde_json::Value>>; 3],
+    /// The mini player's own visualizer settings (view 3).
+    pub vis_view_mini: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl std::fmt::Debug for Settings {
@@ -1436,6 +1477,7 @@ impl Default for Settings {
             vis_shapes_set: false,
             vis_shapes_last: 0,
             vis_bar_sides: None,
+            vis_flow_sides: None,
             player_bar_vis_color: VisColor::AlbumArt,
             player_bar_vis_hex: "#8b5cf6".into(),
             player_bar_vis_bars: crate::vis::WIDE_BANDS as u16,
@@ -1448,6 +1490,7 @@ impl Default for Settings {
             custom_eqs: Vec::new(),
             custom_scenes: Vec::new(),
             hidden_presets: Vec::new(),
+            eq_hide_defaults: false,
             player_bar_vis_colour_pick: 0,
             player_bar_vis_flow_sheets: crate::ui::player_bar::FLOW_SHEETS as u8,
             player_bar_vis_flow_depth: 0.86,
@@ -1475,6 +1518,7 @@ impl Default for Settings {
             bar_layout: 0,
             unavailable_confirm_one: true,
             release_confirm_remove: true,
+            releases_spotify_only: false,
             anchor_volume: None,
             seek_time_joined: false,
             seek_time_mode: 0,
@@ -1494,6 +1538,7 @@ impl Default for Settings {
             seek_custom_width: 0.0,
             volume_custom_width: 0.0,
             vis_no_gradient: false,
+            vis_depth: 0,
             vis_lyrics: false,
             vis_text_still: false,
             vis_sway: 0,
@@ -1515,7 +1560,7 @@ impl Default for Settings {
             extra_show_title: true,
             extra_show_artist: true,
             extra_show_heart: true,
-            discord_presence: false,
+            discord_presence: true,
             discord_client_id: String::new(),
             discord_status_line: 0,
             discord_cover: true,
@@ -1532,6 +1577,9 @@ impl Default for Settings {
             views_scale: 1.0,
             float_detached: false,
             float_idle: None,
+            float_keep_play: false,
+            links_registered_exe: String::new(),
+            unavailable_dot: false,
             float_window: None,
             vis_panel_w: 0.0,
             vis_panel_h: 0.0,
@@ -1606,12 +1654,20 @@ impl Default for Settings {
             app_icon: 1,
             mini_player: false,
             mini_queue: true,
+            mini_lyrics: false,
+            lastfm_art_auto: true,
+            lyrics_phonetic: false,
             mini_volume: true,
             mini_on_top: false,
+            main_on_top: false,
+            lights_feed: false,
+            extra_on_top: false,
             mini_fade: true,
             mini_vis: None,
             queue_click: 0,
             vis_reverse: false,
+            vis_reverse_flow: false,
+            vis_reverse_swirl: false,
             missing_mark_big: true,
             music_folders: Vec::new(),
             lastfm_api_key: String::new(),
@@ -1658,6 +1714,7 @@ impl Default for Settings {
             proxy_password: String::new(),
             proxy_password_legacy: false,
             vis_views: [None, None, None],
+            vis_view_mini: None,
         }
     }
 }
@@ -1809,6 +1866,10 @@ impl Settings {
     }
 
     /// The fullscreen bars' edges: top and left unless chosen otherwise.
+    pub fn vis_flow_sides_value(&self) -> u8 {
+        self.vis_flow_sides.unwrap_or(4) & 15
+    }
+
     pub fn vis_bar_sides_value(&self) -> u8 {
         self.vis_bar_sides.unwrap_or(3) & 15
     }
@@ -1988,9 +2049,10 @@ impl Settings {
         "seek_width", "show_shortcut_hints", "sidebar_compact", "sidebar_grid", "sidebar_order",
         "sidebar_width", "swirl_art_scroll", "swirl_art_single", "swirl_art_edge", "swirl_colours_fixed", "swirl_drift", "swirl_peaks",
         "swirl_scale", "swirl_tune", "swirl_warp", "swirl_waves", "theme", "theme_from_cover", "custom_bg", "custom_accent",
-        "track_columns", "tracklist_compact", "vis", "vis_bar_sides", "vis_shapes",
+        "track_columns", "tracklist_compact", "vis", "vis_bar_sides", "vis_flow_sides", "vis_shapes",
         "vis_shapes_last", "vis_shapes_set", "volume_presets", "zoom",
         "volume_custom_width", "vis_no_gradient", "vis_lyrics", "vis_text_still", "vis_sway", "vis_sway_amount", "vis_sway_react", "sway_sens", "vis_text_no_outline", "vis_text_back", "vis_back_alpha", "vis_back_round", "vis_back_pad", "vis_back_block", "vis_live_preview", "vis_font_random", "vis_text_font", "vis_text_no_artist", "vis_lyrics_no_back", "vis_bars_stay", "lyrics_vis", "lyrics_vis_dark", "lyrics_vis_mode", "window_opacity", "anchor_controls", "anchor_volume", "bar_stacked", "bar_layout", "bar_free", "lyrics_ctl_off", "vis_bars_opacity", "vis_flow_opacity", "swirl_react_mode", "vis_jump_react", "vis_jump_on", "float_idle",
+        "jump_sens", "jump_gap", "jump_floor", "jump_adapt", "vis_sway_beat", "vis_depth", "vis_art_border", "calm_look", "disc_dim", "vis_views", "vis_view_mini", "vis_reverse_flow", "vis_reverse_swirl", "extra_show_title", "extra_show_artist", "extra_show_heart", "lyrics_phonetic",
     ];
 
     /// The shareable part of the settings, as the text of a file.
@@ -2010,6 +2072,32 @@ impl Settings {
     /// Takes the shareable settings out of a file's text and puts them over
     /// these. Anything not on the list stays as it is. Returns how many were
     /// taken.
+    /// Chance's own look and feel, shipped inside the program.
+    pub const CHANCE_DEFAULTS: &'static str = include_str!("../assets/chance-defaults.json");
+
+    /// Puts Chance's look and feel over these settings.
+    pub fn apply_chance_defaults(&mut self) -> Result<usize, String> {
+        self.apply_shared(Self::CHANCE_DEFAULTS)
+    }
+
+    /// Puts the plain, untouched values back for everything Chance's
+    /// defaults touch. Accounts, playlists and windows are left alone.
+    pub fn reset_look_to_vanilla(&mut self) -> Result<usize, String> {
+        let chance: serde_json::Value =
+            serde_json::from_str(Self::CHANCE_DEFAULTS).map_err(|error| error.to_string())?;
+        let plain = serde_json::to_value(Self::default()).map_err(|error| error.to_string())?;
+        let mut out = serde_json::Map::new();
+        out.insert("chanceify_settings".into(), serde_json::Value::from(1));
+        if let Some(keys) = chance.as_object() {
+            for key in keys.keys() {
+                if let Some(value) = plain.get(key) {
+                    out.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        self.apply_shared(&serde_json::Value::Object(out).to_string())
+    }
+
     pub fn apply_shared(&mut self, text: &str) -> Result<usize, String> {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         let shared: serde_json::Value =
@@ -2374,7 +2462,13 @@ impl Settings {
                 settings.proxy_password_legacy = !settings.proxy_password.is_empty();
                 settings.with_shipped_spotify_app()
             }
-            Err(_) => Self::default().with_shipped_spotify_app(),
+            Err(_) => {
+                // A first start: begin with Chance's look. The plain values
+                // are one button away in the settings.
+                let mut settings = Self::default();
+                let _ = settings.apply_chance_defaults();
+                settings.with_shipped_spotify_app()
+            }
         }
     }
 
@@ -2415,6 +2509,37 @@ impl Settings {
             .and_then(|()| crate::util::replace_file(&temporary, path));
         if let Err(error) = written {
             log::warn!("unable to save settings to {}: {error}", path.display());
+        }
+    }
+
+    /// Same as `save`, but the file is written on a worker thread. Writes are
+    /// taken one at a time and in order, so a later save never loses to an
+    /// earlier one.
+    pub fn save_in_background(self, path: std::path::PathBuf) {
+        static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let text = match self.encode_for_profile(path == crate::paths::AppDirs::legacy().settings_file()) {
+            Ok(text) => text,
+            Err(error) => {
+                log::warn!("unable to encode settings: {error}");
+                return;
+            }
+        };
+        let spawned = std::thread::Builder::new()
+            .name("settings-save".into())
+            .spawn(move || {
+                let _turn = WRITING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let temporary = path.with_extension("json.tmp");
+                let written = std::fs::write(&temporary, text)
+                    .and_then(|()| crate::util::replace_file(&temporary, &path));
+                if let Err(error) = written {
+                    log::warn!("unable to save settings to {}: {error}", path.display());
+                }
+            });
+        if let Err(error) = spawned {
+            log::warn!("unable to start the settings writer: {error}");
         }
     }
 
@@ -3518,6 +3643,36 @@ pub struct CachedRootlist {
     pub account_id: String,
     pub entries: Vec<crate::player::RootlistEntry>,
 }
+
+/// A colour look for the visualizer: how the cover's colours are brought
+/// to the picture. Each keeps the cover's hue (bar the ones that turn it).
+pub struct VisLook {
+    pub name: &'static str,
+    /// Brightness multiplier.
+    pub value: f32,
+    /// Saturation multiplier, and the least saturation a coloured cover gets.
+    pub sat: f32,
+    pub sat_min: f32,
+    /// A turn of the hue wheel, in whole turns.
+    pub hue: f32,
+    /// Sets the single-colour (no gradient) switch when chosen.
+    pub solid: Option<bool>,
+}
+
+pub const VIS_LOOKS: [VisLook; 12] = [
+    VisLook { name: "Bright", value: 1.0, sat: 1.0, sat_min: 0.0, hue: 0.0, solid: None },
+    VisLook { name: "Deep", value: 0.5, sat: 1.08, sat_min: 0.0, hue: 0.0, solid: None },
+    VisLook { name: "Night", value: 0.3, sat: 1.08, sat_min: 0.0, hue: 0.0, solid: None },
+    VisLook { name: "OG", value: 0.58, sat: 0.92, sat_min: 0.0, hue: 0.0, solid: Some(true) },
+    VisLook { name: "Ink", value: 0.2, sat: 1.2, sat_min: 0.0, hue: 0.0, solid: None },
+    VisLook { name: "Saturated", value: 0.85, sat: 1.5, sat_min: 0.5, hue: 0.0, solid: None },
+    VisLook { name: "Neon", value: 1.0, sat: 1.8, sat_min: 0.85, hue: 0.0, solid: None },
+    VisLook { name: "Pastel", value: 1.0, sat: 0.4, sat_min: 0.0, hue: 0.0, solid: None },
+    VisLook { name: "Dusk", value: 0.55, sat: 0.8, sat_min: 0.0, hue: 0.06, solid: None },
+    VisLook { name: "Warm", value: 0.8, sat: 1.1, sat_min: 0.0, hue: 0.04, solid: None },
+    VisLook { name: "Cool", value: 0.8, sat: 1.1, sat_min: 0.0, hue: -0.06, solid: None },
+    VisLook { name: "Flip", value: 0.8, sat: 1.2, sat_min: 0.0, hue: 0.5, solid: None },
+];
 
 /// Restorable UI session: what was open when the app last closed.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

@@ -357,6 +357,8 @@ pub struct App {
     pub extra_vis: bool,
     /// The visualizer settings panel open inside the extra window.
     pub extra_vis_panel: bool,
+    /// Whether the extra visualizer window shows the queue beside the picture.
+    pub extra_queue_open: bool,
     /// What the extra window shows: 0 the visualizer, 1 the lyrics.
     pub extra_mode: u8,
     pub extra_vis_since: Option<std::time::Instant>,
@@ -450,6 +452,8 @@ pub struct App {
     art_asked: std::collections::HashSet<String>,
     /// The Last.fm picture check is running over the whole library.
     pub art_sweep: bool,
+    /// The Last.fm pictures folder size and when it was measured.
+    pub art_size_cache: Option<(Instant, u64)>,
     art_sweep_count: u32,
     /// The folder and file name each checked key is saved under.
     art_names: std::collections::HashMap<String, (crate::lastfm_art::Kind, String)>,
@@ -561,6 +565,9 @@ pub struct App {
     taps: Vec<Instant>,
     /// When the bass-jump key was last pressed.
     pub jump_at: Option<Instant>,
+    /// When the last bass jump happened (ms since 1970); 0 before the first.
+    pub jump_stamp: u64,
+    lights_jump_seen: u64,
     pub jump_avg: f32,
     /// Songs in the user's playlists that can no longer be played.
     pub unavailable: crate::unavailable::Store,
@@ -639,6 +646,11 @@ pub struct App {
     /// A play request made while the local engine was still connecting; it
     /// starts the moment the engine reports ready.
     queued_play: Option<PlayRequest>,
+    /// The last thing started on this computer, so a refused audio key can
+    /// be answered by starting it again on a fresh session.
+    last_local_request: Option<(Instant, PlayRequest)>,
+    key_retry: Option<(Instant, PlayRequest)>,
+    key_retry_spent: Option<Instant>,
     /// Last list sent to local playback. Used for autoplay because librespot
     /// cannot continue a list without a context URI.
     local_list: Option<Vec<String>>,
@@ -663,6 +675,7 @@ pub struct App {
     /// The big window's size from before the mini player took over.
     /// Whether the always-on-top level was last sent on for the mini player.
     mini_top_sent: bool,
+    pub lights: crate::lights::Feed,
     /// The app icon last sent to the window, so a change is sent once.
     icon_sent: Option<u8>,
     /// The cover colour the album-following icon was last drawn in.
@@ -790,6 +803,9 @@ pub struct App {
     /// A Spotify link handed over from outside, waiting for the account
     /// to be signed in and, for a song, for its album to be known.
     pending_link: Option<String>,
+    /// Songs asked for by name (from a web page), waiting for Spotify's answer.
+    link_lookups: HashMap<String, crate::link::Lookup>,
+    link_lookup_serial: u64,
     /// The songs behind the links last copied from a track table, so a
     /// paste of those links adds rows with their names straight away.
     copied_songs: Vec<PlayableItem>,
@@ -920,6 +936,24 @@ fn tray_config() -> fastframe_tray::Config {
             MenuItem::action(TRAY_QUIT, "Quit chanceify completely"),
         ],
     }
+}
+
+/// The sizes Ctrl+plus and Ctrl+minus step between; Ctrl+0 is 100%.
+const ZOOM_STEPS: [f32; 6] = [0.75, 0.85, 1.0, 1.15, 1.3, 1.5];
+
+/// The step after (or before) the one nearest `current`, never past the ends.
+fn zoom_step(current: f32, up: bool) -> f32 {
+    let nearest = ZOOM_STEPS
+        .iter()
+        .enumerate()
+        .min_by(|a, b| (a.1 - current).abs().total_cmp(&(b.1 - current).abs()))
+        .map_or(2, |(index, _)| index);
+    let next = if up {
+        (nearest + 1).min(ZOOM_STEPS.len() - 1)
+    } else {
+        nearest.saturating_sub(1)
+    };
+    ZOOM_STEPS[next]
 }
 
 impl App {
@@ -1058,6 +1092,7 @@ impl App {
             extra_drawing: false,
             extra_vis: false,
             extra_vis_panel: false,
+            extra_queue_open: false,
             extra_mode: 0,
             extra_vis_since: None,
             theme_preview: None,
@@ -1124,6 +1159,7 @@ impl App {
             art_checker: crate::lastfm_art::Checker::default(),
             art_asked: std::collections::HashSet::new(),
             art_sweep: false,
+            art_size_cache: None,
             art_sweep_count: 0,
             art_names: std::collections::HashMap::new(),
             art_exports: Vec::new(),
@@ -1190,6 +1226,8 @@ impl App {
             live: live_analysis::LiveAnalysis::default(),
             taps: Vec::new(),
             jump_at: None,
+            jump_stamp: 0,
+            lights_jump_seen: 0,
             jump_avg: 0.0,
             unavailable: crate::unavailable::Store::load(&dirs_cache_unavailable),
             unavailable_scan: None,
@@ -1242,6 +1280,9 @@ impl App {
             pending_play_keys: Vec::new(),
             pending_play_at: None,
             queued_play: None,
+            last_local_request: None,
+            key_retry: None,
+            key_retry_spent: None,
             local_list: None,
             pending_transfer_to: None,
             remote_recheck_at: None,
@@ -1253,6 +1294,7 @@ impl App {
             last_window_size: None,
             mini_active: false,
             mini_top_sent: false,
+            lights: Default::default(),
             icon_sent: None,
             icon_tint_sent: None,
             icon_spin_sent: None,
@@ -1325,6 +1367,8 @@ impl App {
             rootlist_cache: session.rootlist.clone(),
             editable_by_grant: std::collections::BTreeSet::new(),
             pending_link: None,
+            link_lookups: HashMap::new(),
+            link_lookup_serial: 0,
             copied_songs: Vec::new(),
             pending_pastes: Vec::new(),
             collapsed_folders: session.collapsed_folders.clone(),
@@ -2443,6 +2487,80 @@ impl App {
         }
     }
 
+    fn recs_cache_path(&self) -> PathBuf {
+        self.dirs.cache.join("home-recommendations.json")
+    }
+
+    /// The songs suggested earlier, if they are less than six hours old and
+    /// for this account.
+    fn recs_cache_load(&self) -> Option<Vec<crate::api::models::Track>> {
+        let value: serde_json::Value = serde_json::from_slice(&std::fs::read(self.recs_cache_path()).ok()?).ok()?;
+        let user = self.user.as_ref().map(|user| user.id.clone()).unwrap_or_default();
+        let at = value.get("at")?.as_u64()?;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+        if value.get("user")?.as_str()? != user || now.saturating_sub(at) > 6 * 3600 {
+            return None;
+        }
+        let tracks: Vec<crate::api::models::Track> = serde_json::from_value(value.get("tracks")?.clone()).ok()?;
+        (!tracks.is_empty()).then_some(tracks)
+    }
+
+    fn recs_cache_save(&self, tracks: &[crate::api::models::Track]) {
+        let user = self.user.as_ref().map(|user| user.id.clone()).unwrap_or_default();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let body = serde_json::json!({ "at": now, "user": user, "tracks": tracks });
+        let path = self.recs_cache_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let temp = path.with_extension("json.tmp");
+        if std::fs::write(&temp, body.to_string()).is_ok() {
+            let _ = std::fs::rename(&temp, &path);
+        }
+    }
+
+    fn discover_cache_load(&mut self) {
+        let path = self.dirs.cache.join("home-discover.json");
+        let Some(map) = std::fs::read(path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<std::collections::HashMap<String, Vec<Playlist>>>(&bytes).ok())
+        else {
+            return;
+        };
+        for (term, list) in map {
+            if DISCOVER_TERMS.contains(&term.as_str()) && !list.is_empty() {
+                self.home.discover.insert(term, Loadable::Loaded(list));
+            }
+        }
+    }
+
+    fn discover_cache_save(&self) {
+        let map: std::collections::HashMap<&String, &Vec<Playlist>> = self
+            .home
+            .discover
+            .iter()
+            .filter_map(|(term, entry)| match entry {
+                Loadable::Loaded(list) if !list.is_empty() => Some((term, list)),
+                _ => None,
+            })
+            .collect();
+        if map.is_empty() {
+            return;
+        }
+        let path = self.dirs.cache.join("home-discover.json");
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(bytes) = serde_json::to_vec(&map) {
+            let temp = path.with_extension("json.tmp");
+            if std::fs::write(&temp, bytes).is_ok() {
+                let _ = std::fs::rename(&temp, &path);
+            }
+        }
+    }
+
     /// Starts looking for new releases by the artists in all the playlists
     /// (`None`) or in one. The artists come from an open playlist page or the
     /// last playlist scan; with neither, the scan runs first.
@@ -2548,9 +2666,10 @@ impl App {
             scan.paused_until = None;
         }
         match scan.queue.last().cloned() {
-            Some((id, _)) => {
+            Some((id, name)) => {
                 scan.asked = true;
-                self.backend.api(ApiRequest::ArtistRecent { id });
+                let spotify_only = self.settings.releases_spotify_only;
+                self.backend.api(ApiRequest::ArtistRecent { id, name, spotify_only });
             }
             None => {
                 let found = std::mem::take(&mut scan.found);
@@ -2593,7 +2712,7 @@ impl App {
                         crate::releases::add(&mut scan.found, release);
                     }
                 }
-                scan.paused_until = Some(Instant::now() + Duration::from_millis(700));
+                scan.paused_until = Some(Instant::now() + Duration::from_millis(300));
             }
             Err(error) if error.is_rate_limited() => {
                 scan.paused_until = Some(Instant::now() + Duration::from_secs(30));
@@ -3241,18 +3360,34 @@ impl App {
             // row is the session's audio-key service gone bad, which
             // leaves librespot feeding the decoder encrypted bytes and
             // skipping through the whole album. A fresh session cures it.
-            if error.starts_with("This item isn't available") {
+            // A refused audio key is the same sickness, so it gets a fresh
+            // session at once (one refusal, not three) and the song is
+            // picked up again after it.
+            let key_refused = error.starts_with("Spotify refused the audio key");
+            if error.starts_with("This item isn't available") || key_refused {
                 let now = Instant::now();
                 self.unavailable_at
                     .retain(|at| now.duration_since(*at) < Duration::from_secs(20));
                 self.unavailable_at.push(now);
-                if self.unavailable_at.len() >= 3
+                if self.unavailable_at.len() >= if key_refused { 1 } else { 3 }
                     && self
                         .last_unavailable_reconnect
-                        .is_none_or(|at| at.elapsed() > Duration::from_secs(60))
+                        .is_none_or(|at| at.elapsed() > Duration::from_secs(if key_refused { 8 } else { 60 }))
                 {
+                    // The song that was refused is started again, once, as
+                    // soon as the fresh session is up: no waiting, and no
+                    // loop if it is refused again.
+                    if key_refused
+                        && let Some((at, request)) = self.last_local_request.clone()
+                        && at.elapsed() < Duration::from_secs(60)
+                        && self.key_retry.is_none()
+                        && self.key_retry_spent.is_none_or(|spent| spent.elapsed() > Duration::from_secs(120))
+                    {
+                        self.key_retry = Some((Instant::now(), request));
+                    }
                     self.unavailable_at.clear();
                     self.last_unavailable_reconnect = Some(now);
+                    crate::crash::trail("reconnecting the Spotify session after refused or unavailable audio");
                     self.backend.send(Command::Reconnect);
                     self.toast(gettext(
                         self.locale,
@@ -3285,7 +3420,17 @@ impl App {
         }
         if reconnected {
             if let Some(request) = self.queued_play.take() {
+                // Something newer was asked for while it reconnected.
+                self.key_retry = None;
                 self.play_request(request, false);
+            } else if let Some((at, request)) = self.key_retry.take()
+                && at.elapsed() < Duration::from_secs(45)
+            {
+                crate::crash::trail("starting the refused song again on the fresh session");
+                self.play_request(request, false);
+                // Marked as tried, so a second refusal is not retried again.
+                self.key_retry = None;
+                self.key_retry_spent = Some(Instant::now());
             }
             // Retry names requested before the session connected.
             let unresolved: Vec<String> = self
@@ -3938,7 +4083,7 @@ impl App {
     /// Keeps the always-on-top level in step with the mini player: on while
     /// it is showing with the option set, back to normal otherwise.
     pub(crate) fn sync_mini_level(&mut self, ctx: &egui::Context) {
-        let want = self.settings.mini_on_top;
+        let want = self.settings.main_on_top;
         if want != self.mini_top_sent {
             self.mini_top_sent = want;
             if self.window_level_supported {
@@ -3947,7 +4092,63 @@ impl App {
         }
     }
 
+    /// The lights feed (see `lights.rs`): what the visualizer shows now.
+    fn lights_tick(&mut self, ctx: &egui::Context) {
+        if !cfg!(feature = "lights-feed") || !self.settings.lights_feed {
+            self.lights.stop();
+            return;
+        }
+        // Ten times a second is plenty for a light: between ticks this costs
+        // nothing, and the frame is not asked to run any more often than that.
+        let time = ctx.input(|input| input.time);
+        let last_id = egui::Id::new("lights-last-tick");
+        if let Some(last) = ctx.data(|data| data.get_temp::<f64>(last_id))
+            && time - last < 0.1
+            && time >= last
+            && self.jump_stamp == self.lights_jump_seen
+        {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            return;
+        }
+        ctx.data_mut(|data| data.insert_temp(last_id, time));
+        self.lights_jump_seen = self.jump_stamp;
+        let colours = self.swirl_colours();
+        // Exactly what the bars are drawn between: the picked colour, the
+        // gradient switch and the look all count.
+        let dark = self.palette.dark;
+        let (low, high) = crate::ui::player_bar::vis_gradient_ctx(
+            self,
+            ctx,
+            dark,
+            crate::settings::PlayerBarVis::Spectrum,
+        );
+        let (low, high) = (Some(low), Some(high));
+        let gradient = !self.settings.vis_no_gradient;
+        let now = self.now_playing();
+        let hex = |c: Option<egui::Color32>| c.map(crate::lights::hex);
+        let body = serde_json::json!({
+            "title": now.as_ref().map(|n| n.title.clone()).unwrap_or_default(),
+            "artist": now.as_ref().map(|n| n.subtitle.clone()).unwrap_or_default(),
+            "playing": now.as_ref().is_some_and(|n| n.playing),
+            "colours": colours.iter().map(|c| crate::lights::hex(*c)).collect::<Vec<_>>(),
+            "mode": if self.settings.swirl_colours_fixed { "fixed" } else { "auto" },
+            "pick": self.settings.player_bar_vis_colour_pick,
+            "gradient": gradient,
+            "low": hex(low),
+            "high": hex(high),
+            // Bass jump: `jump_ts` changes at every jump (ms since 1970, 0 =
+            // none yet); the jump itself falls from 1 to 0 over `jump_ms`.
+            "jump_ts": self.jump_stamp,
+            "jump_ms": 280,
+        });
+        let state = self.dirs.state.clone();
+        self.lights.publish(&state, body);
+        // The Auto blend moves between frames even when nothing else repaints.
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    }
+
     fn tick(&mut self, ctx: &egui::Context) {
+        self.lights_tick(ctx);
         if self
             .lyrics_retry_at
             .is_some_and(|at| std::time::Instant::now() >= at)
@@ -3969,14 +4170,40 @@ impl App {
         let now = Instant::now();
         if !self.zoom_applied {
             self.zoom_applied = true;
-            let zoom = self.settings.zoom.clamp(0.5, 2.5);
+            // chanceify:// links open chanceify without asking: set up once for
+            // this program's place (only under the current Windows user).
+            #[cfg(windows)]
+            {
+                if !cfg!(test)
+                    && let Ok(exe) = std::env::current_exe()
+                {
+                    let here = exe.display().to_string();
+                    if self.settings.links_registered_exe != here {
+                        self.settings.links_registered_exe = here;
+                        self.mark_settings_dirty();
+                        std::thread::spawn(|| {
+                            let _ = crate::link::register_links();
+                        });
+                    }
+                }
+            }
+            let zoom = self.settings.zoom.clamp(ZOOM_STEPS[0], ZOOM_STEPS[ZOOM_STEPS.len() - 1]);
             if (zoom - 1.0).abs() > 0.001 {
                 ctx.set_zoom_factor(zoom);
             }
         } else {
-            let zoom = ctx.zoom_factor();
-            if (zoom - self.settings.zoom).abs() > 0.001 {
-                // Ctrl+plus/minus zoomed; remembered for the next start.
+            let asked = ctx.zoom_factor();
+            if (asked - self.settings.zoom).abs() > 0.001 {
+                // Ctrl+plus/minus/0 zoomed; snap to the nearest step in that
+                // direction and remember it for the next start.
+                let zoom = if (asked - 1.0).abs() < 0.001 {
+                    1.0
+                } else {
+                    zoom_step(self.settings.zoom, asked > self.settings.zoom)
+                };
+                if (zoom - asked).abs() > 0.001 {
+                    ctx.set_zoom_factor(zoom);
+                }
                 self.settings.zoom = zoom;
                 self.settings_dirty = true;
             }
@@ -4084,7 +4311,7 @@ impl App {
             self.evict_stale_pages();
         }
         if self.settings_dirty && self.last_settings_save.elapsed() > Duration::from_secs(2) {
-            self.save_settings();
+            self.write_settings(true);
         }
         if self.session_dirty && self.last_session_save.elapsed() > Duration::from_secs(2) {
             self.save_session();
@@ -4203,6 +4430,12 @@ impl App {
     }
 
     fn save_settings(&mut self) {
+        self.write_settings(false);
+    }
+
+    /// Saves the settings now, or (`background`) hands the file write to a
+    /// worker thread so the window never waits on the disk.
+    fn write_settings(&mut self, background: bool) {
         if self.settings.proxy_password_legacy {
             self.settings_dirty = false;
             self.last_settings_save = Instant::now();
@@ -4221,7 +4454,11 @@ impl App {
         }
         let mut saved = self.settings.clone();
         self.applied_proxy_preferences.apply_to(&mut saved);
-        saved.save(&self.dirs.settings_file());
+        if background {
+            saved.save_in_background(self.dirs.settings_file());
+        } else {
+            saved.save(&self.dirs.settings_file());
+        }
     }
 
     /// Where the membership index is kept between runs. It is a cache of
@@ -4867,7 +5104,8 @@ impl App {
         match page {
             Page::Home => self.load_home(false),
             Page::TopSongs => self.load_top_songs(false),
-            Page::Search => {}
+            // Recently played sits under the search box.
+            Page::Search => self.load_home(false),
             Page::LikedSongs => self.ensure_liked_songs(),
             Page::Albums => {
                 if !self.library.albums.loaded_once {
@@ -4990,6 +5228,58 @@ impl App {
         }
     }
 
+    /// Starts "Recommended for you" from these seeds (artist, title). With
+    /// none, the songs played on this computer, then the recently played
+    /// ones, stand in; with nothing at all the shelf says what to do.
+    fn begin_recommendations(&mut self, generation: u64, mut seeds: Vec<(String, String)>) {
+        // A recent answer is reused: it costs Spotify searches.
+        if let Some(cached) = self.recs_cache_load() {
+            self.home.recommendations = Loadable::Loaded(cached);
+            return;
+        }
+        if seeds.is_empty() {
+            let now = jiff::Timestamp::now().as_second();
+            let (_, songs) = self.stats.ranking(now, crate::stats::local_offset(), crate::stats::Range::Ever);
+            seeds = songs
+                .iter()
+                .filter(|row| !row.sub.is_empty())
+                .take(5)
+                .map(|row| (row.sub.clone(), row.name.clone()))
+                .collect();
+        }
+        if seeds.is_empty()
+            && let Loadable::Loaded(history) = &self.home.recently_played
+        {
+            seeds = history
+                .iter()
+                .filter_map(|entry| {
+                    entry
+                        .track
+                        .artists
+                        .first()
+                        .map(|artist| (artist.name.clone(), entry.track.name.clone()))
+                })
+                .take(5)
+                .collect();
+        }
+        if seeds.is_empty() {
+            if self.home.recommendations.get().is_none() {
+                self.home.recommendations =
+                    Loadable::Failed("Play a few songs and suggestions will show up here.".into());
+            }
+            return;
+        }
+        if self.home.recommendations.get().is_none() {
+            self.home.recommendations = Loadable::Loading;
+        }
+        let lastfm_key = self.art_key();
+        self.backend.api(ApiRequest::Recommendations {
+            seeds,
+            lastfm_key,
+            generation,
+        });
+    }
+
     fn load_home(&mut self, force: bool) {
         if self.home.requested
             && !force
@@ -5026,6 +5316,9 @@ impl App {
             generation,
         });
         self.home.discover_pending.clear();
+        if self.home.discover.is_empty() {
+            self.discover_cache_load();
+        }
         for term in DISCOVER_TERMS {
             self.home
                 .discover_pending
@@ -6358,7 +6651,14 @@ impl App {
                 // A failed refresh (a rate limit, a dropped connection) must
                 // never throw away the queue already on screen: keep what is
                 // shown and let the next refresh try again.
-                if result.is_ok() || !matches!(self.queue, Loadable::Loaded(_)) {
+                // Likewise an empty answer while only the remembered song is
+                // showing (nothing playing yet after a restart): Spotify has
+                // no queue for a player that is idle, and the rows saved at
+                // close stay until something really plays.
+                let idle_empty = result.as_ref().is_ok_and(|fetched| fetched.queue.is_empty())
+                    && self.resume_only()
+                    && self.queue.get().is_some_and(|held| !held.queue.is_empty());
+                if !idle_empty && (result.is_ok() || !matches!(self.queue, Loadable::Loaded(_))) {
                     self.queue = Loadable::from_result(result);
                 }
                 self.reconcile_pending_queue();
@@ -6444,21 +6744,18 @@ impl App {
                     && let Ok(page) = result
                 {
                     let tracks = page.items;
-                    let seeds: Vec<String> = tracks
+                    let seeds: Vec<(String, String)> = tracks
                         .iter()
-                        .filter_map(|track| track.id.clone())
+                        .filter(|track| !track.name.is_empty())
+                        .filter_map(|track| {
+                            track
+                                .artists
+                                .first()
+                                .map(|artist| (artist.name.clone(), track.name.clone()))
+                        })
                         .take(5)
                         .collect();
-                    if !seeds.is_empty() {
-                        if self.home.recommendations.get().is_none() {
-                            self.home.recommendations = Loadable::Loading;
-                        }
-                        self.backend.api(ApiRequest::Recommendations {
-                            seed_tracks: seeds,
-                            seed_artists: Vec::new(),
-                            generation,
-                        });
-                    }
+                    self.begin_recommendations(generation, seeds);
                     let uris: Vec<String> = tracks.iter().map(|track| track.uri.clone()).collect();
                     self.request_contains(uris);
                     self.home.top_tracks = Loadable::Loaded(tracks);
@@ -6468,6 +6765,9 @@ impl App {
                     && self.home.top_tracks.get().is_none()
                 {
                     self.home.top_tracks = Loadable::Failed(error.to_string());
+                    // Spotify's top songs failing must not leave the
+                    // recommendations loading for ever.
+                    self.begin_recommendations(generation, Vec::new());
                 }
             }
             ApiResponse::TopArtists { generation, result } => {
@@ -6483,6 +6783,9 @@ impl App {
                 if let Ok(tracks) = &result {
                     let uris: Vec<String> = tracks.iter().map(|track| track.uri.clone()).collect();
                     self.request_contains(uris);
+                    if !tracks.is_empty() {
+                        self.recs_cache_save(tracks);
+                    }
                 }
                 self.home.recommendations.refresh(result);
             }
@@ -6518,7 +6821,17 @@ impl App {
                         .is_some_and(|result| !result.is_loading())
                 });
                 if complete {
-                    self.home.discover = std::mem::take(&mut self.home.discover_pending);
+                    let mut fresh = std::mem::take(&mut self.home.discover_pending);
+                    // A term that failed this time keeps what it showed before.
+                    for (term, entry) in fresh.iter_mut() {
+                        if matches!(entry, Loadable::Failed(_))
+                            && let Some(Loadable::Loaded(old)) = self.home.discover.get(term)
+                        {
+                            *entry = Loadable::Loaded(old.clone());
+                        }
+                    }
+                    self.home.discover = fresh;
+                    self.discover_cache_save();
                 }
             }
             // A reload reads the playlists from the top again under a new
@@ -6657,14 +6970,12 @@ impl App {
                     if page.snapshot_rechecks <= 3 {
                         self.backend.api(ApiRequest::Playlist { id, generation });
                     } else {
+                        // Spotify is slow to show the change. No error: the list
+                        // keeps what it already shows (the change is made), and
+                        // a later reload reads Spotify's own copy.
                         page.refresh_after_write = false;
-                        page.items.fail(
-                            gettext(
-                                self.locale,
-                                "Spotify hasn't confirmed your playlist changes yet. Try refreshing again.",
-                            )
-                            .into_owned(),
-                        );
+                        page.optimistic_snapshot = None;
+                        page.snapshot_rechecks = 0;
                     }
                     return;
                 }
@@ -7297,7 +7608,13 @@ impl App {
                     self.search.playlists_pending = split;
                 }
             }
-            ApiResponse::MatchLocal { path, result } => self.local_match_answer(path, result),
+            ApiResponse::MatchLocal { path, result } => {
+                if path.starts_with("chanceify-link:") {
+                    self.link_lookup_answer(path, result);
+                } else {
+                    self.local_match_answer(path, result);
+                }
+            }
             ApiResponse::SearchPlaylists {
                 query,
                 serial,
@@ -7681,6 +7998,57 @@ impl App {
         self.actions.push(Action::OpenLink(uri));
     }
 
+    /// Spotify's answer to a song asked for by name: the best match plays
+    /// (or joins the queue), and when Spotify has nothing a note says so.
+    fn link_lookup_answer(&mut self, path: String, result: Result<Vec<crate::api::models::Track>, crate::api::ApiError>) {
+        // A second try, as plain words, when the exact title-and-artist search
+        // found nothing (a video title is rarely the song's exact name).
+        let retried = path.ends_with(":free");
+        let key = path.trim_end_matches(":free").to_string();
+        let Some(lookup) = self.link_lookups.remove(&key) else {
+            return;
+        };
+        let Ok(tracks) = result else {
+            self.toast_error("Could not look that song up on Spotify");
+            return;
+        };
+        if lookup.artist_only {
+            // The artist's own songs: the first result by an artist of that name.
+            let wanted = lookup.artist.to_lowercase();
+            let artist = tracks
+                .iter()
+                .flat_map(|track| track.artists.iter())
+                .find(|artist| artist.name.to_lowercase() == wanted)
+                .and_then(|artist| artist.id.clone());
+            match artist {
+                Some(id) => self.actions.push(Action::PlayContext {
+                    uri: format!("spotify:artist:{id}"),
+                    offset_uri: None,
+                    offset_index: None,
+                }),
+                None => self.toast_error(format!("{} is not on Spotify", lookup.artist)),
+            }
+            return;
+        }
+        if tracks.iter().all(|track| track.is_local || track.uri.is_empty()) && !retried {
+            let free = format!("{} {}", lookup.artist, lookup.track).trim().to_string();
+            let free_path = format!("{key}:free");
+            self.link_lookups.insert(key, lookup);
+            self.backend.api(ApiRequest::MatchLocal { path: free_path, query: free });
+            return;
+        }
+        // The exact song when one matches; else the first real result, since
+        // the search already asked for that title and artist.
+        let found = crate::local_match::pick(&tracks, &lookup.track, &lookup.artist, 0)
+            .or_else(|| tracks.iter().find(|track| !track.is_local && !track.uri.is_empty()))
+            .map(|track| (track.uri.clone(), format!("{} by {}", track.name, track.artist_names())));
+        match found {
+            Some((uri, label)) if lookup.queue => self.actions.push(Action::AddToQueue { uri, label }),
+            Some((uri, _)) => self.actions.push(Action::PlayUris { uris: vec![uri], index: 0 }),
+            None => self.toast_error(format!("{} is not on Spotify", lookup.track)),
+        }
+    }
+
     /// Opens the page behind the pending link once the account is signed
     /// in. A song and an episode have no page of their own here, so the
     /// album's and the podcast's open, once Spotify has said which.
@@ -7689,6 +8057,20 @@ impl App {
             return;
         };
         if self.user.is_none() {
+            return;
+        }
+        // A song asked for by name: look it up on Spotify, then play or queue it.
+        if let Some(lookup) = crate::link::lookup(&uri) {
+            self.pending_link = None;
+            self.link_lookup_serial += 1;
+            let path = format!("chanceify-link:{}", self.link_lookup_serial);
+            let query = if lookup.artist_only {
+                lookup.artist.clone()
+            } else {
+                crate::local_match::query_for(&lookup.track, &lookup.artist)
+            };
+            self.link_lookups.insert(path.clone(), lookup);
+            self.backend.api(ApiRequest::MatchLocal { path, query });
             return;
         }
         if let Some(query) = crate::link::search_query(&uri) {
@@ -8145,6 +8527,21 @@ impl App {
     /// librespot then picks its own random track, and only the Web API,
     /// which would start at track one, needs telling where to go.
     fn shuffle_start(&self, context_uri: &str) -> (Option<String>, Option<u32>) {
+        // Only the first pages of a long list are loaded, so choosing among
+        // those rows would always start in the same first fifty. When the
+        // library knows the real length, pick across all of it.
+        let loaded = self.context_track_uris(context_uri).map_or(0, |uris| uris.len() as u32);
+        if let Some(len) = self.context_len(context_uri)
+            && len > loaded.saturating_add(1)
+        {
+            let pick = rand::random_range(0..len);
+            if pick < loaded
+                && let Some(uris) = self.context_track_uris(context_uri)
+            {
+                return (Some(uris[pick as usize].clone()), None);
+            }
+            return (None, Some(pick));
+        }
         if let Some(uri) = self.random_track_in(context_uri) {
             return (Some(uri), None);
         }
@@ -8260,6 +8657,8 @@ impl App {
             }
             Target::Local => {
                 self.queued_play = None;
+                self.key_retry = None;
+                self.last_local_request = Some((Instant::now(), request.clone()));
                 let mut load = local_load(&request, shuffle);
                 load.repeat = Some(self.local.repeat);
                 self.local_list = load.context_uri.is_none().then(|| load.uris.clone());
@@ -9793,7 +10192,6 @@ impl App {
                 | Action::Back
                 | Action::Forward
                 | Action::SignOut
-                | Action::ToggleQueuePanel
         ) {
             self.leave_lyrics_fullscreen(ctx);
         }
@@ -9862,11 +10260,16 @@ impl App {
                 }
             }
             Action::OpenLink(uri) => {
-                // The window first: a link is the user asking for the
+                // A song asked for by name plays in the background, so the
+                // page that asked keeps the screen. Anything else brings the
+                // window forward first: a link is the user asking for the
                 // app, signed in or not, and the page follows when it can.
+                let quiet = crate::link::lookup(&uri).is_some();
                 self.pending_link = Some(uri);
                 self.open_pending_link();
-                self.actions.push(Action::ShowWindow);
+                if !quiet {
+                    self.actions.push(Action::ShowWindow);
+                }
             }
             Action::Back => {
                 if self.can_go_back() {
@@ -9993,6 +10396,40 @@ impl App {
                     ));
                     self.actions.push(Action::PlayUris {
                         uris: order,
+                        index: 0,
+                    });
+                }
+            }
+            Action::FreshShufflePlay(uri) => {
+                let uris = self.context_track_uris(&uri).unwrap_or_default();
+                let total = self.context_len(&uri).unwrap_or(0) as usize;
+                let uris: Vec<String> = uris
+                    .into_iter()
+                    .filter(|uri| uri.starts_with("spotify:track:"))
+                    .collect();
+                if uris.len() < 2 || (total > uris.len() + 2) {
+                    // Ask for the rest of the list now; the next press has all of it.
+                    if let Some(id) = uri.strip_prefix("spotify:playlist:") {
+                        self.actions.push(Action::LoadMore(Page::Playlist(id.to_string())));
+                    }
+                    self.toast("Loading the rest of the list. Press it again in a moment.");
+                } else {
+                    let now = jiff::Timestamp::now().as_second();
+                    let last = self.stats.last_played();
+                    // The longer since a song was heard, the earlier it tends to come
+                    // (a song never heard counts as ten years); still random.
+                    let mut keyed: Vec<(f32, String)> = uris
+                        .into_iter()
+                        .map(|uri| {
+                            let days = last.get(uri.as_str()).map_or(3650.0, |t| ((now - t) as f32 / 86_400.0).max(0.0));
+                            let key = rand::random_range(0.05f32..1.0) / (1.0 + (1.0 + days).ln());
+                            (key, uri)
+                        })
+                        .collect();
+                    keyed.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    self.toast("Playing songs you haven't heard in a while first");
+                    self.actions.push(Action::PlayUris {
+                        uris: keyed.into_iter().map(|(_, uri)| uri).collect(),
                         index: 0,
                     });
                 }
@@ -11052,6 +11489,12 @@ impl App {
                 self.settings.vis_bar_sides = Some(sides);
                 self.mark_settings_dirty();
             }
+            Action::ToggleFlowSide(bit) => {
+                let sides = self.settings.vis_flow_sides_value() ^ (bit & 15);
+                // At least one edge always stays on.
+                self.settings.vis_flow_sides = Some(if sides == 0 { 4 } else { sides });
+                self.mark_settings_dirty();
+            }
             Action::SetVisBars(bars) => {
                 // Clamped here as well as in the accessor: a slider hands
                 // over whatever the pointer landed on, and the stored
@@ -11063,7 +11506,12 @@ impl App {
                 self.mark_settings_dirty();
             }
             Action::ToggleVisPanel => self.vis_panel = !self.vis_panel,
-            Action::TapTempo => self.jump_at = Some(Instant::now()),
+            Action::TapTempo => {
+                self.jump_at = Some(Instant::now());
+                self.jump_stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_millis() as u64);
+            }
             Action::StartTour => self.tour_step = Some(0),
             Action::SavePlaylistToIndex(uri) => {
                 let id = uri.rsplit(':').next().unwrap_or("").to_string();
@@ -11251,7 +11699,28 @@ impl App {
                 }
             }
             Action::ImportSettings => self.import_settings_file("chanceify-settings.json"),
-            Action::LoadDefaultSettings => self.import_settings_file("defaults.json"),
+            Action::LoadDefaultSettings => {
+                // A defaults.json beside the settings wins; otherwise the
+                // copy shipped inside the program.
+                if self.dirs.index_settings_dir().join("defaults.json").exists() {
+                    self.import_settings_file("defaults.json");
+                } else {
+                    match self.settings.apply_chance_defaults() {
+                        Ok(count) => {
+                            self.mark_settings_dirty();
+                            self.toast(format!("Loaded {count} of Chance's settings"));
+                        }
+                        Err(error) => self.toast_error(format!("Could not load Chance's settings: {error}")),
+                    }
+                }
+            }
+            Action::ResetSettingsToVanilla => match self.settings.reset_look_to_vanilla() {
+                Ok(count) => {
+                    self.mark_settings_dirty();
+                    self.toast(format!("Put {count} settings back to the plain defaults"));
+                }
+                Err(error) => self.toast_error(format!("Could not reset the settings: {error}")),
+            },
             Action::ToggleViewsPanel => self.views_panel = !self.views_panel,
             Action::OpenViewsPanel => self.views_panel = !self.views_panel,
             Action::RegisterLinks => match crate::link::register_links() {
@@ -11323,10 +11792,9 @@ impl App {
             Action::AdjustZoom(direction) => {
                 let zoom = match direction {
                     0 => 1.0,
-                    d if d > 0 => (self.settings.zoom + 0.1).min(2.5),
-                    _ => (self.settings.zoom - 0.1).max(0.5),
+                    d if d > 0 => zoom_step(self.settings.zoom, true),
+                    _ => zoom_step(self.settings.zoom, false),
                 };
-                let zoom = (zoom * 10.0).round() / 10.0;
                 self.settings.zoom = zoom;
                 ctx.set_zoom_factor(zoom);
                 self.mark_settings_dirty();
@@ -11500,6 +11968,14 @@ impl App {
                 self.settings.vis_no_gradient = !self.settings.vis_no_gradient;
                 self.mark_settings_dirty();
             }
+            Action::SetVisDepth(depth) => {
+                let depth = depth.min(crate::settings::VIS_LOOKS.len() as u8 - 1);
+                self.settings.vis_depth = depth;
+                if let Some(solid) = crate::settings::VIS_LOOKS[depth as usize].solid {
+                    self.settings.vis_no_gradient = solid;
+                }
+                self.mark_settings_dirty();
+            }
             Action::SetVisSway(index) => {
                 self.settings.vis_sway = index.min(crate::settings::Settings::SWAY_PRESETS.len() as u8 - 1);
                 // Choosing a style means wanting it to move.
@@ -11639,7 +12115,21 @@ impl App {
                 self.mark_settings_dirty();
             }
             Action::ToggleVisReverse => {
-                self.settings.vis_reverse = !self.settings.vis_reverse;
+                // The key turns every visualizer around, or puts them all back.
+                let any = self.settings.vis_reverse
+                    || self.settings.vis_reverse_flow
+                    || self.settings.vis_reverse_swirl;
+                self.settings.vis_reverse = !any;
+                self.settings.vis_reverse_flow = !any;
+                self.settings.vis_reverse_swirl = !any;
+                self.mark_settings_dirty();
+            }
+            Action::ToggleVisReverseOne(which) => {
+                match which {
+                    0 => self.settings.vis_reverse = !self.settings.vis_reverse,
+                    1 => self.settings.vis_reverse_flow = !self.settings.vis_reverse_flow,
+                    _ => self.settings.vis_reverse_swirl = !self.settings.vis_reverse_swirl,
+                }
                 self.mark_settings_dirty();
             }
             Action::ToggleMissingMarkBig => {
@@ -11655,7 +12145,22 @@ impl App {
                 self.mark_settings_dirty();
             }
             Action::ToggleMiniQueue => {
-                self.settings.mini_queue = !self.settings.mini_queue;
+                if self.settings.mini_queue && self.settings.mini_lyrics {
+                    // The lyrics are in the queue's place: show the queue.
+                    self.settings.mini_lyrics = false;
+                } else {
+                    self.settings.mini_queue = !self.settings.mini_queue;
+                }
+                self.mark_settings_dirty();
+            }
+            Action::ToggleMiniLyrics => {
+                self.settings.mini_lyrics = !self.settings.mini_lyrics;
+                if self.settings.mini_lyrics {
+                    // The lyrics take the queue's place.
+                    self.settings.mini_queue = true;
+                    self.lyrics_following = true;
+                    self.request_lyrics();
+                }
                 self.mark_settings_dirty();
             }
             Action::PlayLocalFiles {
@@ -11713,6 +12218,14 @@ impl App {
             }
             Action::ToggleMiniOnTop => {
                 self.settings.mini_on_top = !self.settings.mini_on_top;
+                self.mark_settings_dirty();
+            }
+            Action::ToggleMainOnTop => {
+                self.settings.main_on_top = !self.settings.main_on_top;
+                self.mark_settings_dirty();
+            }
+            Action::ToggleExtraOnTop => {
+                self.settings.extra_on_top = !self.settings.extra_on_top;
                 self.mark_settings_dirty();
             }
             Action::ToggleVisBarsStay => {
@@ -12151,6 +12664,47 @@ impl App {
                     self.push_eq();
                 }
             }
+            Action::ApplyCustomEq(index) => {
+                if let Some((_, bands)) = self.settings.custom_eqs.get(index) {
+                    self.settings.eq_bands_db = *bands;
+                    self.settings.eq_on = true;
+                    self.push_eq();
+                    self.mark_settings_dirty();
+                }
+            }
+            Action::RemoveCustomEq(index) => {
+                if index < self.settings.custom_eqs.len() {
+                    let (name, _) = self.settings.custom_eqs.remove(index);
+                    self.mark_settings_dirty();
+                    self.toast(format!("Removed \"{name}\""));
+                }
+            }
+            Action::ToggleEqHideDefaults => {
+                self.settings.eq_hide_defaults = !self.settings.eq_hide_defaults;
+                self.mark_settings_dirty();
+            }
+            Action::ExportEq => {
+                let text = self.settings.export_presets();
+                let dir = self.dirs.index_settings_dir();
+                let written = std::fs::create_dir_all(&dir)
+                    .and_then(|()| std::fs::write(dir.join("eq-presets.txt"), &text));
+                ctx.copy_text(text);
+                match written {
+                    Ok(()) => self.toast(format!("Equalizers saved in {} (and copied)", dir.display())),
+                    Err(error) => self.toast_error(format!("Could not save the equalizers: {error}")),
+                }
+            }
+            Action::ImportEq => {
+                let path = self.dirs.index_settings_dir().join("eq-presets.txt");
+                match std::fs::read_to_string(&path) {
+                    Ok(text) => {
+                        let count = self.settings.import_presets(&text);
+                        self.mark_settings_dirty();
+                        self.toast(format!("Loaded {count} equalizers"));
+                    }
+                    Err(_) => self.toast_error(format!("No eq-presets.txt in {}", path.parent().map_or_else(String::new, |p| p.display().to_string()))),
+                }
+            }
             Action::SetBalance(balance) => {
                 self.settings.balance = balance.clamp(-1.0, 1.0);
                 self.push_eq();
@@ -12418,6 +12972,28 @@ impl App {
     }
 
     /// The library's playlists that take songs, as id and name pairs.
+    /// Whether every one of these songs is known to be in the playlist: from
+    /// the membership index (which the background walk keeps), or from rows
+    /// already loaded. A playlist not walked or opened yet is not known, and
+    /// reads as not there.
+    pub fn playlist_has_all(&self, playlist_id: &str, items: &[PlayableItem]) -> bool {
+        !items.is_empty()
+            && items.iter().all(|wanted| {
+                let uri = wanted.uri();
+                self.library
+                    .membership
+                    .get(uri)
+                    .iter()
+                    .any(|found| found.id == playlist_id)
+                    || self.playlist_pages.get(playlist_id).is_some_and(|page| {
+                        page.items
+                            .items
+                            .iter()
+                            .any(|row| row.playable().is_some_and(|have| have.uri() == uri))
+                    })
+            })
+    }
+
     pub fn editable_playlists(&self) -> Vec<(String, String)> {
         if self.user_id().is_none() {
             return Vec::new();
@@ -12705,6 +13281,12 @@ impl App {
         self.refresh_frame_now();
         self.sync_song_scene();
         self.sync_discord();
+        // With Discord on and a song playing, a frame is drawn at least every
+        // two seconds even when nothing on screen moves (a minimised or
+        // covered window), so a new song reaches Discord within moments.
+        if self.settings.discord_presence && self.now_playing().is_some_and(|now| now.playing) {
+            ctx.request_repaint_after(std::time::Duration::from_secs(2));
+        }
         self.apply_theme(ctx);
         self.sync_window_icon(ctx);
         let autoscroll_on = crate::autoscroll::enabled(self.settings.middle_click_autoscroll);
@@ -12738,6 +13320,8 @@ impl App {
             2
         } else if self.fullscreen_vis {
             1
+        } else if self.settings.mini_player {
+            3
         } else {
             0
         };
@@ -12757,9 +13341,21 @@ impl App {
         let jump = self.jump_level();
         if jump > 0.0 {
             let t = ctx.input(|input| input.time) as f32;
-            let amp = 7.0 * jump * self.settings.jump_shake.clamp(0.1, 3.0);
+            // Eased in over a few milliseconds and out over the rest, so the
+            // start is a push and not a pop.
+            let since = self.jump_at.map_or(1.0, |at| at.elapsed().as_secs_f32());
+            let attack = (since / 0.03).clamp(0.0, 1.0);
+            let envelope = attack * attack * (3.0 - 2.0 * attack) * jump * jump;
+            let amp = 7.0 * envelope * self.settings.jump_shake.clamp(0.1, 3.0);
             let shift = egui::vec2((t * 95.0).sin() * amp, (t * 71.0).cos() * amp * 0.7);
-            let transform = egui::emath::TSTransform::from_translation(shift);
+            // The picture is also grown a hair about the middle, by just as
+            // much as it moves, so the shake never slides an edge in and shows
+            // the bare window behind it (the colour seam on the jump).
+            let screen = ctx.content_rect();
+            let reach = amp.abs() * 1.02 + 1.0;
+            let grow = 1.0 + 2.0 * reach / screen.width().min(screen.height()).max(200.0);
+            let centre = screen.center().to_vec2();
+            let transform = egui::emath::TSTransform::new(centre * (1.0 - grow) + shift, grow);
             let layers: Vec<egui::LayerId> = ctx.memory(|memory| memory.layer_ids().collect());
             for layer in layers {
                 ctx.transform_layer_shapes(layer, transform);
@@ -12997,7 +13593,7 @@ impl App {
                 last_queue_rows: self
                     .queue
                     .get()
-                    .map(|queue| queue.queue.iter().take(30).cloned().collect())
+                    .map(|queue| queue.queue.iter().take(100).cloned().collect())
                     .unwrap_or_default(),
                 shuffle_on: self.shuffle_wanted,
                 sorts: self

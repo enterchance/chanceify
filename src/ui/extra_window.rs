@@ -14,8 +14,13 @@ use crate::app::App;
 use crate::theme;
 
 pub fn show(app: &mut App, ctx: &Context) {
+    // The place and size it opened at. The window's builder keeps these for as
+    // long as it is open: handing it the geometry it just reported every frame
+    // made egui move and resize the window again and again (the jiggle).
+    let opened_id = egui::Id::new("extra-window-opened-at");
     if !app.extra_vis {
         app.extra_vis_since = None;
+        ctx.data_mut(|data| data.remove_temp::<Option<[f32; 4]>>(opened_id));
         return;
     }
     let since = *app
@@ -23,17 +28,27 @@ pub fn show(app: &mut App, ctx: &Context) {
         .get_or_insert_with(std::time::Instant::now);
     let id = ViewportId::from_hash_of("chanceify-extra-visualizer");
     let saved = app.settings.extra_window;
+    let opened = ctx
+        .data(|data| data.get_temp::<Option<[f32; 4]>>(opened_id))
+        .unwrap_or_else(|| {
+            ctx.data_mut(|data| data.insert_temp(opened_id, saved));
+            saved
+        });
     let mut builder = ViewportBuilder::default()
         .with_title("chanceify visualizer")
         .with_decorations(false)
-        .with_inner_size(saved.map_or([960.0, 540.0], |s| [s[2].max(240.0), s[3].max(160.0)]))
+        .with_inner_size(opened.map_or([960.0, 540.0], |s| [s[2].max(240.0), s[3].max(160.0)]))
         .with_min_inner_size([240.0, 160.0]);
-    if let Some(s) = saved
+    if let Some(s) = opened
         && s[0] > -20000.0
         && s[1] > -20000.0
     {
         builder = builder.with_position([s[0], s[1]]);
     }
+    if app.settings.extra_on_top {
+        builder = builder.with_always_on_top();
+    }
+    let extra_top = app.settings.extra_on_top;
     let mut geometry: Option<[f32; 4]> = None;
     let mut close = false;
     let now = app.now_playing();
@@ -50,6 +65,12 @@ pub fn show(app: &mut App, ctx: &Context) {
             close = true;
             return;
         }
+        // This window's own "always on top", apart from the main window's.
+        let level_id = egui::Id::new("extra-window-top");
+        if ctx.data(|data| data.get_temp::<bool>(level_id)) != Some(extra_top) {
+            ctx.data_mut(|data| data.insert_temp(level_id, extra_top));
+            ctx.send_viewport_cmd(ViewportCommand::WindowLevel(crate::app::on_top_window_level(extra_top)));
+        }
         let full = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
         if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             if full {
@@ -62,6 +83,51 @@ pub fn show(app: &mut App, ctx: &Context) {
         if ctx.input(|input| input.key_pressed(egui::Key::F11)) {
             ctx.send_viewport_cmd(ViewportCommand::Fullscreen(!full));
         }
+        // The same hotkeys as the main window. The queue and lyrics keys
+        // act on this window's own queue and lyrics, not the main window's.
+        {
+            let before = app.actions.len();
+            super::keys::handle(app, &ctx);
+            let mut i = before;
+            while i < app.actions.len() {
+                match app.actions[i] {
+                    crate::model::Action::ToggleQueuePanel => {
+                        app.actions.remove(i);
+                        app.extra_queue_open = !app.extra_queue_open;
+                    }
+                    crate::model::Action::ToggleQueueAndLyrics => {
+                        app.actions.remove(i);
+                        let both = app.extra_queue_open && app.settings.vis_lyrics;
+                        app.extra_queue_open = !both;
+                        if app.settings.vis_lyrics == both {
+                            app.actions.push(crate::model::Action::ToggleVisLyrics);
+                        }
+                    }
+                    crate::model::Action::ToggleLyricsPanel
+                    | crate::model::Action::ToggleLyricsFullscreen => {
+                        app.actions.remove(i);
+                        app.actions.push(crate::model::Action::ToggleVisLyrics);
+                        i = app.actions.len();
+                    }
+                    crate::model::Action::GoToPlayingTop => {
+                        app.actions.remove(i);
+                    }
+                    _ => i += 1,
+                }
+            }
+        }
+        // The keybinds list (T) floats over this window too, and can be
+        // used from here: rebinding reads this window's keys.
+        if matches!(app.dialog, Some(crate::model::Dialog::Shortcuts)) {
+            super::dialogs::show(app, &ctx);
+        }
+        // How much of the right side the queue takes, so the lyrics move over.
+        let queue_width = if app.extra_queue_open {
+            (ctx.content_rect().width() - 24.0).clamp(220.0, 360.0) + 24.0
+        } else {
+            0.0
+        };
+        ctx.data_mut(|data| data.insert_temp(egui::Id::new("extra-queue-width"), queue_width));
         // This window is only ever the visualizer. Its lyrics button shows the
         // lyrics beside the cover, like the full screen visualizer's.
         let lyrics_mode = false;
@@ -186,6 +252,33 @@ pub fn show(app: &mut App, ctx: &Context) {
             app.fullscreen_vis = saved_full;
             app.settings.float_detached = detached;
         }
+        // The queue, over the right side of the picture.
+        if app.extra_queue_open {
+            if matches!(app.queue, crate::model::Loadable::NotLoaded) {
+                app.actions.push(crate::model::Action::RefreshQueue);
+            }
+            let width = (rect.width() - 24.0).clamp(220.0, 360.0);
+            let top = rect.top() + 56.0;
+            let height = (rect.height() - 56.0 - 90.0).max(120.0);
+            let palette = app.palette;
+            egui::Area::new(egui::Id::new("extra-queue"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(pos2(rect.right() - width - 12.0, top))
+                .show(&ctx, |ui| {
+                    Frame::new()
+                        .fill(palette.panel.gamma_multiply(0.86))
+                        .corner_radius(egui::CornerRadius::same(10))
+                        .inner_margin(egui::Margin::same(8))
+                        .show(ui, |ui| {
+                            ui.set_width(width - 16.0);
+                            ui.set_height(height - 16.0);
+                            egui::ScrollArea::vertical()
+                                .id_salt("extra-queue-scroll")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| super::queue::contents(app, ui, true));
+                        });
+                });
+        }
         // Three small buttons: settings, visualizer or lyrics, and close.
         let (pointer, pressed) = ctx.input(|input| (input.pointer.hover_pos(), input.pointer.primary_pressed()));
         let near = pointer.is_some_and(|p| rect.contains(p) && p.y < rect.top() + 70.0);
@@ -194,13 +287,16 @@ pub fn show(app: &mut App, ctx: &Context) {
         let wave = egui::Rect::from_min_size(pos2(rect.left() + 10.0, rect.top() + 10.0), size);
         let swap = egui::Rect::from_min_size(pos2(rect.left() + 48.0, rect.top() + 10.0), size);
         let exit = egui::Rect::from_min_size(pos2(rect.right() - 42.0, rect.top() + 10.0), size);
+        let pin = egui::Rect::from_min_size(pos2(rect.left() + 86.0, rect.top() + 10.0), size);
+        let queue_button = egui::Rect::from_min_size(pos2(rect.left() + 124.0, rect.top() + 10.0), size);
         let swap_icon = theme::Icon::Mic;
         let painter = ui.painter().clone();
-        for (button, icon) in [(wave, theme::Icon::Settings), (swap, swap_icon), (exit, theme::Icon::X)] {
+        for (button, icon) in [(wave, theme::Icon::Settings), (swap, swap_icon), (pin, theme::Icon::Pin), (queue_button, theme::Icon::ListMusic), (exit, theme::Icon::X)] {
             let hot = pointer.is_some_and(|p| button.contains(p));
             painter.circle_filled(button.center(), 16.0, Color32::from_black_alpha(if hot { 190 } else { 120 }));
             let icon_rect = egui::Rect::from_center_size(button.center(), egui::vec2(18.0, 18.0));
-            theme::paint_icon(ui, icon, icon_rect, 18.0, Color32::from_white_alpha(if hot { 255 } else { alpha }));
+            let lit = hot || (button == pin && extra_top) || (button == queue_button && app.extra_queue_open);
+            theme::paint_icon(ui, icon, icon_rect, 18.0, Color32::from_white_alpha(if lit { 255 } else { alpha }));
             if hot {
                 ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
             }
@@ -210,6 +306,10 @@ pub fn show(app: &mut App, ctx: &Context) {
                 app.extra_vis_panel = !was_open;
             } else if swap.contains(p) {
                 app.actions.push(crate::model::Action::ToggleVisLyrics);
+            } else if pin.contains(p) {
+                app.actions.push(crate::model::Action::ToggleExtraOnTop);
+            } else if queue_button.contains(p) {
+                app.extra_queue_open = !app.extra_queue_open;
             } else if exit.contains(p) {
                 close = true;
             }

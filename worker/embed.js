@@ -31,7 +31,10 @@ export default {
         );
         const thumb = (await meta.json()).thumbnail_url;
         if (typeof thumb === "string" && /^https:\/\/i\.scdn\.co\//.test(thumb)) {
-          const picture = await fetch(thumb, { cf: { cacheTtl: 86400, cacheEverything: true } });
+          // oEmbed hands back a 300 px picture; the 640 px one sits at the same
+          // address with a different prefix. Fall back if it is not there.
+          let picture = await fetch(big(thumb), { cf: { cacheTtl: 86400, cacheEverything: true } });
+          if (!picture.ok) picture = await fetch(thumb, { cf: { cacheTtl: 86400, cacheEverything: true } });
           if (picture.ok) {
             return new Response(picture.body, {
               headers: {
@@ -47,6 +50,47 @@ export default {
     }
     if (url.pathname === "/version") {
       return new Response(JSON.stringify({ worker: VERSION }), { headers: { "content-type": "application/json", "access-control-allow-origin": "*", "cache-control": "no-store" } });
+    }
+    // /find?a=<artist>&t=<song>: a page made from names alone, for the browser
+    // extension, which knows a song's name but not its Spotify id.
+    if (url.pathname === "/find") {
+      const a = (url.searchParams.get("a") || "").slice(0, 150);
+      const t = (url.searchParams.get("t") || "").slice(0, 150);
+      if (a || t) {
+        // A picture from the iTunes catalogue (free, no key), when it knows the song.
+        let image = "";
+        try {
+          const term = encodeURIComponent((t ? a + " " + t : a).trim());
+          const found = await fetch(
+            "https://itunes.apple.com/search?media=music&limit=1&entity=" + (t ? "song" : "album") + "&term=" + term,
+            { cf: { cacheTtl: 86400, cacheEverything: true } },
+          );
+          const art = (await found.json()).results?.[0]?.artworkUrl100;
+          if (typeof art === "string" && /^https:\/\/[a-z0-9.-]+\.mzstatic\.com\//.test(art)) {
+            image = url.origin + "/f?u=" + encodeURIComponent(art.replace(/\/\d+x\d+bb\./, "/1000x1000bb."));
+          }
+        } catch (_) {}
+        return new Response(page({ title: t || a, artist: t ? a : "", id: null, image, find: t ? "play" : "artist" }), html());
+      }
+    }
+    // The picture itself, passed through so the swirl may read its pixels.
+    if (url.pathname === "/f") {
+      const wanted = url.searchParams.get("u") || "";
+      if (/^https:\/\/[a-z0-9.-]+\.mzstatic\.com\//.test(wanted)) {
+        try {
+          const picture = await fetch(wanted, { cf: { cacheTtl: 86400, cacheEverything: true } });
+          if (picture.ok) {
+            return new Response(picture.body, {
+              headers: {
+                "content-type": picture.headers.get("content-type") || "image/jpeg",
+                "access-control-allow-origin": "*",
+                "cache-control": "public, max-age=86400",
+              },
+            });
+          }
+        } catch (_) {}
+      }
+      return new Response("", { status: 404 });
     }
     const match = url.pathname.match(/^\/([tapu])\/([A-Za-z0-9._-]{2,40})\/?$/);
     if (!match) {
@@ -68,7 +112,7 @@ export default {
       );
       if (res.ok) {
         const data = await res.json();
-        if (!image) image = data.thumbnail_url || "";
+        if (!image) image = big(data.thumbnail_url || "");
         if (!title) title = data.title || "";
       }
     } catch (_) {}
@@ -78,7 +122,30 @@ export default {
 
 const html = () => ({ headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" } });
 
-function page({ title, artist, id, image, kind = "t" }) {
+// Last.fm spells spaces as + in its addresses. With no artist to go on, a
+// song falls back to Last.fm's search.
+function lastfmLink(kind, artist, title) {
+  const part = (text) => encodeURIComponent(text).replace(/%20/g, "+");
+  if (kind === "a") return "https://www.last.fm/music/" + part(title);
+  if (artist) return "https://www.last.fm/music/" + part(artist.split(/,| & /)[0].trim()) + "/_/" + part(title);
+  return "https://www.last.fm/search?q=" + part(title);
+}
+
+// The buttons of a names-only page: open it in chanceify, or look it up.
+function findButtons(mode, artist, title) {
+  const part = (text) => encodeURIComponent(text);
+  const query = mode === "artist" ? title : (artist ? artist + " " : "") + title;
+  const open = mode === "artist"
+    ? `chanceify://artist?artist=${part(title)}`
+    : `chanceify://play?artist=${part(artist)}&track=${part(title)}`;
+  return `<div class="row stack"><a class="btn" href="${esc(open)}">Open in chanceify</a>
+<a class="btn sp" href="https://open.spotify.com/search/${part(query)}" target="_blank" rel="noopener">Search on Spotify</a>
+<a class="btn lf" href="${esc(lastfmLink(mode === "artist" ? "a" : "t", artist, title))}" target="_blank" rel="noopener">Open on Last.fm</a>
+<a class="btn yt" href="https://www.youtube.com/results?search_query=${part(query)}" target="_blank" rel="noopener">Search on YouTube</a>
+<a class="btn sc" href="https://soundcloud.com/search?q=${part(query)}" target="_blank" rel="noopener">Search on SoundCloud</a></div>`;
+}
+
+function page({ title, artist, id, image, kind = "t", find = "" }) {
   const spotify = id ? `https://open.spotify.com/${KIND[kind]}/${id}` : "https://github.com/madlygeeked/chanceify";
   const line = artist ? `${artist}` : "Listening on chanceify™";
   const desc = artist ? `${artist}. Listening on chanceify™` : "Listening on chanceify™";
@@ -112,6 +179,7 @@ p{margin:0;color:#c4b5fd;font-size:16px}
 .btn.yt{background:#e62117;color:#fff;font-weight:600}
 .btn.sc{background:#ff5500;color:#fff;font-weight:600}
 .btn.sp{background:#1db954;color:#fff;font-weight:600}
+.btn.lf{background:#d51007;color:#fff;font-weight:600}
 .btn.alt{background:#ffffff14;border:1px solid #a78bfa55;color:#ede9fe;font-weight:500}
 .btn.alt:hover{background:#a78bfa2a}
 .play{margin-top:18px;border:0;border-radius:14px;color-scheme:normal}
@@ -126,10 +194,12 @@ p{margin:0;color:#c4b5fd;font-size:16px}
 <div class="cover"${image ? ` style="background-image:url('${esc(image)}')"` : ""}></div>
 <h1>${esc(title)}</h1>
 <p>${esc(line)}</p>
+${find ? findButtons(find, artist, title) : ""}
 ${id ? `<div class="row stack">${kind !== "u" ? `<a class="btn" href="chanceify://${KIND[kind]}/${esc(id)}">Open in chanceify</a>` : ""}
 ${kind === "t" || kind === "a" ? `<a class="btn yt" href="https://www.youtube.com/results?search_query=${encodeURIComponent((artist ? artist + " " : "") + title)}" target="_blank" rel="noopener">Search on YouTube</a>
 <a class="btn sc" href="https://soundcloud.com/search?q=${encodeURIComponent((artist ? artist + " " : "") + title)}" target="_blank" rel="noopener">Search on SoundCloud</a>` : ""}
-<a class="btn sp" href="${esc(spotify)}">Open in Spotify</a></div>
+<a class="btn sp" href="${esc(spotify)}">Open in Spotify</a>
+${kind === "t" || kind === "a" ? `<a class="btn lf" href="${esc(lastfmLink(kind, artist, title))}" target="_blank" rel="noopener">Open on Last.fm</a>` : ""}</div>
 ${kind === "u" ? "" : `<iframe class="play" title="Play a preview" src="https://open.spotify.com/embed/${KIND[kind]}/${esc(id)}?theme=0" width="100%" height="152" frameborder="0" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy"></iframe>`}` : ""}
 <div class="foot">Built with love by <a href="https://madlygeeked.github.io/">chance</a><img class="bear" id="bear" alt=""></div>
 </main>
@@ -143,7 +213,7 @@ ${kind === "u" ? "" : `<iframe class="play" title="Play a preview" src="https://
   function say(m){}
   say("starting");
   var gl=cv.getContext("webgl",{antialias:false});
-  var urls=${JSON.stringify(id ? ["/c/" + kind + "/" + id, image || ""].filter(Boolean) : [])};
+  var urls=${JSON.stringify(id ? ["/c/" + kind + "/" + id, image || ""].filter(Boolean) : image ? [image] : [])};
   if(!gl){say("this browser has no WebGL (gradient only)");return}
   var still=matchMedia("(prefers-reduced-motion: reduce)").matches;
   function sh(type,src){var o=gl.createShader(type);gl.shaderSource(o,src);gl.compileShader(o);return o}
@@ -204,4 +274,9 @@ ${kind === "u" ? "" : `<iframe class="play" title="Play a preview" src="https://
 })();
 </script>
 </body></html>`;
+}
+
+// Spotify's 300 px cover address, rewritten to the 640 px one.
+function big(thumb) {
+  return typeof thumb === "string" ? thumb.replace("ab67616d00001e02", "ab67616d0000b273") : thumb;
 }

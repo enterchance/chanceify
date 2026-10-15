@@ -156,6 +156,10 @@ fn cover_play_button(
 /// Whether this row is a playlist holding songs that can no longer be played
 /// (from the last "Unavailable songs" scan in Settings).
 fn needs_attention(app: &App, entry: &Entry) -> bool {
+    // The same switch as the dot on the profile picture.
+    if !app.settings.unavailable_dot {
+        return false;
+    }
     let Page::Playlist(id) = &entry.page else {
         return false;
     };
@@ -392,6 +396,9 @@ fn library_menu(
 ) {
     egui::Popup::menu(anchor)
         .frame(super::widgets::menu_frame(&app.palette))
+        // Stays open while choices are made (the name size's + and -, the
+        // layout pictures); a click outside closes it.
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| library_menu_body(app, ui, shelf, selected));
 }
 
@@ -1379,6 +1386,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, grid_art: Option<Rect>) {
             .align(egui::RectAlign::RIGHT_START)
             .frame(super::widgets::menu_frame(&app.palette))
             .width(250.0)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
                 ui.set_max_width(290.0);
                 let _ = (filter, sort);

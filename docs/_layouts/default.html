@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% if page.title and page.title != site.title %}{{ page.title }} · {% endif %}{{ site.title }}</title>
 <meta name="description" content="{{ site.description }}">
+{% if page.noindex %}<meta name="robots" content="noindex">{% endif %}
 <meta name="theme-color" content="#0a0914">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="chanceify™">
@@ -22,7 +23,7 @@
 <style>html{background:#2a1850}</style>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&display=swap">
 <link rel="stylesheet" href="https://madlygeeked.github.io/style.css?v=23">
-<link rel="stylesheet" href="https://madlygeeked.github.io/docs.css?v=23">
+<link rel="stylesheet" href="https://madlygeeked.github.io/docs.css?v=24">
 </head>
 <body class="hdr-right scenic-docs">
 <canvas id="flow" aria-hidden="true"></canvas>
@@ -40,6 +41,7 @@
         {% if page.tagline %}<p class="tag">{{ page.tagline }}</p>{% endif %}
         <div class="actions">
           <a class="btn primary big" href="https://github.com/madlygeeked/chanceify/releases">download</a>
+          <a class="btn" href="{{ '/gallery/' | relative_url }}">gallery</a>
           <a class="btn" href="https://github.com/madlygeeked/chanceify">source code</a>
         </div>
       </div>

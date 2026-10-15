@@ -165,6 +165,7 @@ const MARQUEE_SPEED: f32 = 22.0;
 const QUEUE_ICON_CAP: usize = 2;
 
 /// How many icon-sized slots a row with `count` playlists uses.
+#[allow(dead_code)]
 fn membership_slots(count: usize, capped: bool) -> usize {
     if capped && count > QUEUE_ICON_CAP {
         QUEUE_ICON_CAP + 1
@@ -173,6 +174,7 @@ fn membership_slots(count: usize, capped: bool) -> usize {
     }
 }
 
+#[allow(dead_code)]
 fn membership_width(app: &App, count: usize, capped: bool) -> f32 {
     let count = membership_slots(count, capped);
     if count == 0 {
@@ -182,6 +184,7 @@ fn membership_width(app: &App, count: usize, capped: bool) -> f32 {
     count as f32 * height + (count as f32 - 1.0) * gap + 8.0
 }
 
+#[allow(dead_code)]
 fn membership_icons(ui: &Ui, app: &mut App, rect: Rect, right: f32, row: &TrackRow<'_>) {
     if !row.item.is_track() {
         return;
@@ -321,7 +324,7 @@ fn paint_membership_icon(
 /// The playlists column: the song's playlists as a small grid from the cell's
 /// left (one, two side by side, four as two by two, six as three by two),
 /// scaled to the cell, so the column can stay narrow.
-fn membership_grid(ui: &Ui, app: &mut App, cell: Rect, row: &TrackRow<'_>) {
+fn membership_grid(ui: &Ui, app: &mut App, cell: Rect, row: &TrackRow<'_>, max_tile: Option<f32>) {
     if !row.item.is_track() {
         return;
     }
@@ -336,9 +339,11 @@ fn membership_grid(ui: &Ui, app: &mut App, cell: Rect, row: &TrackRow<'_>) {
     // One square the size of the single cover: a lone playlist fills it, two
     // sit side by side at half the size, three or four make two by two, up to
     // nine in three by three, and so on, each cover smaller than the last.
-    const CAP: usize = 16;
+    let cap: usize = if max_tile.is_some() { 9 } else { 16 };
     let (base, _) = membership_metrics(app.settings.membership_icon_scale);
-    let slots = total.min(CAP);
+    let base = max_tile.map_or(base, |m| base.min(m));
+    let pad = if max_tile.is_some() { 0.0 } else { 12.0 };
+    let slots = total.min(cap);
     let cols = match slots {
         1 => 1,
         2..=4 => 2,
@@ -347,14 +352,14 @@ fn membership_grid(ui: &Ui, app: &mut App, cell: Rect, row: &TrackRow<'_>) {
     };
     let rows = slots.div_ceil(cols);
     let gap = if cols >= 3 { 1.5_f32 } else { 2.0 };
-    let side = (cell.width() - 12.0).min(cell.height() - 10.0).max(10.0);
+    let side = (cell.width() - pad).min(cell.height() - if max_tile.is_some() { 4.0 } else { 10.0 }).max(10.0);
     let size = base.min((side - (cols as f32 - 1.0) * gap) / cols as f32).max(6.0);
     let grid_w = cols as f32 * size + (cols as f32 - 1.0) * gap;
     let grid_h = rows as f32 * size + (rows as f32 - 1.0) * gap;
-    let left = cell.left() + (cell.width() - 12.0 - grid_w).max(0.0) / 2.0;
+    let left = cell.left() + (cell.width() - pad - grid_w).max(0.0) / 2.0;
     let top = cell.center().y - grid_h / 2.0;
     let art = app.backend.art().clone();
-    let drawn = if total > CAP { CAP - 1 } else { total };
+    let drawn = if total > cap { cap - 1 } else { total };
     let spot = |index: usize| {
         let (r, c) = (index / cols, index % cols);
         Rect::from_min_size(pos2(left + c as f32 * (size + gap), top + r as f32 * (size + gap)), Vec2::splat(size))
@@ -506,6 +511,23 @@ pub(super) fn paint_cover_with_thumbnail(
         }
         let icon_size = (rect.width() * 0.42).clamp(12.0, 64.0);
         theme::paint_icon(ui, fallback, rect, icon_size, palette.dim);
+    }
+}
+
+/// The decoded texture for `url`, if it is already loaded.
+pub(super) fn ready_cover_texture(
+    ui: &Ui,
+    url: &str,
+    art: &crate::images::ArtLoader,
+) -> Option<egui::load::SizedTexture> {
+    if !art.is_ready(url) {
+        return None;
+    }
+    art.touch(url);
+    let image = egui::Image::new(url).show_loading_spinner(false);
+    match image.load_for_size(ui.ctx(), Vec2::splat(640.0)) {
+        Ok(egui::load::TexturePoll::Ready { texture }) => Some(texture),
+        _ => None,
     }
 }
 
@@ -738,6 +760,22 @@ fn menu_item_response(
     enabled: bool,
     highlighted: bool,
 ) -> (egui::Response, bool) {
+    menu_row(ui, palette, icon, label, enabled, highlighted, None)
+}
+
+/// A menu row. With `badge` set, the icon slot is a small circle: the
+/// playlist icon in an outline, or, when `Some(true)`, a filled circle with a
+/// check (the song is already there).
+fn menu_row(
+    ui: &mut Ui,
+    palette: &Palette,
+    icon: Option<Icon>,
+    label: &str,
+    enabled: bool,
+    highlighted: bool,
+    badge: Option<bool>,
+) -> (egui::Response, bool) {
+    let icon = if badge.is_some() { Some(Icon::ListMusic) } else { icon };
     // In a popup menu the rows are only as wide as the widest label, so the
     // menu has no empty space on its right.
     let need = {
@@ -771,15 +809,30 @@ fn menu_item_response(
         if let Some(icon) = icon {
             let icon_rect =
                 Rect::from_center_size(pos2(x + 8.0, rect.center().y), Vec2::splat(16.0));
-            icon.image(
-                if enabled {
-                    palette.secondary
+            if let Some(present) = badge {
+                let centre = icon_rect.center();
+                if present {
+                    ui.painter().circle_filled(centre, 9.0, palette.accent);
+                    Icon::Check
+                        .image(palette.on_accent, 12.0)
+                        .paint_at(ui, Rect::from_center_size(centre, Vec2::splat(12.0)));
                 } else {
-                    palette.dim
-                },
-                16.0,
-            )
-            .paint_at(ui, icon_rect);
+                    ui.painter()
+                        .circle_stroke(centre, 8.5, Stroke::new(1.2, palette.dim));
+                    icon.image(palette.secondary, 11.0)
+                        .paint_at(ui, Rect::from_center_size(centre, Vec2::splat(11.0)));
+                }
+            } else {
+                icon.image(
+                    if enabled {
+                        palette.secondary
+                    } else {
+                        palette.dim
+                    },
+                    16.0,
+                )
+                .paint_at(ui, icon_rect);
+            }
             x += 26.0;
         }
         // A playlist can be named a paragraph; the label ends at the menu's
@@ -1254,8 +1307,9 @@ pub(crate) fn playlist_picker(
             for (index, (id, name)) in matches.into_iter().enumerate() {
                 ui.push_id(id, |ui| {
                     let chosen = highlighted == Some(index);
+                    let present = app.playlist_has_all(id, items);
                     let (row, clicked) =
-                        menu_item_response(ui, &palette, Some(Icon::ListMusic), name, true, chosen);
+                        menu_row(ui, &palette, None, name, true, chosen, Some(present));
                     if chosen && moved {
                         row.scroll_to_me(None);
                     }
@@ -1605,6 +1659,11 @@ pub fn context_menu_items(
         && menu_item(ui, &palette, Some(Icon::Shuffle), "Smart shuffle (by tempo)")
     {
         app.actions.push(Action::SmartShufflePlay(uri.to_string()));
+    }
+    if (kind == "playlist" || uri.ends_with(":collection"))
+        && menu_item(ui, &palette, Some(Icon::Shuffle), "Shuffle: songs I haven't heard lately")
+    {
+        app.actions.push(Action::FreshShufflePlay(uri.to_string()));
     }
     if kind == "playlist"
         && menu_item(ui, &palette, Some(Icon::ListMusic), "Save list to index (offline)")
@@ -2337,6 +2396,24 @@ fn track_row_contents(
         if bare { 0.0 } else { centred_shift(region, others, &app.settings.track_columns) }
     };
     let mut x = rect.left() + 8.0 + lone_shift;
+    // The queue's playlist icons: a small grid in a column of its own, left
+    // of the number, never bigger than the cover (a lone icon is half of it).
+    let cover_side = if row.compact { 36.0 } else { 40.0 };
+    let icon_col = if bare
+        && !ui
+            .data(|data| data.get_temp::<bool>(egui::Id::new("queue-hide-icons")))
+            .unwrap_or(false)
+        && row.item.is_track()
+    {
+        cover_side + 6.0
+    } else {
+        0.0
+    };
+    if icon_col > 0.0 {
+        let cell = Rect::from_min_size(pos2(x, rect.top()), vec2(cover_side, row_height));
+        membership_grid(ui, app, cell, &row, Some(cover_side / 2.0));
+        x += icon_col;
+    }
 
     // Number / play.
     let pending = app.play_pending(row.item.uri());
@@ -2529,7 +2606,7 @@ fn track_row_contents(
     // Outside the queue the playlist icons live in the PLAYLISTS column and
     // nowhere else: a table with that column off shows none beside the
     // song name.
-    let wanted_icons = if hide_icons || cols.playlists > 0.0 || !bare {
+    let wanted_icons = if hide_icons || cols.playlists > 0.0 || !bare || icon_col > 0.0 {
         0.0
     } else {
         membership_width(app, membership_shown(app, &row).len(), bare)
@@ -2777,7 +2854,7 @@ fn track_row_contents(
         x = slot_at(crate::model::SortColumn::Playlists).unwrap_or(x);
         rule(x);
         let cell = Rect::from_min_size(pos2(x, rect.top()), vec2(cols.playlists, row_height));
-        membership_grid(ui, app, cell, &row);
+        membership_grid(ui, app, cell, &row, None);
         x += cols.playlists;
     }
     if cols.album > 0.0 {
@@ -3055,7 +3132,7 @@ fn track_row_contents(
             None
         };
         let on_control = control.is_some_and(|size| {
-            let control_rect = Rect::from_min_size(pos2(rect.left() + 8.0, rect.top()), size);
+            let control_rect = Rect::from_min_size(pos2(rect.left() + 8.0 + icon_col, rect.top()), size);
             response
                 .interact_pointer_pos()
                 .is_some_and(|pos| control_rect.contains(pos))
@@ -3237,31 +3314,34 @@ pub(crate) fn columns_menu(ui: &mut Ui, palette: &Palette, locale: crate::i18n::
     use crate::model::SortColumn;
     ui.set_width(220.0);
                     ui.spacing_mut().item_spacing.y = 1.0;
-                    if checkbox_row(ui, palette, &gettext(locale, "GRID VIEW"), widths.grid) {
-                        widths.grid = !widths.grid;
-                    }
-                    if checkbox_row(ui, palette, &gettext(locale, "SPREAD EVENLY"), widths.spread) {
-                        widths.spread = !widths.spread;
-                    }
-                    if checkbox_row(ui, palette, &gettext(locale, "LOCK TO THE LEFT"), widths.lock_left) {
-                        widths.lock_left = !widths.lock_left;
-                    }
+                    // Two icon switches, no words: the grid view, and spreading
+                    // the columns evenly.
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        if icon_toggle(ui, palette, Icon::LayoutGrid, widths.grid, "Grid view") {
+                            widths.grid = !widths.grid;
+                        }
+                        if icon_toggle(ui, palette, Icon::Spread, widths.spread, "Spread evenly") {
+                            widths.spread = !widths.spread;
+                        }
+                    });
                     menu_separator(ui, palette);
-                    if checkbox_row(
-                        ui,
-                        palette,
-                        &gettext(locale, "NUMBER"),
-                        !widths.hide_number,
-                    ) {
+                    // In the order they sit in the table: the number, the cover,
+                    // the title (always there) with the artist under it, then
+                    // the rest from left to right.
+                    if checkbox_row(ui, palette, &gettext(locale, "NUMBER"), !widths.hide_number) {
                         widths.hide_number = !widths.hide_number;
                     }
-                    for (column, entry) in RESIZABLE {
-                        if checkbox_row(
-                            ui,
-                            palette,
-                            &column_label(locale, entry),
-                            widths.shown(column),
-                        ) {
+                    if checkbox_row(ui, palette, &gettext(locale, "COVER"), !widths.hide_cover) {
+                        widths.hide_cover = !widths.hide_cover;
+                    }
+                    checkbox_row_ex(ui, palette, &gettext(locale, "TITLE"), true, false, "");
+                    if checkbox_row(ui, palette, &gettext(locale, "ARTIST"), !widths.hide_artist) {
+                        widths.hide_artist = !widths.hide_artist;
+                    }
+                    for column in [SortColumn::Playlists, SortColumn::Album, SortColumn::Added] {
+                        let entry = RESIZABLE.iter().find(|(c, _)| *c == column).map(|(_, e)| *e).unwrap_or("");
+                        if checkbox_row(ui, palette, &column_label(locale, entry), widths.shown(column)) {
                             widths.toggle(column);
                         }
                     }
@@ -3273,19 +3353,11 @@ pub(crate) fn columns_menu(ui: &mut Ui, palette: &Palette, locale: crate::i18n::
                     ) {
                         widths.toggle(SortColumn::Release);
                     }
-                    if checkbox_row(
-                        ui,
-                        palette,
-                        &gettext(locale, "LENGTH"),
-                        !widths.hide_duration,
-                    ) {
+                    if checkbox_row(ui, palette, &gettext(locale, "LENGTH"), !widths.hide_duration) {
                         widths.hide_duration = !widths.hide_duration;
                     }
-                    if checkbox_row(ui, palette, &gettext(locale, "COVER"), !widths.hide_cover) {
-                        widths.hide_cover = !widths.hide_cover;
-                    }
-                    if checkbox_row(ui, palette, &gettext(locale, "ARTIST"), !widths.hide_artist) {
-                        widths.hide_artist = !widths.hide_artist;
+                    if checkbox_row(ui, palette, &pgettext(locale, "column heading", "BPM"), widths.shown(SortColumn::Bpm)) {
+                        widths.toggle(SortColumn::Bpm);
                     }
                     if checkbox_row(ui, palette, &gettext(locale, "LIKED"), !widths.hide_heart) {
                         widths.hide_heart = !widths.hide_heart;
@@ -3355,6 +3427,28 @@ fn column_label(locale: Locale, entry: &'static str) -> String {
         Some((context, text)) => pgettext(locale, context, text).into_owned(),
         None => gettext(locale, entry).into_owned(),
     }
+}
+
+/// A small square switch drawn as an icon alone: lit when on.
+fn icon_toggle(ui: &mut Ui, palette: &Palette, icon: Icon, on: bool, tooltip: &str) -> bool {
+    let (rect, response) = ui.allocate_exact_size(vec2(36.0, 30.0), Sense::click());
+    if ui.is_rect_visible(rect) {
+        let fill = if on {
+            palette.accent.gamma_multiply(0.3)
+        } else if response.hovered() {
+            palette.surface_hover
+        } else {
+            Color32::TRANSPARENT
+        };
+        ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
+        if on {
+            ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, palette.accent), egui::StrokeKind::Inside);
+        }
+        let colour = if on { palette.accent } else { palette.secondary };
+        icon.image(colour, 18.0)
+            .paint_at(ui, Rect::from_center_size(rect.center(), Vec2::splat(18.0)));
+    }
+    response.on_hover_text(tooltip).clicked()
 }
 
 /// A compact row with a green tick box, as in Spotify's Columns menu.
@@ -4260,6 +4354,21 @@ pub fn shelf(
     ui.add_space(12.0);
 }
 
+/// Like `shelf`, but the cards wrap onto more rows and the page scrolls
+/// down, instead of the row scrolling sideways.
+pub fn grid_shelf(
+    ui: &mut Ui,
+    palette: &Palette,
+    title: &str,
+    add_contents: impl FnOnce(&mut Ui),
+) {
+    ui.add_space(8.0);
+    theme::section_title(ui, palette, title);
+    ui.add_space(4.0);
+    grid(ui, add_contents);
+    ui.add_space(12.0);
+}
+
 /// A wrapping grid of cards.
 pub fn grid(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui)) {
     ui.horizontal_wrapped(|ui| {
@@ -4784,6 +4893,23 @@ pub fn credit(ui: &mut Ui, palette: &Palette, locale: Locale) -> bool {
         let (uri, bytes) = credit_icon();
         ui.add_space(6.0);
         ui.add(egui::Image::from_bytes(uri, bytes).fit_to_exact_size(vec2(20.0, 20.0)));
+        // The source code, tiny, right beside the little picture.
+        ui.add_space(8.0);
+        let source = ui
+            .add(
+                egui::Label::new(
+                    egui::RichText::new(gettext(locale, "source code"))
+                        .font(theme::regular(10.0))
+                        .color(palette.dim)
+                        .underline(),
+                )
+                .sense(egui::Sense::click()),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if source.clicked() {
+            ui.ctx()
+                .open_url(egui::OpenUrl::new_tab(crate::build_info::GITHUB_URL));
+        }
     });
     theme::subtle(ui, palette, "Inspired by Spotify, Spotifast and Spicetify");
     clicked

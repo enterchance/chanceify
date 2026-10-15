@@ -16,3 +16,10 @@ Makes the link "Copy the song for Discord" gives out: a pretty page with the cov
 2. Edit code: paste all of `embed.js`, Deploy.
 3. No secrets needed. Copy the address (https://chanceify-embed.<you>.workers.dev) and put it in `EMBED_URL` in `src/discord.rs`
    (until then the app copies the normal Spotify link).
+
+# Deploying both (deploy.bat)
+
+Double-click `deploy.bat` (needs Node.js; the first run opens a browser once to log in to Cloudflare).
+It publishes `embed.js` as `chanceify-embed` and `lastfm-proxy.js` as `chanceify-lastfm`, then offers to set the
+Last.fm key and secret. `deploy.bat embed` or `deploy.bat lastfm` does just one. The song page now also has an
+"Open on Last.fm" button under "Open in Spotify".

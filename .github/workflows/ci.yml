@@ -1,10 +1,9 @@
 name: CI
 
+# Chanceify is built and tested on chance's own PC, and these jobs (fmt,
+# clippy, the Linux build) failed on every push and sent a "run failed" email
+# each time. Manual only now: Actions tab > CI > Run workflow.
 on:
-  push:
-    branches: [main]
-  pull_request:
-  merge_group:
   workflow_dispatch:
 
 permissions:

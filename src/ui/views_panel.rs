@@ -240,7 +240,7 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
         }) || last.is_none();
         // Resting, the buttons stay easy to see; the pointer on any part of
         // the card or the controls brings it all to full.
-        fade_to(ctx, near, &format!("pop-out-seen-{vp:?}"), app.settings.float_idle.unwrap_or(0.5).clamp(0.05, 1.0))
+        fade_to(ctx, near, &format!("pop-out-seen-{vp:?}"), app.settings.float_idle.unwrap_or(0.5).clamp(0.0, 1.0))
     } else {
         1.0
     };
@@ -376,20 +376,46 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                 let title_h = title.size().y;
                 let title_w = title.size().x;
                 let first_row = title_h / title.rows.len().max(1) as f32;
-                let words = Rect::from_min_size(egui::pos2(text_left, y), egui::vec2(text_w, block));
-                let cut = title.rows.len() > 1 || title_w >= text_w - 2.0 || artist.size().x >= text_w - 2.0;
-                let mut words_click = ui
-                    .interact(words, Id::new("pop-out-card-words"), egui::Sense::click())
+                let artist_size = artist.size();
+                let cut = title.rows.len() > 1 || title_w >= text_w - 2.0 || artist_size.x >= text_w - 2.0;
+                // The name and the artist each take their own click: the
+                // name jumps to the song's place in the list it is playing
+                // from (or opens its album), the artist opens the artist.
+                let title_area = Rect::from_min_size(egui::pos2(text_left, y), egui::vec2(title_w.min(text_w).max(24.0), title_h));
+                let artist_area = Rect::from_min_size(
+                    egui::pos2(text_left, y + title_h + 4.0),
+                    egui::vec2(artist_size.x.min(text_w).max(24.0), artist_size.y),
+                );
+                let mut title_click = ui
+                    .interact(title_area, Id::new("pop-out-card-title"), egui::Sense::click())
                     .on_hover_cursor(egui::CursorIcon::PointingHand);
                 if cut {
                     // Too long to show whole: the full name is on hover.
-                    words_click = words_click.on_hover_text(format!("{}\n{}", now.title, now.subtitle));
+                    title_click = title_click.on_hover_text(format!("{}\n{}", now.title, now.subtitle));
                 }
-                if words_click.clicked() {
-                    open_song(app);
+                if title_click.clicked() {
+                    let from_list = app
+                        .playing_context_uri()
+                        .and_then(|context| crate::model::Page::from_uri(&context))
+                        .is_some_and(|page| matches!(page, crate::model::Page::Playlist(_) | crate::model::Page::Album(_)));
+                    if from_list && !now.uri.is_empty() {
+                        app.actions.push(Action::RevealSong { uri: now.uri.clone() });
+                    } else {
+                        open_song(app);
+                    }
                 }
                 if let Some(song) = &song {
-                    words_click.context_menu(|ui| super::widgets::item_menu(ui, app, song, None, None));
+                    title_click.context_menu(|ui| super::widgets::item_menu(ui, app, song, None, None));
+                }
+                let artist_click = ui
+                    .interact(artist_area, Id::new("pop-out-card-artist"), egui::Sense::click())
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                if artist_click.clicked() {
+                    if let Some(id) = now.artists.first().and_then(|artist| artist.id.clone()) {
+                        app.actions.push(Action::Open(crate::model::Page::Artist(id)));
+                    } else if let Some(id) = &now.show_id {
+                        app.actions.push(Action::Open(crate::model::Page::Show(id.clone())));
+                    }
                 }
                 ui.painter().galley(egui::pos2(text_left, y), title, palette.text);
                 // The like heart, right after the song's name.
@@ -503,10 +529,15 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                 if app.fullscreen_vis {
                     // How much of the controls stays showing once the mouse
                     // has left them.
-                    let mut idle = app.settings.float_idle.unwrap_or(0.5).clamp(0.05, 1.0) * 100.0;
+                    let mut idle = app.settings.float_idle.unwrap_or(0.5).clamp(0.0, 1.0) * 100.0;
                     ui.label("opacity when the mouse is away");
-                    if ui.add(egui::Slider::new(&mut idle, 5.0..=100.0).suffix("%")).changed() {
+                    if ui.add(egui::Slider::new(&mut idle, 0.0..=100.0).suffix("%")).changed() {
                         app.settings.float_idle = Some(idle / 100.0);
+                        app.mark_settings_dirty();
+                    }
+                    let mut keep = app.settings.float_keep_play;
+                    if ui.checkbox(&mut keep, "keep the play button showing").changed() {
+                        app.settings.float_keep_play = keep;
                         app.mark_settings_dirty();
                     }
                     ui.separator();
@@ -817,6 +848,7 @@ pub fn show(app: &mut App, ctx: &Context) {
         .order(egui::Order::Foreground)
         .frame(frame)
         .fixed_pos(panel_pos)
+        .constrain_to(super::player_bar::unscaled_screen(ctx, pivot, scale))
         .min_width(width)
         .max_width(width)
         .resizable(false)
@@ -860,7 +892,7 @@ pub fn show(app: &mut App, ctx: &Context) {
                         }
                     });
                     ui.add_space(4.0);
-                    let on_top = ("Always on top", app.settings.mini_on_top, Action::ToggleMiniOnTop);
+                    let on_top = ("Always on top", app.settings.main_on_top, Action::ToggleMainOnTop);
                     let flag = |bit: u8, label: &'static str, inverted: bool, app: &App| {
                         (label, app.settings.lyrics_flag(bit) != inverted, Action::ToggleLyricsFlag(bit))
                     };
@@ -873,7 +905,7 @@ pub fn show(app: &mut App, ctx: &Context) {
                             flag(S::LYRICS_FLOAT_ART, "Floating art", false, app),
                             flag(S::LYRICS_BOUNCE_ART, "Art bounces", false, app),
                             ("Artist name", !app.settings.vis_text_no_artist, Action::ToggleVisArtist),
-                            ("Visualizer settings", app.vis_panel, Action::ToggleVisPanel),
+                            ("Settings", app.vis_panel, Action::ToggleVisPanel),
                             (if app.extra_vis { "Close visualizer window" } else { "New visualizer window" }, app.extra_vis, Action::ToggleExtraWindow),
                             on_top,
                         ],
@@ -885,7 +917,7 @@ pub fn show(app: &mut App, ctx: &Context) {
                             flag(S::LYRICS_COUNTDOWN, "Countdown", false, app),
                             flag(S::LYRICS_HIDE_ARTIST, "Artist name", true, app),
                             ("Visualizer behind", app.settings.lyrics_vis, Action::ToggleLyricsVis),
-                            ("Visualizer settings", app.vis_panel, Action::ToggleVisPanel),
+                            ("Settings", app.vis_panel, Action::ToggleVisPanel),
                             on_top,
                         ],
                         _ => vec![
@@ -894,7 +926,7 @@ pub fn show(app: &mut App, ctx: &Context) {
                             ("Queue", app.show_queue_panel, Action::InDefaultView(Box::new(Action::ToggleQueuePanel))),
                             ("Big album art", app.settings.art_expanded, Action::InDefaultView(Box::new(Action::ToggleArtExpanded))),
                             ("Visualizer", app.settings.vis_shapes_value() != 0, Action::ToggleVisShapes),
-                            ("Visualizer settings", app.vis_panel, Action::ToggleVisPanel),
+                            ("Settings", app.vis_panel, Action::ToggleVisPanel),
                             (if app.extra_vis { "Close visualizer window" } else { "New visualizer window" }, app.extra_vis, Action::ToggleExtraWindow),
                             on_top,
                         ],
@@ -928,7 +960,7 @@ pub fn show(app: &mut App, ctx: &Context) {
                                     "Queue" => Icon::LayoutList,
                                     "Big album art" | "Album art" => Icon::Square,
                                     "Visualizer" | "Visualizer behind" => Icon::AudioLines,
-                                    "Visualizer settings" => Icon::Settings,
+                                    "Settings" => Icon::Settings,
                                     "Always on top" => Icon::Pin,
                                     "Lyrics on it" => Icon::Mic,
                                     "Artist name" => Icon::User,

@@ -2936,7 +2936,7 @@ mod tests {
                 if setup {
                     "Set up personal app"
                 } else {
-                    "Keep shared app"
+                    "Not now"
                 },
                 Role::Button,
             );
@@ -5252,7 +5252,7 @@ mod tests {
             crate::ui::settings::show,
         );
         assert!(app.actions.iter().any(|action| matches!(action,
-            Action::OpenUrl(url) if url == "https://madlygeeked.github.io/chanceify/#make-a-theme")));
+            Action::OpenUrl(url) if url == "https://madlygeeked.github.io/chanceify/make-a-theme/")));
         app.backend.shutdown();
     }
 

@@ -79,6 +79,7 @@ pub fn radio(app: &mut App, ui: &mut egui::Ui, seed: &str) {
             description,
             byline,
             round: false,
+            edit: None,
         },
     );
 

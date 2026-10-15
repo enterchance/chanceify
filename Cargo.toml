@@ -1,7 +1,7 @@
 [package]
 name = "chanceify"
 default-run = "chanceify"
-version = "0.91.72"
+version = "0.9.6"
 edition = "2024"
 rust-version = "1.98"
 license = "AGPL-3.0-only"
@@ -118,6 +118,7 @@ open = "5"
 percent-encoding = "2"
 urlencoding = "2"
 jiff = "0.2"
+pinyin = "0.10"
 mdns-sd = "0.21"
 unicode-bidi = "0.3"
 hmac = "0.12"
@@ -185,6 +186,9 @@ demo = []
 # working on it. Off by default, and off in every release: a reader who
 # starts the app should get one window, not a window and a terminal.
 console = []
+# The keyboard and microphone lights feed. The maintainer's own build only;
+# a public build leaves it out entirely.
+lights-feed = []
 
 [profile.release]
 lto = "thin"

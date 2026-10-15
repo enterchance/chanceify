@@ -133,7 +133,7 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
-fn contents(app: &mut App, ui: &mut egui::Ui) {
+pub(super) fn contents(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let Some(now) = app.now_playing() else {
         widgets::empty_state(
@@ -181,6 +181,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
         ui,
         egui::ScrollArea::vertical()
             .id_salt("lyrics-scroll")
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
             .auto_shrink([false, false]),
         egui::Vec2b::new(false, true),
         |ui| {
@@ -213,6 +214,13 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                 } else {
                     line.text.as_str()
                 };
+                let phonetic_text = app
+                    .settings
+                    .lyrics_phonetic
+                    .then(|| crate::phonetic::respell(text))
+                    .flatten()
+                    .map(|romanized| format!("{text}\n{romanized}"));
+                let text = phonetic_text.as_deref().unwrap_or(text);
                 let sense = if lyrics.synced {
                     Sense::click()
                 } else {
@@ -292,8 +300,8 @@ fn contents(app: &mut App, ui: &mut egui::Ui) {
                     Some(Align::Center),
                 );
             }
-            // Room for the last line to rise to where a sung line sits.
-            ui.add_space((ui.clip_rect().height() * (1.0 - SUNG_LINE_AT)).max(60.0));
+            // The last line is the end of the song: nothing scrolls past it.
+            ui.add_space(24.0);
         },
     );
     crate::autoscroll::lyrics(ui, scroll.id);
@@ -359,6 +367,10 @@ fn lyrics_menu(app: &mut App, page: &egui::Response, side: bool) {
                     app.actions
                         .push(Action::ToggleSideLyricsFlag(Settings::LYRICS_HIDE_STAMPS));
                 }
+                if widgets::menu_item(ui, &palette, tick(app.settings.lyrics_phonetic), "Phonetic lyrics") {
+                    app.settings.lyrics_phonetic = !app.settings.lyrics_phonetic;
+                    app.mark_settings_dirty();
+                }
                 widgets::menu_separator(ui, &palette);
                 for (value, label) in [(1u8, "Smaller lines"), (0, "Normal lines"), (2, "Larger lines")] {
                     let on = app.settings.side_lyrics_size == value;
@@ -382,6 +394,10 @@ fn lyrics_menu(app: &mut App, page: &egui::Response, side: bool) {
                     app.actions.push(Action::ToggleLyricsFlag(bit));
                 }
             }
+            if widgets::menu_item(ui, &palette, tick(app.settings.lyrics_phonetic), "Phonetic lyrics") {
+                app.settings.lyrics_phonetic = !app.settings.lyrics_phonetic;
+                app.mark_settings_dirty();
+            }
             widgets::menu_separator(ui, &palette);
             if widgets::menu_item(
                 ui,
@@ -396,7 +412,7 @@ fn lyrics_menu(app: &mut App, page: &egui::Response, side: bool) {
                     ui,
                     &palette,
                     Some(Icon::Settings),
-                    &gettext(app.locale, "Visualizer settings"),
+                    &gettext(app.locale, "Settings"),
                 ) {
                     app.actions.push(Action::ToggleVisPanel);
                 }
@@ -784,10 +800,18 @@ pub fn vis_overlay(app: &mut App, ui: &mut egui::Ui) {
         _ => return,
     };
     let rect = ui.ctx().content_rect();
-    let layout = app.settings.vis_title_layout.min(3);
+    let layout = 0;
     let cover = super::player_bar::fullscreen_cover(rect, layout);
     let left = cover.right() + rect.width() * 0.05;
-    let right = rect.right() - rect.width() * 0.08;
+    let queue_width: f32 = ui
+        .ctx()
+        .data(|data| data.get_temp(egui::Id::new("extra-queue-width")))
+        .unwrap_or(0.0);
+    let right = if queue_width > 0.0 {
+        rect.right() - queue_width - 12.0
+    } else {
+        rect.right() - rect.width() * 0.08
+    };
     if right - left < 220.0 {
         return;
     }
@@ -970,6 +994,7 @@ fn fullscreen_contents(app: &mut App, ui: &mut egui::Ui) {
     ui.spacing_mut().scroll.fade.strength = 0.0;
     egui::ScrollArea::vertical()
         .id_salt(("fullscreen-lyrics-scroll", &now.uri))
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
         .auto_shrink([false, false])
         .show(ui, |ui| {
             // Before the first line there is nothing to highlight, so the
@@ -1040,6 +1065,13 @@ fn fullscreen_contents(app: &mut App, ui: &mut egui::Ui) {
                 } else {
                     line.text.as_str()
                 };
+                let phonetic_text = app
+                    .settings
+                    .lyrics_phonetic
+                    .then(|| crate::phonetic::respell(text))
+                    .flatten()
+                    .map(|romanized| format!("{text}\n{romanized}"));
+                let text = phonetic_text.as_deref().unwrap_or(text);
                 let sense = if lyrics.synced {
                     Sense::click()
                 } else {
@@ -1153,7 +1185,7 @@ fn fullscreen_contents(app: &mut App, ui: &mut egui::Ui) {
                     animation,
                 );
             }
-            ui.add_space(below.max(60.0));
+            ui.add_space(if reversed { below.max(60.0) } else { 24.0 });
         });
     // Scrolling by hand means the reader wants to look elsewhere; the
     // Follow button in the header picks the song back up.
@@ -1331,6 +1363,46 @@ pub(super) fn controls_box_inner(app: &mut App, ui: &mut egui::Ui, top_left: egu
         egui::Stroke::new(1.0, palette.outline),
         egui::StrokeKind::Inside,
     );
+    // A small gear in the top right corner: the visualizer's settings (the
+    // equalizer is a tab in them).
+    {
+        let gear = Rect::from_center_size(pos2(outer.right() - 13.0, outer.top() + 8.0), vec2(16.0, 14.0));
+        let response = ui.interact(gear, egui::Id::new("pop-out-gear"), Sense::click());
+        let colour = if response.hovered() { palette.text } else { palette.dim };
+        theme::paint_icon(ui, Icon::Settings, gear, 11.0, colour);
+        if response.on_hover_text(gettext(app.locale, "Settings").into_owned()).clicked() {
+            app.actions.push(Action::ToggleVisPanel);
+        }
+    }
+    // A grip in the bottom right corner: drag it to make the controls
+    // bigger or smaller.
+    {
+        let corner = Rect::from_center_size(pos2(outer.right() - 9.0, outer.bottom() - 9.0), vec2(16.0, 16.0));
+        let response = ui.interact(corner, egui::Id::new("pop-out-resize"), Sense::drag());
+        let hot = response.hovered() || response.dragged();
+        if hot {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+        }
+        let colour = if hot { palette.text } else { palette.dim };
+        for (dx, dy) in [(0.0, 0.0), (-4.0, 0.0), (0.0, -4.0), (-8.0, 0.0), (-4.0, -4.0), (0.0, -8.0)] {
+            ui.painter().circle_filled(pos2(corner.center().x + dx + 3.0, corner.center().y + dy + 3.0), 0.9, colour);
+        }
+        if response.dragged() {
+            let scale = app.settings.controls_scale_value() + response.drag_delta().x / 260.0;
+            app.actions.push(Action::SetControlsScale(scale));
+        }
+        response.on_hover_text(gettext(app.locale, "Drag to resize").into_owned());
+    }
+    // Beside it, the queue.
+    {
+        let spot = Rect::from_center_size(pos2(outer.right() - 31.0, outer.top() + 8.0), vec2(16.0, 14.0));
+        let response = ui.interact(spot, egui::Id::new("pop-out-queue"), Sense::click());
+        let colour = if response.hovered() || app.show_queue_panel { palette.text } else { palette.dim };
+        theme::paint_icon(ui, Icon::ListMusic, spot, 11.0, colour);
+        if response.on_hover_text(gettext(app.locale, "Queue").into_owned()).clicked() {
+            app.actions.push(Action::ToggleQueuePanel);
+        }
+    }
     let buttons_row = Rect::from_min_size(pos2(outer.left(), outer.top() + 10.0), vec2(width, buttons_h));
     let seek_row = Rect::from_min_size(
         pos2(outer.left(), buttons_row.bottom() + 4.0),

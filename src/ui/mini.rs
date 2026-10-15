@@ -23,18 +23,29 @@ use super::widgets::{self, SliderEvent};
 /// Its size and place are kept between launches.
 pub fn window(app: &mut App, ctx: &egui::Context) {
     use egui::{ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
+    // The place and size it opened at: the builder keeps these while the
+    // window is open, so reporting its geometry back every frame never makes
+    // egui move or resize it again (the jiggle).
+    let opened_id = egui::Id::new("mini-window-opened-at");
     if !app.settings.mini_player {
+        ctx.data_mut(|data| data.remove_temp::<Option<[f32; 4]>>(opened_id));
         return;
     }
     let id = ViewportId::from_hash_of("chanceify-mini-player");
     let saved = app.settings.mini_window;
+    let opened = ctx
+        .data(|data| data.get_temp::<Option<[f32; 4]>>(opened_id))
+        .unwrap_or_else(|| {
+            ctx.data_mut(|data| data.insert_temp(opened_id, saved));
+            saved
+        });
     let default_height = if app.settings.mini_queue { 680.0 } else { 340.0 };
     let mut builder = ViewportBuilder::default()
         .with_title("chanceify mini player")
         .with_decorations(false)
         .with_min_inner_size([240.0, 200.0])
-        .with_inner_size(saved.map_or([400.0, default_height], |s| [s[2].max(240.0), s[3].max(200.0)]));
-    if let Some(s) = saved
+        .with_inner_size(opened.map_or([400.0, default_height], |s| [s[2].max(240.0), s[3].max(200.0)]));
+    if let Some(s) = opened
         && s[0] > -20000.0
         && s[1] > -20000.0
     {
@@ -69,6 +80,20 @@ pub fn window(app: &mut App, ctx: &egui::Context) {
         close_button(app, ui);
         super::window_resize(ui);
         app.mini_active = false;
+        // The fade is the window's own see-through level, so it is set on
+        // this window (found by its title) rather than the main one.
+        #[cfg(windows)]
+        {
+            let level = fade_level(app, &ctx).clamp(0.2, 1.0);
+            let alpha = (level * 255.0).round() as u8;
+            let sent_id = egui::Id::new("mini-alpha-sent");
+            if ctx.data(|data| data.get_temp::<u8>(sent_id)) != Some(alpha) {
+                if let Some(hwnd) = crate::window::find_window("chanceify mini player") {
+                    crate::window::set_window_alpha(hwnd, alpha);
+                }
+                ctx.data_mut(|data| data.insert_temp(sent_id, alpha));
+            }
+        }
         let (outer, inner) = ctx.input(|input| (input.viewport().outer_rect, input.viewport().inner_rect));
         if let (Some(outer), Some(inner)) = (outer, inner) {
             geometry = Some([outer.min.x, outer.min.y, inner.width(), inner.height()]);
@@ -101,39 +126,32 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             // everywhere else (Visualizer settings in the right-click menu).
             // The mini player has its own look (Off, Bars, Flow or Swirl from
             // its menu), whatever the big visualizer is set to.
-            let saved_shapes = (app.settings.vis_shapes, app.settings.vis_shapes_set);
-            let shapes = [
-                0,
-                crate::settings::Settings::SHAPE_BARS,
-                crate::settings::Settings::SHAPE_FLOW,
-                crate::settings::Settings::SHAPE_SWIRL,
-            ][app.settings.mini_vis_mode() as usize];
-            app.settings.vis_shapes = shapes;
-            app.settings.vis_shapes_set = true;
+            // The mini player has settings of its own (the gear's panel edits
+            // them while it is open), and any mix of the three shapes.
+            let shapes = app.settings.vis_shapes_value();
             if shapes != 0 {
-                // Only what moves behind the words: never the big visualizer's
-                // cover or song name, which have no place in a window this small.
-                let backdrop = if shapes == crate::settings::Settings::SHAPE_FLOW {
-                    1
-                } else if shapes == crate::settings::Settings::SHAPE_SWIRL {
-                    2
-                } else {
-                    4
-                };
-                let moving =
-                    super::player_bar::lyrics_backdrop(app, ui, area, now.as_ref(), backdrop);
-                if shapes != crate::settings::Settings::SHAPE_BARS {
-                    // Flow and swirl fill the window: a light veil keeps
-                    // the words readable.
+                use crate::settings::Settings;
+                let mut moving = false;
+                // The back first: the swirl, then the flow, behind a light
+                // veil so the words stay readable, then the bars on top.
+                if shapes & Settings::SHAPE_SWIRL != 0 {
+                    moving |= super::player_bar::lyrics_backdrop(app, ui, area, now.as_ref(), 2);
+                }
+                if shapes & Settings::SHAPE_FLOW != 0 {
+                    moving |= super::player_bar::lyrics_backdrop(app, ui, area, now.as_ref(), 1);
+                }
+                if shapes & (Settings::SHAPE_SWIRL | Settings::SHAPE_FLOW) != 0 {
                     ui.painter()
                         .with_clip_rect(area)
                         .rect_filled(area, 0.0, Color32::from_black_alpha(80));
+                }
+                if shapes & Settings::SHAPE_BARS != 0 {
+                    moving |= super::player_bar::lyrics_backdrop(app, ui, area, now.as_ref(), 4);
                 }
                 if moving {
                     ui.ctx().request_repaint_after(std::time::Duration::from_micros(16_667));
                 }
             }
-            (app.settings.vis_shapes, app.settings.vis_shapes_set) = saved_shapes;
             // Right-click anywhere that is not a control for the mini
             // player's options. (Added first, so every control drawn after it
             // keeps its own clicks.)
@@ -190,9 +208,20 @@ fn options_menu(app: &mut App, page: &egui::Response) {
             if widgets::menu_item(ui, &palette, tick(app.settings.mini_volume), "Volume") {
                 app.actions.push(Action::ToggleMiniVolume);
             }
-            for (mode, label) in [(0u8, "Nothing moving"), (1, "Bars"), (2, "Flow"), (3, "Swirl")] {
-                if widgets::menu_item(ui, &palette, tick(app.settings.mini_vis_mode() == mode), label) {
-                    app.actions.push(Action::SetMiniVis(mode));
+            {
+                use crate::settings::Settings;
+                let shapes = app.settings.vis_shapes_value();
+                for (bit, label) in [
+                    (Settings::SHAPE_BARS, "Bars"),
+                    (Settings::SHAPE_FLOW, "Flow"),
+                    (Settings::SHAPE_SWIRL, "Swirl"),
+                ] {
+                    if widgets::menu_item(ui, &palette, tick(shapes & bit != 0), label) {
+                        app.actions.push(Action::ToggleVisShape(bit));
+                    }
+                }
+                if widgets::menu_item(ui, &palette, Some(Icon::Settings), "Settings") {
+                    app.actions.push(Action::ToggleVisPanel);
                 }
             }
             widgets::menu_separator(ui, &palette);
@@ -231,6 +260,19 @@ fn strip_buttons(app: &mut App, ui: &mut egui::Ui, strip: Rect) {
     {
         app.actions.push(Action::ToggleMiniQueue);
     }
+    let lyrics = app.settings.mini_queue && app.settings.mini_lyrics;
+    if theme::icon_button(
+        &mut row,
+        Icon::Mic,
+        15.0,
+        if lyrics { palette.accent } else { palette.secondary },
+        if lyrics { palette.accent_hover } else { palette.text },
+        if lyrics { "Show the queue instead" } else { "Show the lyrics" },
+    )
+    .clicked()
+    {
+        app.actions.push(Action::ToggleMiniLyrics);
+    }
     let volume = app.settings.mini_volume;
     if theme::icon_button(
         &mut row,
@@ -244,12 +286,25 @@ fn strip_buttons(app: &mut App, ui: &mut egui::Ui, strip: Rect) {
     {
         app.actions.push(Action::ToggleMiniVolume);
     }
+    // Its own button: keep the mini player above every other window.
+    let pinned = app.settings.mini_on_top;
+    if theme::icon_button(
+        &mut row,
+        Icon::Pin,
+        15.0,
+        if pinned { palette.accent } else { palette.secondary },
+        if pinned { palette.accent_hover } else { palette.text },
+        if pinned { "Stop keeping it on top" } else { "Keep it on top" },
+    )
+    .clicked()
+    {
+        app.actions.push(Action::ToggleMiniOnTop);
+    }
 }
 
 /// How opaque the floating mini player is, 0 to 1: solid while the pointer
 /// is on it (and for a moment after), see-through once it has been away.
 /// Always 1 unless the mini player floats over everything with the fade on.
-#[allow(dead_code)]
 pub fn fade_level(app: &App, ctx: &egui::Context) -> f32 {
     const AWAY: f32 = 0.42;
     const LINGER: f64 = 1.0;
@@ -316,7 +371,11 @@ fn portrait(app: &mut App, ui: &mut egui::Ui, body: Rect, now: Option<&NowPlayin
         let left = body.bottom() - ui.cursor().top();
         if left >= 90.0 {
             ui.add_space(8.0);
-            queue_list(app, ui, body, palette);
+            if app.settings.mini_lyrics {
+                lyrics_list(app, ui, body, palette);
+            } else {
+                queue_list(app, ui, body, palette);
+            }
         }
     }
 }
@@ -583,7 +642,7 @@ fn control_row(app: &mut App, ui: &mut egui::Ui, unit: f32, now: Option<&NowPlay
 }
 
 /// A thin volume bar.
-fn volume_row(app: &mut App, ui: &mut egui::Ui, width: f32, now: Option<&NowPlaying>) {
+pub(super) fn volume_row(app: &mut App, ui: &mut egui::Ui, width: f32, now: Option<&NowPlaying>) {
     let palette = app.palette;
     let volume = now
         .map(|now| now.volume_percent)
@@ -669,6 +728,32 @@ fn queue_list(app: &mut App, ui: &mut egui::Ui, body: Rect, palette: theme::Pale
         .show(&mut scroll_ui, |ui| {
             super::queue::contents(app, ui, true);
         });
+}
+
+/// The lyrics, in the room the queue would have, drawn like the side lyrics
+/// (timestamps, the sung line lit).
+fn lyrics_list(app: &mut App, ui: &mut egui::Ui, body: Rect, palette: theme::Palette) {
+    app.request_lyrics();
+    let height = (body.bottom() - ui.cursor().top()).max(40.0);
+    let list = Rect::from_min_size(
+        pos2(body.left(), ui.cursor().top()),
+        vec2(body.width(), height),
+    );
+    let mut child = ui.new_child(
+        UiBuilder::new()
+            .max_rect(list)
+            .layout(Layout::top_down(Align::Min)),
+    );
+    child.set_clip_rect(list.intersect(ui.clip_rect()));
+    child
+        .painter()
+        .rect_filled(list, egui::CornerRadius::same(10), palette.panel);
+    let mut inner = child.new_child(
+        UiBuilder::new()
+            .max_rect(list.shrink(6.0))
+            .layout(Layout::top_down(Align::Min)),
+    );
+    super::lyrics::contents(app, &mut inner);
 }
 
 /// A small close button in the top-right corner, drawn only while the

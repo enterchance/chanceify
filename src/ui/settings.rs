@@ -68,7 +68,7 @@ impl<'a> RowText<'a> {
 }
 
 /// The guide to writing a palette file for the themes folder.
-const THEMES_GUIDE_URL: &str = "https://madlygeeked.github.io/chanceify/#make-a-theme";
+const THEMES_GUIDE_URL: &str = "https://madlygeeked.github.io/chanceify/make-a-theme/";
 
 fn section_matches(needle: &str, title: &str, rows: &[RowText<'_>]) -> bool {
     let needle = needle.trim().to_lowercase();
@@ -187,11 +187,11 @@ const TABS: [&str; 6] = ["Accounts", "Playback", "Look", "Library", "Network", "
 fn tab_of(title: &str) -> Option<u8> {
     let title = title.to_lowercase();
     let has = |words: &[&str]| words.iter().any(|word| title.contains(word));
-    if has(&["account", "last.fm", "discord"]) {
+    if has(&["account", "last.fm", "discord", "lights"]) {
         Some(0)
     } else if has(&["playback", "equalizer"]) {
         Some(1)
-    } else if has(&["appearance", "song lists", "gradient"]) {
+    } else if has(&["appearance", "song lists", "gradient", "lyrics", "app icon"]) {
         Some(2)
     } else if has(&["storage", "unavailable"]) {
         Some(3)
@@ -741,6 +741,76 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     }
                 },
             );
+            filtered_row(ui, &palette, &needle, &playback, &playback_rows[10], |ui| {
+                // The control area lays out right-to-left: add the rightmost item first.
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    if widgets::switch(ui, &palette, &audio_cache, &mut app.settings.audio_cache)
+                        .on_hover_text("Keeps songs you have played on this computer, so replaying one never downloads it again. The slider is the most disk space it may use (2 GB holds roughly 400 songs). When it is full, the oldest songs are deleted.")
+                        .changed()
+                    {
+                        changed = true;
+                        playback_dirty = true;
+                    }
+                    if app.settings.audio_cache {
+                        ui.add_space(6.0);
+                        let mut mb = app.settings.audio_cache_mb as f64;
+                        let response = ui.add(
+                            egui::Slider::new(&mut mb, 128.0..=51200.0)
+                                .logarithmic(true)
+                                .custom_formatter(|value, _| {
+                                    if value >= 1024.0 {
+                                        format!("{:.1} GB", value / 1024.0)
+                                    } else {
+                                        format!("{value:.0} MB")
+                                    }
+                                })
+                                .custom_parser(|text| {
+                                    let text = text.trim().to_lowercase();
+                                    let number: f64 = text
+                                        .trim_end_matches(|c: char| c.is_alphabetic() || c == ' ')
+                                        .parse()
+                                        .ok()?;
+                                    Some(if text.ends_with("gb") || text.ends_with('g') {
+                                        number * 1024.0
+                                    } else {
+                                        number
+                                    })
+                                }),
+                        );
+                        let response = response.on_hover_text("Keeps songs you have played on this computer, so replaying one never downloads it again. The slider is the most disk space it may use (2 GB holds roughly 400 songs). When it is full, the oldest songs are deleted.");
+                        if response.changed() {
+                            app.settings.audio_cache_mb = mb.round().max(128.0) as u64;
+                            changed = true;
+                            playback_dirty = true;
+                        }
+                    }
+                });
+            });
+            #[cfg(windows)]
+            filtered_row(ui, &palette, &needle, &playback, &playback_rows[9], |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let current = app.settings.audio_buffer_ms;
+                    for ms in [50u32, 100, 200] {
+                        let label = format!("{ms} ms");
+                        let tip = match ms {
+                            50 => "50 ms: a tiny cushion of music. Pause and volume react almost instantly, but a busy or slow computer may crackle or skip.",
+                            100 => "100 ms: the good middle. Controls feel quick and the music holds steady on most computers.",
+                            _ => "200 ms: a big cushion. The music will not crackle or skip even when the computer is busy, but Pause and volume are heard about a fifth of a second late.",
+                        };
+                        if theme::soft_button(ui, &palette, None, &label, current == ms)
+                            .on_hover_text(tip)
+                            .clicked()
+                            && current != ms
+                        {
+                            app.settings.audio_buffer_ms = ms;
+                            changed = true;
+                            playback_dirty = true;
+                        }
+                    }
+                });
+            });
             filtered_row(ui, &palette, &needle, &playback, &playback_rows[3], |ui| {
                 if widgets::switch(
                     ui,
@@ -792,23 +862,6 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     });
                 });
             }
-            #[cfg(windows)]
-            filtered_row(ui, &palette, &needle, &playback, &playback_rows[9], |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    let current = app.settings.audio_buffer_ms;
-                    for ms in [50u32, 100, 200] {
-                        let label = format!("{ms} ms");
-                        if theme::soft_button(ui, &palette, None, &label, current == ms).clicked()
-                            && current != ms
-                        {
-                            app.settings.audio_buffer_ms = ms;
-                            changed = true;
-                            playback_dirty = true;
-                        }
-                    }
-                });
-            });
             if needle.is_empty() {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
@@ -839,50 +892,6 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     "Only for songs from your own files. It starts with the next list you play.",
                 );
             }
-            filtered_row(ui, &palette, &needle, &playback, &playback_rows[10], |ui| {
-                // The control area lays out right-to-left: add the rightmost item first.
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    if widgets::switch(ui, &palette, &audio_cache, &mut app.settings.audio_cache)
-                        .changed()
-                    {
-                        changed = true;
-                        playback_dirty = true;
-                    }
-                    if app.settings.audio_cache {
-                        ui.add_space(6.0);
-                        let mut mb = app.settings.audio_cache_mb as f64;
-                        let response = ui.add(
-                            egui::Slider::new(&mut mb, 128.0..=51200.0)
-                                .logarithmic(true)
-                                .custom_formatter(|value, _| {
-                                    if value >= 1024.0 {
-                                        format!("{:.1} GB", value / 1024.0)
-                                    } else {
-                                        format!("{value:.0} MB")
-                                    }
-                                })
-                                .custom_parser(|text| {
-                                    let text = text.trim().to_lowercase();
-                                    let number: f64 = text
-                                        .trim_end_matches(|c: char| c.is_alphabetic() || c == ' ')
-                                        .parse()
-                                        .ok()?;
-                                    Some(if text.ends_with("gb") || text.ends_with('g') {
-                                        number * 1024.0
-                                    } else {
-                                        number
-                                    })
-                                }),
-                        );
-                        if response.changed() {
-                            app.settings.audio_cache_mb = mb.round().max(128.0) as u64;
-                            changed = true;
-                            playback_dirty = true;
-                        }
-                    }
-                });
-            });
             ui.add_space(4.0);
             if playback_dirty
                 || playback_rows[11].matches(&needle, &playback)
@@ -1305,6 +1314,14 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                 .wrap(),
             );
             ui.add_space(8.0);
+            {
+                let mut on = app.settings.unavailable_dot;
+                if widgets::switch_labeled(ui, &palette, "Show a red dot on my picture when songs are unavailable", &mut on).changed() {
+                    app.settings.unavailable_dot = on;
+                    app.mark_settings_dirty();
+                }
+                ui.add_space(8.0);
+            }
             let scanning = app
                 .unavailable_scan
                 .as_ref()
@@ -1613,25 +1630,6 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
             });
-            if cfg!(windows) {
-                ui.add_space(8.0);
-                if theme::soft_button(ui, &palette, None, "Let chanceify:// links open chanceify (Windows)", false)
-                    .on_hover_text("Adds one entry for your Windows user, so links from the chanceify web page open the song here.")
-                    .clicked()
-                {
-                    app.actions.push(Action::RegisterLinks);
-                }
-            }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                if theme::soft_button(ui, &palette, Some(Icon::ExternalLink), &source_code, false)
-                    .clicked()
-                {
-                    ui.ctx()
-                        .open_url(egui::OpenUrl::new_tab(crate::build_info::GITHUB_URL));
-                }
-            });
             ui.add_space(8.0);
             ui.add_space(8.0);
             ui.label(
@@ -1652,6 +1650,9 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                 }
                 if theme::soft_button(ui, &palette, None, "Load chance's defaults", false).clicked() {
                     app.actions.push(Action::LoadDefaultSettings);
+                }
+                if theme::soft_button(ui, &palette, None, "Reset to plain defaults", false).clicked() {
+                    app.actions.push(Action::ResetSettingsToVanilla);
                 }
                 if theme::soft_button(ui, &palette, Some(Icon::ExternalLink), "Open index folder", false)
                     .clicked()
@@ -1722,6 +1723,83 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                 }
             });
             ui.add_space(8.0);
+        });
+    }
+
+    if needle.is_empty() || "lyrics timestamps phonetic romanize line size".contains(needle.as_str()) {
+        any_visible = true;
+        section(ui, &palette, "Lyrics", |ui| {
+            use crate::settings::Settings;
+            let mut stamps = !app.settings.side_lyrics_flag(Settings::LYRICS_HIDE_STAMPS);
+            if widgets::switch_labeled(ui, &palette, "Timestamps beside the lyrics", &mut stamps).changed() {
+                app.actions.push(Action::ToggleSideLyricsFlag(Settings::LYRICS_HIDE_STAMPS));
+            }
+            let mut phonetic = app.settings.lyrics_phonetic;
+            if widgets::switch_labeled(ui, &palette, "Phonetic lyrics (Latin letters under each line)", &mut phonetic).changed() {
+                app.settings.lyrics_phonetic = phonetic;
+                app.mark_settings_dirty();
+            }
+            note(ui, &palette, "Russian, Korean and Chinese are written out in Latin letters; German, Polish and Turkish are respelled the way an English reader would say them.");
+            ui.horizontal(|ui| {
+                theme::subtle(ui, &palette, "Side lyrics size");
+                for (value, label) in [(1u8, "Smaller"), (0, "Normal"), (2, "Larger")] {
+                    if theme::pill_button(ui, &palette, label, app.settings.side_lyrics_size == value).clicked() {
+                        app.actions.push(Action::SetSideLyricsSize(value));
+                    }
+                }
+            });
+            ui.add_space(8.0);
+        });
+    }
+
+    if cfg!(feature = "lights-feed") && (needle.is_empty() || "lights feed keyboard microphone led colours rgb".contains(needle.as_str())) {
+        any_visible = true;
+        section(ui, &palette, "Lights feed", |ui| {
+            let mut on = app.settings.lights_feed;
+            if widgets::switch_labeled(ui, &palette, "Share the visualizer's colours with light apps", &mut on).changed() {
+                app.settings.lights_feed = on;
+                app.mark_settings_dirty();
+            }
+            let path = crate::lights::Feed::path_for(&app.dirs.state);
+            note(ui, &palette, "Writes the colours on screen (cover colours, Auto drift, your swatch pick, gradient) to one small file, many times a second, so a keyboard or microphone light app can match them. Nothing goes over the network. Off by default; the file is removed when this is off.");
+            ui.horizontal_wrapped(|ui| {
+                theme::subtle(ui, &palette, "File:");
+                ui.label(egui::RichText::new(path.display().to_string()).font(theme::regular(12.0)).color(palette.secondary));
+            });
+            ui.add_space(8.0);
+        });
+    }
+
+    if needle.is_empty() || "discord rich presence status buttons".contains(needle.as_str()) {
+        any_visible = true;
+        section(ui, &palette, "Discord", |ui| {
+            {
+                let mut on = app.settings.discord_presence;
+                if widgets::switch_labeled(ui, &palette, "Show what I'm listening to on Discord", &mut on).changed() {
+                    app.settings.discord_presence = on;
+                    app.mark_settings_dirty();
+                }
+                if app.settings.discord_presence {
+                    ui.add_space(4.0);
+                    ui.add_space(6.0);
+                    {
+                        let (text, colour) = match crate::discord::link_state() {
+                            2 => ("Discord connected, song sent.", palette.accent),
+                            1 => ("Discord: found. Waiting for a song to send.", palette.secondary),
+                            _ => (
+                                "Discord: not found yet. Open the Discord desktop app (not the website), and turn on Settings > Activity Privacy > Share my activity in Discord.",
+                                palette.secondary,
+                            ),
+                        };
+                        theme::text(ui, text, theme::regular(12.5), colour);
+                        let problem = crate::discord::last_error();
+                        if !problem.is_empty() {
+                            theme::text(ui, &problem, theme::regular(12.0), palette.warning);
+                        }
+                        ui.ctx().request_repaint_after(std::time::Duration::from_secs(2));
+                    }
+                }
+            }
         });
     }
 
@@ -1897,6 +1975,29 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     {
                         app.actions.push(Action::OpenMissingArtFolder);
                     }
+                    {
+                        let bytes = app.art_folder_size() as f64;
+                        let text = if bytes >= 1e9 {
+                            format!("{:.2} GB", bytes / 1e9)
+                        } else if bytes >= 1e6 {
+                            format!("{:.1} MB", bytes / 1e6)
+                        } else {
+                            format!("{:.0} KB", bytes / 1e3)
+                        };
+                        theme::subtle(ui, &palette, &format!("Album covers and artist pictures folder: {text}"));
+                    }
+                    let auto_label = if app.settings.lastfm_art_auto {
+                        "Save missing pictures automatically: on"
+                    } else {
+                        "Save missing pictures automatically: off"
+                    };
+                    if theme::soft_button(ui, &palette, None, auto_label, app.settings.lastfm_art_auto)
+                        .on_hover_text("As songs play, the covers and artist pictures Last.fm lacks are saved to the lists below.")
+                        .clicked()
+                    {
+                        app.settings.lastfm_art_auto = !app.settings.lastfm_art_auto;
+                        app.mark_settings_dirty();
+                    }
                     let sweep_label = if app.art_sweep { "Stop checking my library" } else { "Check my whole library" };
                     if theme::soft_button(ui, &palette, None, sweep_label, app.art_sweep)
                         .on_hover_text("Asks Last.fm about the picture of every album and artist you have saved, a few at a time. The ones it lacks go in the missing lists.")
@@ -1917,39 +2018,6 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
                 missing_lists(ui, app, &palette);
-            }
-        });
-    }
-
-    if needle.is_empty() || "discord rich presence status buttons".contains(needle.as_str()) {
-        any_visible = true;
-        section(ui, &palette, "Discord", |ui| {
-            {
-                let mut on = app.settings.discord_presence;
-                if widgets::switch_labeled(ui, &palette, "Show what I'm listening to on Discord", &mut on).changed() {
-                    app.settings.discord_presence = on;
-                    app.mark_settings_dirty();
-                }
-                if app.settings.discord_presence {
-                    ui.add_space(4.0);
-                    ui.add_space(6.0);
-                    {
-                        let (text, colour) = match crate::discord::link_state() {
-                            2 => ("Discord connected, song sent.", palette.accent),
-                            1 => ("Discord: found. Waiting for a song to send.", palette.secondary),
-                            _ => (
-                                "Discord: not found yet. Open the Discord desktop app (not the website), and turn on Settings > Activity Privacy > Share my activity in Discord.",
-                                palette.secondary,
-                            ),
-                        };
-                        theme::text(ui, text, theme::regular(12.5), colour);
-                        let problem = crate::discord::last_error();
-                        if !problem.is_empty() {
-                            theme::text(ui, &problem, theme::regular(12.0), palette.warning);
-                        }
-                        ui.ctx().request_repaint_after(std::time::Duration::from_secs(2));
-                    }
-                }
             }
         });
     }
@@ -2156,29 +2224,93 @@ fn hertz(hz: f32) -> String {
 pub(super) fn eq_panel(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let locale = app.locale;
-    ui.set_width(500.0);
+    ui.set_width(470.0);
     let mut on = app.settings.eq_on;
-    if widgets::switch(ui, &palette, &gettext(locale, "On"), &mut on).changed() {
-        app.actions.push(Action::ToggleEq);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        if widgets::switch(ui, &palette, &gettext(locale, "On"), &mut on).changed() {
+            app.actions.push(Action::ToggleEq);
+        }
+        if theme::soft_button(ui, &palette, None, "Export", false)
+            .on_hover_text("Save your own curves to eq-presets.txt in the index settings folder, and copy them")
+            .clicked()
+        {
+            app.actions.push(Action::ExportEq);
+        }
+        if theme::soft_button(ui, &palette, None, "Import", false)
+            .on_hover_text("Load the curves in eq-presets.txt from the index settings folder")
+            .clicked()
+        {
+            app.actions.push(Action::ImportEq);
+        }
+        let mut hide = app.settings.eq_hide_defaults;
+        if widgets::switch(ui, &palette, "Hide defaults", &mut hide).changed() {
+            app.actions.push(Action::ToggleEqHideDefaults);
+        }
+    });
+    ui.add_space(6.0);
+    if !app.settings.eq_hide_defaults {
+        let names: Vec<(usize, &str)> = crate::eq::PRESETS
+            .iter()
+            .enumerate()
+            .map(|(index, preset)| (index, preset.name))
+            .collect();
+        let current = crate::eq::PRESETS
+            .iter()
+            .position(|preset| preset.bands_db == app.settings.eq_bands_db)
+            .unwrap_or(usize::MAX);
+        if let Some(picked) = widgets::chips(ui, &palette, &names, current) {
+            app.actions.push(Action::ApplyEqPreset(picked));
+        }
+    }
+    // The reader's own curves: click to use, x to remove.
+    if !app.settings.custom_eqs.is_empty() {
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let mut apply = None;
+            let mut remove = None;
+            for (index, (name, bands)) in app.settings.custom_eqs.iter().enumerate() {
+                let active = *bands == app.settings.eq_bands_db;
+                if theme::soft_button(ui, &palette, None, name, active).clicked() {
+                    apply = Some(index);
+                }
+                if theme::soft_button(ui, &palette, None, "\u{d7}", false)
+                    .on_hover_text("Remove this curve")
+                    .clicked()
+                {
+                    remove = Some(index);
+                }
+                ui.add_space(6.0);
+            }
+            if let Some(index) = apply {
+                app.actions.push(Action::ApplyCustomEq(index));
+            }
+            if let Some(index) = remove {
+                app.actions.push(Action::RemoveCustomEq(index));
+            }
+        });
     }
     ui.add_space(6.0);
-    let names: Vec<(usize, &str)> = crate::eq::PRESETS
-        .iter()
-        .enumerate()
-        .map(|(index, preset)| (index, preset.name))
-        .collect();
-    let current = crate::eq::PRESETS
-        .iter()
-        .position(|preset| preset.bands_db == app.settings.eq_bands_db)
-        .unwrap_or(usize::MAX);
-    if let Some(picked) = widgets::chips(ui, &palette, &names, current) {
-        app.actions.push(Action::ApplyEqPreset(picked));
-    }
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let id = egui::Id::new("eq-save-name");
+        let mut name = ui.data(|data| data.get_temp::<String>(id)).unwrap_or_default();
+        egui::TextEdit::singleline(&mut name)
+            .hint_text("Name this curve")
+            .desired_width(180.0)
+            .show(ui);
+        if theme::soft_button(ui, &palette, None, "Save curve", false).clicked() {
+            app.actions.push(Action::SaveCustomEq(name.clone()));
+            name.clear();
+        }
+        ui.data_mut(|data| data.insert_temp(id, name));
+    });
     ui.add_space(8.0);
     eq_curve(ui, &palette, &crate::app::eq_settings(&app.settings));
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 10.0;
+        ui.spacing_mut().item_spacing.x = 6.0;
         let on = app.settings.eq_on;
         let mut preamp = app.settings.eq_preamp_db;
         if eq_slider(ui, &palette, &pgettext(locale, "equalizer", "Pre"), &mut preamp, on) {
@@ -2252,7 +2384,9 @@ fn eq_slider(ui: &mut egui::Ui, palette: &Palette, label: &str, value: &mut f32,
 /// it: the shape says what a row of numbers cannot.
 fn eq_curve(ui: &mut egui::Ui, palette: &Palette, settings: &crate::eq::EqSettings) {
     use egui::{Shape, Stroke, pos2, vec2};
-    let width = ui.available_width().min(720.0);
+    // The width of the panel's own column, never what the page around it
+    // happens to offer (that ran past the window's right edge).
+    let width = ui.available_width().min(470.0);
     let (rect, _) = ui.allocate_exact_size(vec2(width, 120.0), egui::Sense::hover());
     let painter = ui.painter();
     painter.rect_filled(rect, theme::RADIUS as f32, palette.surface);
@@ -2464,20 +2598,24 @@ fn missing_lists(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
         lists.push(names);
     }
     ui.add_space(4.0);
-    ui.columns(2, |columns| {
-        for (index, ui) in columns.iter_mut().enumerate() {
-            let artists = index == 1;
-            let names = lists[index].clone();
-            let title = if artists {
-                format!("Missing artist pictures ({})", names.len())
-            } else {
-                format!("Missing album covers ({})", names.len())
-            };
-            theme::text(ui, title, theme::semibold(13.5), palette.text);
-            ui.add_space(2.0);
+    // Each list is folded away until opened, so its names are only laid out
+    // (and its pictures only loaded) while it is on show.
+    for index in 0..2 {
+        let artists = index == 1;
+        let names = lists[index].clone();
+        let title = if artists {
+            format!("Missing artist pictures ({})", names.len())
+        } else {
+            format!("Missing album covers ({})", names.len())
+        };
+        let folder = root.join(if artists { "artists-missing" } else { "albums-missing" });
+        egui::CollapsingHeader::new(egui::RichText::new(title).font(theme::semibold(13.5)).color(palette.text))
+            .id_salt(("missing-fold", artists))
+            .default_open(false)
+            .show(ui, |ui| {
             if names.is_empty() {
                 theme::subtle(ui, palette, "None yet. They are added as you listen.");
-                continue;
+                return;
             }
             egui::ScrollArea::vertical()
                 .id_salt(("missing-scroll", artists))
@@ -2487,6 +2625,13 @@ fn missing_lists(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
                 .show(ui, |ui| {
                     for name in names.iter() {
                         ui.horizontal(|ui| {
+                            // The picture to upload, beside its name.
+                            let path = folder.join(format!("{name}.jpg"));
+                            ui.add(
+                                egui::Image::new(format!("file://{}", path.display()))
+                                    .fit_to_exact_size(egui::vec2(40.0, 40.0))
+                                    .corner_radius(4.0),
+                            );
                             let url = if artists {
                                 format!("https://www.last.fm/music/{}", last_fm_part(name))
                             } else if let Some((artist, album)) = name.split_once(" - ") {
@@ -2530,8 +2675,8 @@ fn missing_lists(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
                         });
                     }
                 });
-        }
-    });
+            });
+    }
 }
 
 

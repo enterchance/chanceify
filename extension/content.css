@@ -1,0 +1,17 @@
+.cfy-btn{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;cursor:pointer;background:linear-gradient(135deg,#8b5cf6,#6d28d9);box-shadow:0 2px 8px rgba(109,40,217,.45);transition:transform .15s ease,box-shadow .15s ease;vertical-align:middle;margin:0 6px}
+.cfy-btn:hover{transform:scale(1.12);box-shadow:0 4px 14px rgba(109,40,217,.65)}
+.cfy-btn:focus-visible{outline:2px solid #fff;outline-offset:2px}
+.cfy-btn svg{width:14px;height:14px;fill:#fff;margin-left:2px}
+.cfy-btn.cfy-queue svg{margin-left:0}
+.cfy-hero{width:auto;height:40px;padding:0 18px 0 14px;border-radius:20px;gap:8px;color:#fff;font:600 14px/1 system-ui,sans-serif;margin:8px 10px 8px 0}
+.cfy-hero svg{margin-left:0;width:16px;height:16px}
+.cfy-hide-play .chartlist-play-button,.cfy-hide-play .chartlist-play-image{display:none!important}
+.cfy-toast{position:fixed;left:50%;bottom:28px;transform:translate(-50%,20px);opacity:0;z-index:2147483647;background:#17131f;color:#fff;border:1px solid #3b2a66;border-radius:999px;padding:10px 18px;font:500 14px/1 system-ui,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.45);transition:opacity .2s ease,transform .2s ease;pointer-events:none}
+.cfy-toast.cfy-on{opacity:1;transform:translate(-50%,0)}
+.cfy-yt,.cfy-ytweb{margin:0 8px;height:36px;border-radius:18px;white-space:nowrap}
+.cfy-web{margin-left:0;background:linear-gradient(135deg,#475569,#334155);box-shadow:0 2px 8px rgba(51,65,85,.45)}
+.cfy-web svg{margin-left:0}
+.cfy-web:hover{box-shadow:0 4px 14px rgba(51,65,85,.65)}
+.cfy-pair{display:inline-flex;flex-direction:row;flex-wrap:nowrap;align-items:center;gap:3px;white-space:nowrap}
+.cfy-pair .cfy-btn{width:26px;height:26px;margin:0;flex:none}
+.cfy-pair .cfy-btn svg{width:12px;height:12px}

@@ -1179,6 +1179,8 @@ pub enum Action {
     ShufflePlay(String),
     /// Shuffle a loaded playlist so neighbouring songs have similar tempos.
     SmartShufflePlay(String),
+    /// Shuffle a list, leaning towards the songs not heard for the longest.
+    FreshShufflePlay(String),
     TogglePlay,
     /// Plays if paused; does nothing if already playing.
     PlayOnly,
@@ -1374,6 +1376,8 @@ pub enum Action {
     ToggleVisShapes,
     /// Turn one fullscreen bar edge on or off (1 top, 2 left, 4 bottom, 8 right).
     ToggleBarSide(u8),
+    /// Switch one edge (1 top, 2 left, 4 bottom, 8 right) of the flow on or off.
+    ToggleFlowSide(u8),
     /// How many bars stand across the player bar.
     SetVisBars(u16),
     /// The gap between those bars, in pixels.
@@ -1401,6 +1405,7 @@ pub enum Action {
     ExportSettings,
     ImportSettings,
     LoadDefaultSettings,
+    ResetSettingsToVanilla,
     OpenIndexFolder,
     /// Opens or closes the floating Views and panels window.
     ToggleViewsPanel,
@@ -1506,6 +1511,7 @@ pub enum Action {
     /// The volume bar's width in pixels; 0 goes back to the standard.
     SetVolumeWidth(f32),
     ToggleVisGradient,
+    SetVisDepth(u8),
     ToggleVisLyrics,
     ToggleVisTextSway,
     ToggleVisSwayBeat,
@@ -1538,6 +1544,7 @@ pub enum Action {
     /// Turn the compact mini player on or off, resizing the window to match.
     ToggleMiniPlayer,
     ToggleMiniQueue,
+    ToggleMiniLyrics,
     ToggleMiniVolume,
     SetMiniVis(u8),
     /// Cycles what clicking a song with a modifier held does: queue with Ctrl, with Alt, or nothing.
@@ -1545,8 +1552,12 @@ pub enum Action {
     /// Checks Last.fm for the picture of every album and artist in the library, a few at a time.
     ToggleArtSweep,
     ToggleVisReverse,
+    /// One visualizer's own scroll direction: 0 bars, 1 flow, 2 swirl.
+    ToggleVisReverseOne(u8),
     ToggleMissingMarkBig,
     ToggleMiniOnTop,
+    ToggleMainOnTop,
+    ToggleExtraOnTop,
     ToggleMiniFade,
     /// Play song files from the Local songs page: these paths, in this
     /// order, starting at `index`. `shuffle` sets shuffle first; `None`
@@ -1666,6 +1677,11 @@ pub enum Action {
     SetEqPreamp(f32),
     /// One of the equalizer's presets, by its place in the list.
     ApplyEqPreset(usize),
+    ApplyCustomEq(usize),
+    RemoveCustomEq(usize),
+    ToggleEqHideDefaults,
+    ExportEq,
+    ImportEq,
     /// The balance, -1 all left to 1 all right.
     SetBalance(f32),
     ToggleMono,

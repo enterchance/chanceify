@@ -23,6 +23,95 @@ pub fn take_play_request(uri: &str) -> bool {
     }
 }
 
+/// A song asked for by name instead of by Spotify id: what a page such as
+/// Last.fm hands over with `chanceify://play?artist=..&track=..` (or
+/// `queue`). The canonical form carries it whole, so it survives being passed
+/// from the launch that read the link to the app already running:
+/// `spotify:lookup:<play|queue>:<artist>:<track>`, both names percent-encoded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Lookup {
+    pub queue: bool,
+    pub artist: String,
+    pub track: String,
+    /// The whole artist (the artist's songs play), not one song.
+    pub artist_only: bool,
+}
+
+const LOOKUP_PREFIX: &str = "spotify:lookup:";
+const LOOKUP_LONGEST: usize = 200;
+
+fn clean_name(text: &str) -> Option<String> {
+    let text = text.trim();
+    (text.chars().count() <= LOOKUP_LONGEST && !text.chars().any(char::is_control)).then(|| text.to_string())
+}
+
+fn decode_part(text: &str) -> Option<String> {
+    let text = text.replace('+', " ");
+    let decoded = percent_encoding::percent_decode_str(&text).decode_utf8().ok()?;
+    clean_name(&decoded)
+}
+
+/// The song behind a canonical `spotify:lookup:` link.
+pub fn lookup(text: &str) -> Option<Lookup> {
+    let rest = text.trim().strip_prefix(LOOKUP_PREFIX)?;
+    let mut parts = rest.split(':');
+    let (mode, artist, track) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() {
+        return None;
+    }
+    if mode == "artist" {
+        let artist = decode_part(artist)?;
+        return (!artist.is_empty()).then(|| Lookup { queue: false, artist, track: String::new(), artist_only: true });
+    }
+    let queue = match mode {
+        "play" => false,
+        "queue" => true,
+        _ => return None,
+    };
+    let track = decode_part(track)?;
+    (!track.is_empty()).then(|| Lookup {
+        queue,
+        artist: decode_part(artist).unwrap_or_default(),
+        track,
+        artist_only: false,
+    })
+}
+
+fn canonical_lookup(found: &Lookup) -> String {
+    let encode = |text: &str| percent_encoding::utf8_percent_encode(text, percent_encoding::NON_ALPHANUMERIC).to_string();
+    format!(
+        "{LOOKUP_PREFIX}{}:{}:{}",
+        if found.artist_only { "artist" } else if found.queue { "queue" } else { "play" },
+        encode(&found.artist),
+        encode(&found.track)
+    )
+}
+
+/// `play?artist=..&track=..` or `queue?..`, the part after `chanceify://`.
+fn lookup_from_link(rest: &str) -> Option<Lookup> {
+    let rest = rest.split('#').next().unwrap_or(rest);
+    let (verb, query) = rest.split_once('?')?;
+    let verb = verb.trim_matches('/');
+    let queue = match verb {
+        "play" | "artist" => false,
+        "queue" => true,
+        _ => return None,
+    };
+    let (mut artist, mut track) = (String::new(), String::new());
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        match key {
+            "artist" => artist = decode_part(value)?,
+            "track" => track = decode_part(value)?,
+            _ => {}
+        }
+    }
+    if verb == "artist" {
+        return (!artist.is_empty()).then_some(Lookup { queue: false, artist, track: String::new(), artist_only: true });
+    }
+    (!track.is_empty()).then_some(Lookup { queue, artist, track, artist_only: false })
+}
+
 /// Resource pages. Search links carry text instead of a resource id.
 const KINDS: [&str; 6] = ["track", "album", "artist", "playlist", "show", "episode"];
 
@@ -51,6 +140,14 @@ pub fn canonical_context_uri(uri: &str) -> String {
 /// without a locale segment (`/intl-de/`), a query string, or the old
 /// `/user/NAME/playlist/ID` shape.
 pub fn parse(text: &str) -> Option<String> {
+    // A song asked for by name (from a web page): the canonical form keeps
+    // the names, so the instance that is already running can look it up.
+    if let Some(found) = lookup(text) {
+        return Some(canonical_lookup(&found));
+    }
+    if let Some(found) = text.trim().strip_prefix("chanceify://").and_then(lookup_from_link) {
+        return Some(canonical_lookup(&found));
+    }
     // chanceify://track/ID is the same link, handed to this app, and a song
     // link of this kind plays when it opens.
     if let Some(rest) = text.trim().strip_prefix("chanceify://") {
@@ -180,6 +277,20 @@ fn is_id(id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A page asks for a song by name; the canonical form carries the names.
+    #[test]
+    fn songs_asked_for_by_name() {
+        let uri = parse("chanceify://play?artist=Daft+Punk&track=One%20More%20Time").unwrap();
+        let wanted = Lookup { queue: false, artist: "Daft Punk".into(), track: "One More Time".into(), artist_only: false };
+        assert_eq!(lookup(&uri), Some(wanted));
+        // Passed on to the running instance, the canonical form still parses.
+        assert_eq!(parse(&uri), Some(uri.clone()));
+        let queued = parse("chanceify://queue/?artist=A%26B&track=x").unwrap();
+        assert_eq!(lookup(&queued).map(|found| (found.queue, found.artist)), Some((true, "A&B".to_string())));
+        assert_eq!(parse("chanceify://play?artist=a"), None);
+        assert_eq!(parse("chanceify://play?track=a%00b"), None);
+    }
 
     /// Every shape Spotify's own apps and site hand out lands on the one
     /// URI the app navigates by.

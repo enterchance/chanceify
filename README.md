@@ -11,7 +11,9 @@
   <a href="https://github.com/madlygeeked/chanceify/issues">issues</a>
 </p>
 
-a spotify player for windows. needs spotify premium.
+a spotify player for windows.  <br />
+needs spotify premium to stream.  <br />
+local library works great with no premium. :)  <br />
 
 ## get it
 

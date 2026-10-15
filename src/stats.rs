@@ -130,6 +130,18 @@ impl Stats {
         self.dirty = true;
     }
 
+    /// When each song was last heard (seconds since 1970).
+    pub fn last_played(&self) -> std::collections::HashMap<&str, i64> {
+        let mut last: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
+        for play in &self.plays {
+            let entry = last.entry(play.uri.as_str()).or_insert(play.t);
+            if play.t > *entry {
+                *entry = play.t;
+            }
+        }
+        last
+    }
+
     pub fn clear(&mut self) {
         if !self.plays.is_empty() {
             self.plays.clear();
@@ -195,7 +207,7 @@ impl Stats {
         }
         let sort = |mut rows: Vec<Ranked>| {
             rows.sort_by(|a, b| b.plays.cmp(&a.plays).then_with(|| a.name.cmp(&b.name)));
-            rows.truncate(30);
+            rows.truncate(50);
             rows
         };
         (sort(artists.into_values().collect()), sort(songs.into_values().collect()))

@@ -34,8 +34,22 @@ impl App {
     /// The screen jumps by itself when the music does what the visualizer
     /// settings ask: a rise in loudness, in the bass, or a beat.
     pub fn auto_jump(&mut self) {
-        let mode = self.settings.vis_jump_react.min(2);
+        let mode = self.settings.vis_jump_react.min(3);
         if !self.settings.vis_jump_on || !self.now_playing().is_some_and(|now| now.playing && now.local) {
+            return;
+        }
+        // Mode 3: on the song's own tempo, one jump per beat of its BPM.
+        if mode == 3 {
+            let Some(bpm) = self.now_playing_item().and_then(|item| self.bpm_for(&item)) else {
+                return;
+            };
+            if bpm.is_finite() && bpm > 30.0 {
+                let period = (60.0 / bpm).max(self.settings.jump_gap.clamp(10.0, 100.0) / 100.0);
+                if self.jump_at.is_none_or(|at| at.elapsed().as_secs_f32() >= period) {
+                    self.jump_at = Some(Instant::now());
+                self.jump_stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+                }
+            }
             return;
         }
         let energy = if mode == 1 {
@@ -66,6 +80,7 @@ impl App {
         let rested = self.jump_at.is_none_or(|at| at.elapsed().as_secs_f32() > gap);
         if rested && energy > floor && energy > self.jump_avg * ratio + 0.01 {
             self.jump_at = Some(Instant::now());
+                self.jump_stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
         }
         self.jump_avg += (energy - self.jump_avg) * adapt;
     }

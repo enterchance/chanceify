@@ -94,6 +94,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     if app.fullscreen_vis {
+        // The queue is laid out first, on the right, so the picture takes
+        // what is left (a panel made after the full-window one has no room).
+        if app.show_queue_panel {
+            queue::side_panel(app, ui);
+        }
         player_bar::show(app, ui);
         lyrics::vis_overlay(app, ui);
         keys::handle(app, ctx);
@@ -130,6 +135,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
     player_bar::show(app, ui);
     if app.lyrics_fullscreen.is_some() {
+        // The queue keeps its place beside the lyrics; E sends it away.
+        if app.show_queue_panel {
+            queue::side_panel(app, ui);
+        }
         lyrics::fullscreen(app, ui);
     } else {
         if app.settings.sidebar_visible {
