@@ -1422,11 +1422,11 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
             .clamp(screen.top() + 8.0, (screen.bottom() - 8.0 - natural_h * fit).max(screen.top() + 8.0)),
     );
     let stored: Option<egui::Pos2> = ctx.data(|data| data.get_temp(pos_id));
-    let fixed_pos = stored.unwrap_or(default_pos);
-    let fixed_pos = egui::pos2(
-        fixed_pos.x.clamp(screen.left(), (screen.right() - 60.0).max(screen.left())),
-        fixed_pos.y.clamp(screen.top(), (screen.bottom() - 40.0).max(screen.top())),
-    );
+    // Never off the window: the whole panel stays inside, whatever its size.
+    let max_x = (screen.right() - natural_w * fit - 2.0).max(screen.left());
+    let max_y = (screen.bottom() - natural_h * fit - 2.0).max(screen.top());
+    let keep_inside = |at: egui::Pos2| egui::pos2(at.x.clamp(screen.left(), max_x), at.y.clamp(screen.top(), max_y));
+    let fixed_pos = keep_inside(stored.unwrap_or(default_pos));
     let panel = egui::Window::new("visualizer-panel")
         .id(win_id)
         .title_bar(false)
@@ -1479,7 +1479,7 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
                     ui.painter().circle_filled(egui::pos2(rect.center().x + dx, rect.top() + 5.0), 1.2, colour);
                 }
                 if response.dragged() {
-                    let moved = fixed_pos + response.drag_delta();
+                    let moved = keep_inside(fixed_pos + response.drag_delta());
                     ui.ctx().data_mut(|data| data.insert_temp(pos_id, moved));
                 }
                 response.on_hover_text("Drag to move");
@@ -1770,23 +1770,6 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             crate::crash::stage("menu: bars column");
             if shapes & crate::settings::Settings::SHAPE_BARS != 0 {
                 super::widgets::menu_separator(ui, &palette);
-                // Ready-made looks: opacity, count, height, gap.
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    for (name, opacity, count, height, gap) in [
-                        ("Fine", 50.0f32, 1024u16, 0.8f32, 0.0f32),
-                        ("Classic", 100.0, 128, 1.0, 2.0),
-                        ("Chunky", 100.0, 48, 1.6, 4.0),
-                        ("Tall", 90.0, 96, 2.6, 1.0),
-                    ] {
-                        if chip(ui, &palette, &gettext(app.locale, name), false, 62.0).clicked() {
-                            app.actions.push(Action::SetVisOpacity(true, opacity / 100.0));
-                            app.actions.push(Action::SetVisBars(count));
-                            app.actions.push(Action::SetVisBarHeight(height));
-                            app.actions.push(Action::SetVisGap(gap));
-                        }
-                    }
-                });
                 slider_row(
                     ui,
                     &palette,
@@ -1795,28 +1778,6 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                     app.settings.vis_opacity(true) * 100.0,
                     |value| app.actions.push(Action::SetVisOpacity(true, value / 100.0)),
                 );
-                if chip(
-                    ui,
-                    &palette,
-                    &gettext(app.locale, "Bars rise onto the song-length row"),
-                    !app.settings.vis_bars_stay,
-                    ui.available_width().min(290.0),
-                )
-                .clicked()
-                {
-                    app.actions.push(Action::ToggleVisBarsStay);
-                }
-                if chip(
-                    ui,
-                    &palette,
-                    if app.settings.vis_reverse { "Scrolls right to left" } else { "Scrolls left to right" },
-                    app.settings.vis_reverse,
-                    ui.available_width().min(290.0),
-                )
-                .clicked()
-                {
-                    app.actions.push(Action::ToggleVisReverseOne(0));
-                }
                 slider_row(
                 ui,
                 &palette,
@@ -1856,6 +1817,34 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                         }
                     });
                 }
+                if chip(
+                    ui,
+                    &palette,
+                    if app.settings.vis_reverse { "Scrolls right to left" } else { "Scrolls left to right" },
+                    app.settings.vis_reverse,
+                    ui.available_width().min(290.0),
+                )
+                .clicked()
+                {
+                    app.actions.push(Action::ToggleVisReverseOne(0));
+                }
+                // Ready-made looks: opacity, count, height, gap.
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    for (name, opacity, count, height, gap) in [
+                        ("Fine", 50.0f32, 1024u16, 0.8f32, 0.0f32),
+                        ("Classic", 100.0, 128, 1.0, 2.0),
+                        ("Chunky", 100.0, 48, 1.6, 4.0),
+                        ("Tall", 90.0, 96, 2.6, 1.0),
+                    ] {
+                        if chip(ui, &palette, &gettext(app.locale, name), false, 62.0).clicked() {
+                            app.actions.push(Action::SetVisOpacity(true, opacity / 100.0));
+                            app.actions.push(Action::SetVisBars(count));
+                            app.actions.push(Action::SetVisBarHeight(height));
+                            app.actions.push(Action::SetVisGap(gap));
+                        }
+                    }
+                });
             }
             });
             ui.vertical(|ui| {
@@ -1869,36 +1858,14 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             }
             if shapes & crate::settings::Settings::SHAPE_FLOW != 0 {
                 super::widgets::menu_separator(ui, &palette);
-                // Which edges the flow rises from.
-                if app.fullscreen_vis || app.mini_active {
-                    let sides = app.settings.vis_flow_sides_value();
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 6.0;
-                        for (bit, label) in [(1u8, "Top"), (2, "Left"), (4, "Bottom"), (8, "Right")] {
-                            if chip(ui, &palette, &gettext(app.locale, label), sides & bit != 0, 48.0).clicked() {
-                                app.actions.push(Action::ToggleFlowSide(bit));
-                            }
-                        }
-                    });
-                }
-                // Ready-made looks: sheets, height, opacity, speed.
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    for (name, sheets, depth, opacity, speed) in [
-                        ("Calm", 3u8, 0.5f32, 70.0f32, 0.6f32),
-                        ("Rolling", 5, 0.86, 100.0, 1.0),
-                        ("Dense", 10, 0.7, 85.0, 1.6),
-                        ("Storm", 8, 1.1, 100.0, 3.5),
-                    ] {
-                        if chip(ui, &palette, &gettext(app.locale, name), false, 62.0).clicked() {
-                            app.actions.push(Action::SetFlowSheets(sheets));
-                            app.actions.push(Action::SetFlowDepth(depth));
-                            app.actions.push(Action::SetVisOpacity(false, opacity / 100.0));
-                            app.actions.push(Action::SetFlowSpeed(speed));
-                        }
-                    }
-                });
-
+                slider_row(
+                    ui,
+                    &palette,
+                    &gettext(app.locale, "Flow opacity"),
+                    10.0..=100.0,
+                    app.settings.vis_opacity(false) * 100.0,
+                    |value| app.actions.push(Action::SetVisOpacity(false, value / 100.0)),
+                );
                 // The flow has settings of its own, and none of the bars':
                 // its sheets are folded out of a fixed number of readings,
                 // so a bar count would not change what it draws.
@@ -1925,14 +1892,6 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                 slider_row(
                     ui,
                     &palette,
-                    &gettext(app.locale, "Flow opacity"),
-                    10.0..=100.0,
-                    app.settings.vis_opacity(false) * 100.0,
-                    |value| app.actions.push(Action::SetVisOpacity(false, value / 100.0)),
-                );
-                slider_row(
-                    ui,
-                    &palette,
                     &gettext(app.locale, "Flow speed"),
                     *crate::settings::Settings::VIS_FLOW_SPEED.start()
                         ..=*crate::settings::Settings::VIS_FLOW_SPEED.end(),
@@ -1948,6 +1907,18 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                     app.settings.player_bar_vis_flow_offset(),
                     |value| app.actions.push(Action::SetFlowOffset(value)),
                 );
+                // Which edges the flow rises from.
+                if app.fullscreen_vis || app.mini_active {
+                    let sides = app.settings.vis_flow_sides_value();
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        for (bit, label) in [(1u8, "Top"), (2, "Left"), (4, "Bottom"), (8, "Right")] {
+                            if chip(ui, &palette, &gettext(app.locale, label), sides & bit != 0, 48.0).clicked() {
+                                app.actions.push(Action::ToggleFlowSide(bit));
+                            }
+                        }
+                    });
+                }
                 if chip(
                     ui,
                     &palette,
@@ -1959,6 +1930,24 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                 {
                     app.actions.push(Action::ToggleVisReverseOne(1));
                 }
+                // Ready-made looks: sheets, height, opacity, speed.
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    for (name, sheets, depth, opacity, speed) in [
+                        ("Calm", 3u8, 0.5f32, 70.0f32, 0.6f32),
+                        ("Rolling", 5, 0.86, 100.0, 1.0),
+                        ("Dense", 10, 0.7, 85.0, 1.6),
+                        ("Storm", 8, 1.1, 100.0, 3.5),
+                    ] {
+                        if chip(ui, &palette, &gettext(app.locale, name), false, 62.0).clicked() {
+                            app.actions.push(Action::SetFlowSheets(sheets));
+                            app.actions.push(Action::SetFlowDepth(depth));
+                            app.actions.push(Action::SetVisOpacity(false, opacity / 100.0));
+                            app.actions.push(Action::SetFlowSpeed(speed));
+                        }
+                    }
+                });
+
             }
             });
             ui.vertical(|ui| {
@@ -2017,25 +2006,6 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                         }
                     }
                 });
-                if !art_scroll {
-                    let active = (0..crate::settings::Settings::SWIRL_PRESETS.len())
-                        .find(|index| app.settings.swirl_preset_active(*index));
-                    let names: Vec<&str> = crate::settings::Settings::SWIRL_PRESETS
-                        .iter()
-                        .map(|(name, _)| *name)
-                        .collect();
-                    // Six looks for each family, numbered; no words.
-                    if let Some(index) = numbered_rows(
-                        ui,
-                        &palette,
-                        &gettext(app.locale, "LOOK"),
-                        &[(Icon::Disc, 0..6), (Icon::Sparkles, 6..12), (Icon::Waves, 12..18)],
-                        &names,
-                        active,
-                    ) {
-                        app.actions.push(Action::SetSwirlPreset(index));
-                    }
-                }
                 for (index, (label, low, high, _)) in
                     crate::settings::Settings::SWIRL_TUNE.iter().enumerate()
                 {
@@ -2074,6 +2044,25 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                 .clicked()
                 {
                     app.actions.push(Action::ToggleVisReverseOne(2));
+                }
+                if !art_scroll {
+                    let active = (0..crate::settings::Settings::SWIRL_PRESETS.len())
+                        .find(|index| app.settings.swirl_preset_active(*index));
+                    let names: Vec<&str> = crate::settings::Settings::SWIRL_PRESETS
+                        .iter()
+                        .map(|(name, _)| *name)
+                        .collect();
+                    // Six looks for each family, numbered; no words.
+                    if let Some(index) = numbered_rows(
+                        ui,
+                        &palette,
+                        &gettext(app.locale, "LOOK"),
+                        &[(Icon::Disc, 0..6), (Icon::Sparkles, 6..12), (Icon::Waves, 12..18)],
+                        &names,
+                        active,
+                    ) {
+                        app.actions.push(Action::SetSwirlPreset(index));
+                    }
                 }
                 if super::widgets::menu_item(ui, &palette, None, &gettext(app.locale, "Reset swirl")) {
                     app.actions.push(Action::ResetSwirlTune);
