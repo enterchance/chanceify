@@ -1561,26 +1561,50 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
             .fixed_pos(grip.min)
             .show(ctx, |ui| {
                 let palette = app.palette;
-                let (rect, response) = ui.allocate_exact_size(grip.size(), egui::Sense::drag());
+                let (rect, response) = ui.allocate_exact_size(grip.size(), egui::Sense::click_and_drag());
                 let hot = response.hovered() || response.dragged();
                 if hot {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+                    ui.ctx().set_cursor_icon(if response.dragged_by(egui::PointerButton::Secondary) {
+                        egui::CursorIcon::ResizeVertical
+                    } else {
+                        egui::CursorIcon::ResizeNwSe
+                    });
                 }
                 let colour = if hot { palette.text } else { palette.dim };
                 for (dx, dy) in [(0.0, 0.0), (-4.0, 0.0), (0.0, -4.0), (-8.0, 0.0), (-4.0, -4.0), (0.0, -8.0)] {
                     ui.painter().circle_filled(egui::pos2(rect.center().x + dx + 4.0, rect.center().y + dy + 4.0), 1.0, colour);
                 }
-                if response.dragged() {
+                if response.dragged_by(egui::PointerButton::Primary) {
                     let now_scale = if app.settings.vis_panel_w > 0.0 { app.settings.vis_panel_w } else { 1.0 };
                     let next = now_scale + response.drag_delta().x / natural_w.max(200.0);
                     app.settings.vis_panel_w = next.clamp(0.4, 1.4);
                     app.mark_settings_dirty();
                 }
+                if response.dragged_by(egui::PointerButton::Secondary) {
+                    // Right-drag: the window's height, not its scale. Dragging
+                    // up makes it taller (the bottom edge stays where it is,
+                    // the top moves up with the pointer); down makes it shorter.
+                    let most = ((screen_h - 110.0) / fit).max(VIS_PANEL_MIN_H);
+                    let base = if app.settings.vis_panel_h > 0.0 {
+                        app.settings.vis_panel_h
+                    } else {
+                        (natural_h - 40.0).max(VIS_PANEL_MIN_H)
+                    };
+                    let next = (base - response.drag_delta().y / fit).clamp(VIS_PANEL_MIN_H, most);
+                    if (next - base).abs() > 0.01 {
+                        app.settings.vis_panel_h = next;
+                        let top = ui.ctx().data(|data| data.get_temp::<egui::Pos2>(pos_id)).unwrap_or(fixed_pos);
+                        let moved = egui::pos2(top.x, top.y - (next - base) * fit);
+                        ui.ctx().data_mut(|data| data.insert_temp(pos_id, keep_inside(moved)));
+                        app.mark_settings_dirty();
+                    }
+                }
                 if response.double_clicked() {
                     app.settings.vis_panel_w = 0.0;
+                    app.settings.vis_panel_h = 0.0;
                     app.mark_settings_dirty();
                 }
-                response.on_hover_text("Drag to resize. Double-click to reset.");
+                response.on_hover_text("Drag to scale. Right-drag up or down for height. Double-click to reset.");
             });
         let size = 22.0;
         egui::Area::new(egui::Id::new("vis-panel-close"))
@@ -1792,12 +1816,20 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui, in_panel: bool) {
     // than the screen.
     let screen_h = ui.ctx().content_rect().height();
     let max_h = ((screen_h - 110.0) / fit).max(200.0);
+    // The reader's own height (right-drag on the corner grip), if set.
+    let own_h = app.settings.vis_panel_h;
+    let (scroll_max, scroll_min) = if own_h.is_finite() && own_h > 0.0 {
+        let h = own_h.clamp(VIS_PANEL_MIN_H.min(max_h), max_h);
+        (h, h)
+    } else {
+        (max_h, VIS_PANEL_MIN_H.min(max_h))
+    };
     egui::ScrollArea::vertical()
         .id_salt("vis-panel-scroll")
-        .max_height(max_h)
+        .max_height(scroll_max)
         // Never squeezed to a sliver, whatever room the place it opened at
         // leaves: it keeps a usable height and the window is moved up to fit.
-        .min_scrolled_height(VIS_PANEL_MIN_H.min(max_h))
+        .min_scrolled_height(scroll_min)
         .auto_shrink([false, true])
         .show(ui, |ui| vis_menu_inner(app, ui));
 }

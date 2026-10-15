@@ -1677,6 +1677,12 @@ pub enum Action {
     SetEqPreamp(f32),
     /// One of the equalizer's presets, by its place in the list.
     ApplyEqPreset(usize),
+    ApplyCustomEq(usize),
+    SaveCustomEq(String),
+    RemoveCustomEq(usize),
+    ToggleEqHideDefaults,
+    ExportEq,
+    ImportEq,
     /// The balance, -1 all left to 1 all right.
     SetBalance(f32),
     ToggleMono,

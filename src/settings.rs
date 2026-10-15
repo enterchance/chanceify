@@ -871,6 +871,8 @@ pub struct Settings {
     /// Built-in presets and scenes the reader removed from the lists.
     #[serde(default)]
     pub hidden_presets: Vec<String>,
+    /// The built-in equalizer presets are left out of the equalizer's list.
+    pub eq_hide_defaults: bool,
     /// Which of the cover's colours the bars take: 0 is the main one.
     pub player_bar_vis_colour_pick: u8,
     /// How many sheets the flow folds together, front to back.
@@ -1488,6 +1490,7 @@ impl Default for Settings {
             custom_eqs: Vec::new(),
             custom_scenes: Vec::new(),
             hidden_presets: Vec::new(),
+            eq_hide_defaults: false,
             player_bar_vis_colour_pick: 0,
             player_bar_vis_flow_sheets: crate::ui::player_bar::FLOW_SHEETS as u8,
             player_bar_vis_flow_depth: 0.86,

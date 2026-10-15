@@ -12664,6 +12664,59 @@ impl App {
                     self.push_eq();
                 }
             }
+            Action::ApplyCustomEq(index) => {
+                if let Some((_, bands)) = self.settings.custom_eqs.get(index) {
+                    self.settings.eq_bands_db = *bands;
+                    self.settings.eq_on = true;
+                    self.push_eq();
+                    self.mark_settings_dirty();
+                }
+            }
+            Action::SaveCustomEq(name) => {
+                let name: String = name.trim().chars().take(40).collect();
+                if name.is_empty() {
+                    self.toast_error("Type a name for the curve first");
+                } else {
+                    let bands = self.settings.eq_bands_db;
+                    self.settings.custom_eqs.retain(|(other, _)| *other != name);
+                    self.settings.custom_eqs.push((name.clone(), bands));
+                    self.mark_settings_dirty();
+                    self.toast(format!("Saved \"{name}\""));
+                }
+            }
+            Action::RemoveCustomEq(index) => {
+                if index < self.settings.custom_eqs.len() {
+                    let (name, _) = self.settings.custom_eqs.remove(index);
+                    self.mark_settings_dirty();
+                    self.toast(format!("Removed \"{name}\""));
+                }
+            }
+            Action::ToggleEqHideDefaults => {
+                self.settings.eq_hide_defaults = !self.settings.eq_hide_defaults;
+                self.mark_settings_dirty();
+            }
+            Action::ExportEq => {
+                let text = self.settings.export_presets();
+                let dir = self.dirs.index_settings_dir();
+                let written = std::fs::create_dir_all(&dir)
+                    .and_then(|()| std::fs::write(dir.join("eq-presets.txt"), &text));
+                ctx.copy_text(text);
+                match written {
+                    Ok(()) => self.toast(format!("Equalizers saved in {} (and copied)", dir.display())),
+                    Err(error) => self.toast_error(format!("Could not save the equalizers: {error}")),
+                }
+            }
+            Action::ImportEq => {
+                let path = self.dirs.index_settings_dir().join("eq-presets.txt");
+                match std::fs::read_to_string(&path) {
+                    Ok(text) => {
+                        let count = self.settings.import_presets(&text);
+                        self.mark_settings_dirty();
+                        self.toast(format!("Loaded {count} equalizers"));
+                    }
+                    Err(_) => self.toast_error(format!("No eq-presets.txt in {}", path.parent().map_or_else(String::new, |p| p.display().to_string()))),
+                }
+            }
             Action::SetBalance(balance) => {
                 self.settings.balance = balance.clamp(-1.0, 1.0);
                 self.push_eq();

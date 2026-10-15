@@ -2217,22 +2217,86 @@ pub(super) fn eq_panel(app: &mut App, ui: &mut egui::Ui) {
     let locale = app.locale;
     ui.set_width(470.0);
     let mut on = app.settings.eq_on;
-    if widgets::switch(ui, &palette, &gettext(locale, "On"), &mut on).changed() {
-        app.actions.push(Action::ToggleEq);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        if widgets::switch(ui, &palette, &gettext(locale, "On"), &mut on).changed() {
+            app.actions.push(Action::ToggleEq);
+        }
+        if theme::soft_button(ui, &palette, None, "Export", false)
+            .on_hover_text("Save your own curves to eq-presets.txt in the index settings folder, and copy them")
+            .clicked()
+        {
+            app.actions.push(Action::ExportEq);
+        }
+        if theme::soft_button(ui, &palette, None, "Import", false)
+            .on_hover_text("Load the curves in eq-presets.txt from the index settings folder")
+            .clicked()
+        {
+            app.actions.push(Action::ImportEq);
+        }
+        let mut hide = app.settings.eq_hide_defaults;
+        if widgets::switch(ui, &palette, "Hide defaults", &mut hide).changed() {
+            app.actions.push(Action::ToggleEqHideDefaults);
+        }
+    });
+    ui.add_space(6.0);
+    if !app.settings.eq_hide_defaults {
+        let names: Vec<(usize, &str)> = crate::eq::PRESETS
+            .iter()
+            .enumerate()
+            .map(|(index, preset)| (index, preset.name))
+            .collect();
+        let current = crate::eq::PRESETS
+            .iter()
+            .position(|preset| preset.bands_db == app.settings.eq_bands_db)
+            .unwrap_or(usize::MAX);
+        if let Some(picked) = widgets::chips(ui, &palette, &names, current) {
+            app.actions.push(Action::ApplyEqPreset(picked));
+        }
+    }
+    // The reader's own curves: click to use, x to remove.
+    if !app.settings.custom_eqs.is_empty() {
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let mut apply = None;
+            let mut remove = None;
+            for (index, (name, bands)) in app.settings.custom_eqs.iter().enumerate() {
+                let active = *bands == app.settings.eq_bands_db;
+                if theme::soft_button(ui, &palette, None, name, active).clicked() {
+                    apply = Some(index);
+                }
+                if theme::soft_button(ui, &palette, None, "\u{d7}", false)
+                    .on_hover_text("Remove this curve")
+                    .clicked()
+                {
+                    remove = Some(index);
+                }
+                ui.add_space(6.0);
+            }
+            if let Some(index) = apply {
+                app.actions.push(Action::ApplyCustomEq(index));
+            }
+            if let Some(index) = remove {
+                app.actions.push(Action::RemoveCustomEq(index));
+            }
+        });
     }
     ui.add_space(6.0);
-    let names: Vec<(usize, &str)> = crate::eq::PRESETS
-        .iter()
-        .enumerate()
-        .map(|(index, preset)| (index, preset.name))
-        .collect();
-    let current = crate::eq::PRESETS
-        .iter()
-        .position(|preset| preset.bands_db == app.settings.eq_bands_db)
-        .unwrap_or(usize::MAX);
-    if let Some(picked) = widgets::chips(ui, &palette, &names, current) {
-        app.actions.push(Action::ApplyEqPreset(picked));
-    }
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let id = egui::Id::new("eq-save-name");
+        let mut name = ui.data(|data| data.get_temp::<String>(id)).unwrap_or_default();
+        egui::TextEdit::singleline(&mut name)
+            .hint_text("Name this curve")
+            .desired_width(180.0)
+            .show(ui);
+        if theme::soft_button(ui, &palette, None, "Save curve", false).clicked() {
+            app.actions.push(Action::SaveCustomEq(name.clone()));
+            name.clear();
+        }
+        ui.data_mut(|data| data.insert_temp(id, name));
+    });
     ui.add_space(8.0);
     eq_curve(ui, &palette, &crate::app::eq_settings(&app.settings));
     ui.add_space(8.0);
