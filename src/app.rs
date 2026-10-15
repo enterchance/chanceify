@@ -13237,6 +13237,7 @@ impl App {
             let grow = 1.0 + 2.0 * reach / screen.width().min(screen.height()).max(200.0);
             let centre = screen.center().to_vec2();
             let transform = egui::emath::TSTransform::new(centre * (1.0 - grow) + shift, grow);
+            let layers: Vec<egui::LayerId> = ctx.memory(|memory| memory.layer_ids().collect());
             for layer in layers {
                 ctx.transform_layer_shapes(layer, transform);
             }
