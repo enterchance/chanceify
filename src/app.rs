@@ -565,6 +565,9 @@ pub struct App {
     taps: Vec<Instant>,
     /// When the bass-jump key was last pressed.
     pub jump_at: Option<Instant>,
+    /// When the last bass jump happened (ms since 1970); 0 before the first.
+    pub jump_stamp: u64,
+    lights_jump_seen: u64,
     pub jump_avg: f32,
     /// Songs in the user's playlists that can no longer be played.
     pub unavailable: crate::unavailable::Store,
@@ -1223,6 +1226,8 @@ impl App {
             live: live_analysis::LiveAnalysis::default(),
             taps: Vec::new(),
             jump_at: None,
+            jump_stamp: 0,
+            lights_jump_seen: 0,
             jump_avg: 0.0,
             unavailable: crate::unavailable::Store::load(&dirs_cache_unavailable),
             unavailable_scan: None,
@@ -4100,11 +4105,13 @@ impl App {
         if let Some(last) = ctx.data(|data| data.get_temp::<f64>(last_id))
             && time - last < 0.1
             && time >= last
+            && self.jump_stamp == self.lights_jump_seen
         {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
             return;
         }
         ctx.data_mut(|data| data.insert_temp(last_id, time));
+        self.lights_jump_seen = self.jump_stamp;
         let colours = self.swirl_colours();
         // Exactly what the bars are drawn between: the picked colour, the
         // gradient switch and the look all count.
@@ -4129,6 +4136,10 @@ impl App {
             "gradient": gradient,
             "low": hex(low),
             "high": hex(high),
+            // Bass jump: `jump_ts` changes at every jump (ms since 1970, 0 =
+            // none yet); the jump itself falls from 1 to 0 over `jump_ms`.
+            "jump_ts": self.jump_stamp,
+            "jump_ms": 280,
         });
         let state = self.dirs.state.clone();
         self.lights.publish(&state, body);
@@ -11495,7 +11506,12 @@ impl App {
                 self.mark_settings_dirty();
             }
             Action::ToggleVisPanel => self.vis_panel = !self.vis_panel,
-            Action::TapTempo => self.jump_at = Some(Instant::now()),
+            Action::TapTempo => {
+                self.jump_at = Some(Instant::now());
+                self.jump_stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_millis() as u64);
+            }
             Action::StartTour => self.tour_step = Some(0),
             Action::SavePlaylistToIndex(uri) => {
                 let id = uri.rsplit(':').next().unwrap_or("").to_string();

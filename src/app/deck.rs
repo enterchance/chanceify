@@ -47,6 +47,7 @@ impl App {
                 let period = (60.0 / bpm).max(self.settings.jump_gap.clamp(10.0, 100.0) / 100.0);
                 if self.jump_at.is_none_or(|at| at.elapsed().as_secs_f32() >= period) {
                     self.jump_at = Some(Instant::now());
+                self.jump_stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
                 }
             }
             return;
@@ -79,6 +80,7 @@ impl App {
         let rested = self.jump_at.is_none_or(|at| at.elapsed().as_secs_f32() > gap);
         if rested && energy > floor && energy > self.jump_avg * ratio + 0.01 {
             self.jump_at = Some(Instant::now());
+                self.jump_stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
         }
         self.jump_avg += (energy - self.jump_avg) * adapt;
     }
