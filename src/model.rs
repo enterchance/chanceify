@@ -1678,7 +1678,6 @@ pub enum Action {
     /// One of the equalizer's presets, by its place in the list.
     ApplyEqPreset(usize),
     ApplyCustomEq(usize),
-    SaveCustomEq(String),
     RemoveCustomEq(usize),
     ToggleEqHideDefaults,
     ExportEq,

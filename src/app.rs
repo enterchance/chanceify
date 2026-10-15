@@ -12672,18 +12672,6 @@ impl App {
                     self.mark_settings_dirty();
                 }
             }
-            Action::SaveCustomEq(name) => {
-                let name: String = name.trim().chars().take(40).collect();
-                if name.is_empty() {
-                    self.toast_error("Type a name for the curve first");
-                } else {
-                    let bands = self.settings.eq_bands_db;
-                    self.settings.custom_eqs.retain(|(other, _)| *other != name);
-                    self.settings.custom_eqs.push((name.clone(), bands));
-                    self.mark_settings_dirty();
-                    self.toast(format!("Saved \"{name}\""));
-                }
-            }
             Action::RemoveCustomEq(index) => {
                 if index < self.settings.custom_eqs.len() {
                     let (name, _) = self.settings.custom_eqs.remove(index);
