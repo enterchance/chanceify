@@ -317,6 +317,7 @@ fn artist_hero(app: &mut App, ui: &mut egui::Ui, artist: &Artist, preview: Optio
             description: None,
             byline,
             round: true,
+            edit: None,
         },
     );
 }

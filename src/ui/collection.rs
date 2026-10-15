@@ -25,6 +25,8 @@ pub(super) struct Hero<'a> {
     pub description: Option<String>,
     pub byline: Vec<(String, Option<Page>)>,
     pub round: bool,
+    /// A playlist the user can edit: right-clicking its title offers it.
+    pub edit: Option<Playlist>,
 }
 
 #[derive(Default)]
@@ -66,6 +68,13 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
         .images
         .thumbnail
         .and_then(|uri| app.softened_covers.texture(ui.ctx(), &art, uri));
+    let backdrop_slot = ui.painter().add(egui::Shape::Noop);
+    let backdrop_top = ui.cursor().top();
+    let (text_main, text_soft) = if softened.is_some() {
+        (egui::Color32::WHITE, egui::Color32::from_white_alpha(200))
+    } else {
+        (text_main, text_soft)
+    };
     ui.add_space(12.0);
     let cover_size = if ui.available_width() > 720.0 {
         212.0
@@ -103,7 +112,7 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
             ui.set_width(width);
             ui.spacing_mut().item_spacing.y = 6.0;
             ui.add_space(cover_size * 0.08);
-            theme::text(ui, hero.kind.as_ref(), theme::medium(12.5), palette.text);
+            theme::text(ui, hero.kind.as_ref(), theme::medium(12.5), text_main);
             let mut size = if cover_size > 200.0 {
                 56.0
             } else if cover_size > 130.0 {
@@ -115,14 +124,41 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
                 let galley = ui.painter().layout_no_wrap(
                     hero.title.to_string(),
                     theme::bold(size),
-                    palette.text,
+                    text_main,
                 );
                 if galley.size().x <= width || size <= 22.0 {
                     break;
                 }
                 size -= 6.0;
             }
-            theme::text(ui, hero.title, theme::bold(size), palette.text);
+            let title_response =
+                theme::text(ui, hero.title, theme::bold(size), text_main);
+            if let Some(playlist) = hero.edit.clone() {
+                let title_response =
+                    ui.interact(title_response.rect, ui.id().with("hero-title-menu"), Sense::click());
+                egui::Popup::context_menu(&title_response).show(|ui| {
+                    ui.set_min_width(180.0);
+                    if widgets::menu_item(
+                        ui,
+                        &palette,
+                        Some(Icon::Pencil),
+                        &gettext(app.locale, "Edit details"),
+                    ) {
+                        app.actions.push(Action::ShowDialog(Dialog::EditPlaylist {
+                            cover: Default::default(),
+                            id: playlist.id.clone(),
+                            name: playlist.name.clone(),
+                            description: playlist
+                                .description
+                                .as_deref()
+                                .map(util::strip_html)
+                                .unwrap_or_default(),
+                            public: playlist.public,
+                        }));
+                        ui.close();
+                    }
+                });
+            }
             if let Some(description) = &hero.description
                 && !description.is_empty()
             {
@@ -130,24 +166,24 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
                     ui,
                     description.as_str(),
                     theme::regular(13.5),
-                    palette.secondary,
+                    text_soft,
                 );
             }
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 for (index, (text, page)) in hero.byline.iter().enumerate() {
                     if index > 0 {
-                        theme::text(ui, "•", theme::regular(13.5), palette.secondary);
+                        theme::text(ui, "•", theme::regular(13.5), text_soft);
                     }
                     match page {
                         Some(page) => {
-                            if theme::link(ui, text, theme::semibold(13.5), palette.text).clicked()
+                            if theme::link(ui, text, theme::semibold(13.5), text_main).clicked()
                             {
                                 app.actions.push(Action::Open(page.clone()));
                             }
                         }
                         None => {
-                            theme::text(ui, text, theme::regular(13.5), palette.secondary);
+                            theme::text(ui, text, theme::regular(13.5), text_soft);
                         }
                     }
                 }
@@ -155,6 +191,35 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
         });
     });
     ui.add_space(20.0);
+    if let Some(texture) = &softened {
+        // The cover, blurred, across the full width behind the header and
+        // a stretch below it, darkened and fading into the page.
+        let full = ui.max_rect();
+        let area = Rect::from_min_max(
+            pos2(full.left() - 40.0, backdrop_top - 40.0),
+            pos2(full.right() + 40.0, ui.cursor().top() + 160.0),
+        );
+        let aspect = area.width() / area.height();
+        let visible_h = (1.0 / aspect).min(1.0);
+        let inset = (1.0 - visible_h) / 2.0;
+        let uv = Rect::from_min_max(pos2(0.0, inset), pos2(1.0, 1.0 - inset));
+        let mut mesh = egui::Mesh::with_texture(texture.id());
+        let top = egui::Color32::from_rgba_unmultiplied(70, 70, 70, 255);
+        let bottom = palette.panel;
+        let i = mesh.vertices.len() as u32;
+        let v = |pos: egui::Pos2, uv: egui::Pos2, color: egui::Color32| egui::epaint::Vertex {
+            pos,
+            uv,
+            color,
+        };
+        mesh.vertices.push(v(area.left_top(), uv.left_top(), top));
+        mesh.vertices.push(v(area.right_top(), uv.right_top(), top));
+        mesh.vertices.push(v(area.right_bottom(), uv.right_bottom(), bottom));
+        mesh.vertices.push(v(area.left_bottom(), uv.left_bottom(), bottom));
+        mesh.indices.extend_from_slice(&[i, i + 1, i + 2, i, i + 2, i + 3]);
+        let clipped = ui.painter().with_clip_rect(ui.clip_rect());
+        clipped.set(backdrop_slot, egui::Shape::mesh(mesh));
+    }
 }
 
 pub struct Actions<'a> {
@@ -2097,6 +2162,10 @@ fn playlist_hero<'a>(
             description: playlist.description.as_deref().map(util::strip_html),
             byline,
             round: false,
+            edit: {
+                let user_id = app.user_id().unwrap_or("").to_string();
+                playlist.owned_by(&user_id).then(|| playlist.clone())
+            },
         },
     );
 }
@@ -2222,6 +2291,7 @@ fn album_hero(
             description: None,
             byline,
             round: false,
+            edit: None,
         },
     );
 }
@@ -2273,6 +2343,7 @@ pub fn liked(app: &mut App, ui: &mut egui::Ui) {
             description: None,
             byline: vec![(user, None), (count_text, None)],
             round: false,
+            edit: None,
         },
     );
     let collection_uri = app
