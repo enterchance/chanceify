@@ -78,6 +78,15 @@ export default {
 
 const html = () => ({ headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" } });
 
+// Last.fm spells spaces as + in its addresses. With no artist to go on, a
+// song falls back to Last.fm's search.
+function lastfmLink(kind, artist, title) {
+  const part = (text) => encodeURIComponent(text).replace(/%20/g, "+");
+  if (kind === "a") return "https://www.last.fm/music/" + part(title);
+  if (artist) return "https://www.last.fm/music/" + part(artist.split(/,| & /)[0].trim()) + "/_/" + part(title);
+  return "https://www.last.fm/search?q=" + part(title);
+}
+
 function page({ title, artist, id, image, kind = "t" }) {
   const spotify = id ? `https://open.spotify.com/${KIND[kind]}/${id}` : "https://github.com/madlygeeked/chanceify";
   const line = artist ? `${artist}` : "Listening on chanceify™";
@@ -112,6 +121,7 @@ p{margin:0;color:#c4b5fd;font-size:16px}
 .btn.yt{background:#e62117;color:#fff;font-weight:600}
 .btn.sc{background:#ff5500;color:#fff;font-weight:600}
 .btn.sp{background:#1db954;color:#fff;font-weight:600}
+.btn.lf{background:#d51007;color:#fff;font-weight:600}
 .btn.alt{background:#ffffff14;border:1px solid #a78bfa55;color:#ede9fe;font-weight:500}
 .btn.alt:hover{background:#a78bfa2a}
 .play{margin-top:18px;border:0;border-radius:14px;color-scheme:normal}
@@ -129,7 +139,8 @@ p{margin:0;color:#c4b5fd;font-size:16px}
 ${id ? `<div class="row stack">${kind !== "u" ? `<a class="btn" href="chanceify://${KIND[kind]}/${esc(id)}">Open in chanceify</a>` : ""}
 ${kind === "t" || kind === "a" ? `<a class="btn yt" href="https://www.youtube.com/results?search_query=${encodeURIComponent((artist ? artist + " " : "") + title)}" target="_blank" rel="noopener">Search on YouTube</a>
 <a class="btn sc" href="https://soundcloud.com/search?q=${encodeURIComponent((artist ? artist + " " : "") + title)}" target="_blank" rel="noopener">Search on SoundCloud</a>` : ""}
-<a class="btn sp" href="${esc(spotify)}">Open in Spotify</a></div>
+<a class="btn sp" href="${esc(spotify)}">Open in Spotify</a>
+${kind === "t" || kind === "a" ? `<a class="btn lf" href="${esc(lastfmLink(kind, artist, title))}" target="_blank" rel="noopener">Open on Last.fm</a>` : ""}</div>
 ${kind === "u" ? "" : `<iframe class="play" title="Play a preview" src="https://open.spotify.com/embed/${KIND[kind]}/${esc(id)}?theme=0" width="100%" height="152" frameborder="0" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy"></iframe>`}` : ""}
 <div class="foot">Built with love by <a href="https://madlygeeked.github.io/">chance</a><img class="bear" id="bear" alt=""></div>
 </main>
