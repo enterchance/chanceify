@@ -349,7 +349,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         ("Side lyrics", app.show_lyrics_panel, Action::ToggleLyricsPanel),
                         ("Full screen lyrics", app.lyrics_fullscreen.is_some(), Action::ToggleLyricsFullscreen),
                         ("Full screen visualizer", app.fullscreen_vis, Action::ToggleFullscreenVis),
-                        ("Visualizer settings", app.vis_panel, Action::ToggleVisPanel),
+                        ("Settings", app.vis_panel, Action::ToggleVisPanel),
                         ("Visualizer", app.settings.vis_shapes_value() != 0, Action::ToggleVisShapes),
                         ("Big album art", app.settings.art_expanded, Action::ToggleArtExpanded),
                         ("Mini player", app.mini_active, Action::ToggleMiniPlayer),

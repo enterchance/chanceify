@@ -3875,7 +3875,7 @@ async fn handle(
                     } else {
                         let mut tracks: Vec<crate::api::models::Track> = Vec::new();
                         let mut failure = None;
-                        for (artist, title) in pairs.iter().take(40) {
+                        for (artist, title) in pairs.iter().take(30) {
                             if tracks.len() >= 24 {
                                 break;
                             }

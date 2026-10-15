@@ -1392,32 +1392,36 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
     let screen = ctx.content_rect();
     // The mini player's panel is its own window, so what it measured there
     // (its smaller room) can never squeeze the one in the main window.
+    // (v2 ids: the old windows' remembered sizes were saved to disk, and a
+    // squashed one stayed squashed.)
     let win_id = egui::Id::new(if app.mini_active {
-        "visualizer-panel-mini"
+        "visualizer-panel-mini-v2"
     } else if floating {
-        "visualizer-panel-full"
+        "visualizer-panel-full-v2"
     } else {
-        "visualizer-panel"
+        "visualizer-panel-v2"
     });
     let default_x = match (floating, clicked_x) {
         (false, Some(x)) => x - 180.0,
         _ => screen.right() - (screen.width() * 0.5).min(560.0) - 14.0,
     };
     // One page: as wide as its three columns.
-    // Measured from what was really drawn last frame, so a column that
-    // came out wider than planned widens the window instead of being cut.
-    let content_w = ctx
-        .data(|data| data.get_temp::<f32>(egui::Id::new(("vis-panel-content-w", app.mini_active))))
-        .unwrap_or(0.0);
-    let natural_w = (3.0 * vis_col_w(0.0) + 36.0).max(content_w.min(1400.0)) + 28.0;
+    // Fixed content width: three columns plus the scroll bar's lane. The
+    // outer width (frame included) is measured, but only to keep the panel
+    // inside the window; the size the panel is drawn at never depends on it.
+    let natural_w = 3.0 * vis_col_w(0.0) + 36.0 + 34.0;
     let outer_id = egui::Id::new(("vis-panel-outer-w", app.mini_active));
     let outer_w = ctx
         .data(|data| data.get_temp::<f32>(outer_id))
-        .unwrap_or(natural_w + 24.0)
-        .clamp(natural_w, natural_w + 80.0);
+        .filter(|w| (natural_w..=natural_w + 80.0).contains(w))
+        .unwrap_or(natural_w + 24.0);
     let height_id = egui::Id::new(("vis-panel-natural-h", app.mini_active));
-    let natural_h = ctx.data(|data| data.get_temp::<f32>(height_id)).unwrap_or(440.0).max(120.0);
-    let room = ((screen.width() - 16.0) / outer_w).min((screen.height() - 16.0) / natural_h);
+    let natural_h = ctx
+        .data(|data| data.get_temp::<f32>(height_id))
+        .filter(|h| *h >= 150.0)
+        .unwrap_or(440.0);
+    // Only the width decides the scale; the page scrolls if it is too tall.
+    let room = (screen.width() - 16.0) / outer_w;
     // The reader's own size for the panel (the grip in its corner), never
     // bigger than the window has room for.
     let user = if app.settings.vis_panel_w > 0.0 { app.settings.vis_panel_w.clamp(0.4, 1.4) } else { 1.0 };
@@ -1444,7 +1448,6 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
         .resizable(false)
         .min_width(natural_w)
         .max_width(natural_w)
-        .min_height(150.0)
         .movable(false)
         .constrain(false)
         .fixed_pos(fixed_pos);
@@ -1460,9 +1463,20 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
         // (Never reset every window's state here: that hid the control bar
         // and the window buttons along with the panel.)
         ctx.data_mut(|data| {
-            data.insert_temp(height_id, local.height().max(150.0));
+            data.insert_temp(height_id, local.height());
             data.insert_temp(outer_id, local.width());
         });
+        // One line a second in the trail, so a bad panel can be read from it.
+        let line = format!(
+            "vis panel local {:?} fit {fit:.2} screen {:?} pos {fixed_pos:?}",
+            local, screen
+        );
+        let stamp = (ctx.input(|input| input.time) / 2.0) as i64;
+        let last = ctx.data(|data| data.get_temp::<i64>(egui::Id::new("vis-panel-trail")));
+        if last != Some(stamp) {
+            ctx.data_mut(|data| data.insert_temp(egui::Id::new("vis-panel-trail"), stamp));
+            crate::crash::trail(&line);
+        }
         // Where it really is on the screen.
         let shown = if scaled {
             egui::Rect::from_min_size(local.min, local.size() * fit)
@@ -1707,26 +1721,13 @@ fn vis_col_w(_screen_w: f32) -> f32 {
 const VIS_SINGLE_W: f32 = 272.0;
 
 
-/// The visualizer settings drawn inside the settings page.
-pub(super) fn embedded_vis_settings(app: &mut App, ui: &mut egui::Ui) {
-    let palette = app.palette;
-    theme::subtle(
-        ui,
-        &palette,
-        &gettext(app.locale, "These are the settings of the view you are in. The title and lyrics parts show in the full screen views."),
-    );
-    ui.add_space(6.0);
-    vis_menu_body(app, ui, false);
-}
-
 fn vis_menu_body(app: &mut App, ui: &mut egui::Ui, in_panel: bool) {
     if !in_panel {
         vis_menu_inner(app, ui);
         return;
     }
     let palette = app.palette;
-    let mini_flag = app.mini_active;
-    theme::subtle(ui, &palette, &gettext(app.locale, "VISUALIZER SETTINGS"));
+    theme::subtle(ui, &palette, &gettext(app.locale, "SETTINGS"));
     let fit = ui
         .ctx()
         .data(|data| data.get_temp::<f32>(egui::Id::new("vis-panel-fit")))
@@ -1735,18 +1736,12 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui, in_panel: bool) {
     // The page scrolls inside the window; the window itself is never taller
     // than the screen.
     let screen_h = ui.ctx().content_rect().height();
-    let max_h = ((screen_h - 90.0) / fit).max(200.0);
+    let max_h = ((screen_h - 110.0) / fit).max(200.0);
     egui::ScrollArea::vertical()
         .id_salt("vis-panel-scroll")
         .max_height(max_h)
         .auto_shrink([false, true])
-        .show(ui, |ui| {
-            let id = egui::Id::new(("vis-panel-content-w", mini_flag));
-            let start = ui.min_rect().left();
-            vis_menu_inner(app, ui);
-            let wide = ui.min_rect().right() - start;
-            ui.ctx().data_mut(|data| data.insert_temp(id, wide));
-        });
+        .show(ui, |ui| vis_menu_inner(app, ui));
 }
 
 fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {

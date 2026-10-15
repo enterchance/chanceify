@@ -106,7 +106,7 @@ pub const BINDABLE: &[Bindable] = &[
     Bindable { id: "queue", label: "Queue", default: UNSET, action: || Action::ToggleQueuePanel },
     Bindable { id: "queuelyrics", label: "Queue and lyrics", default: Key::X, action: || Action::ToggleQueueAndLyrics },
     Bindable { id: "lyrics", label: "Side lyrics", default: UNSET, action: || Action::ToggleLyricsPanel },
-    Bindable { id: "visualizer", label: "Visualizer settings", default: Key::B, action: || Action::ToggleVisPanel },
+    Bindable { id: "visualizer", label: "Media settings", default: Key::B, action: || Action::ToggleVisPanel },
     Bindable { id: "art", label: "Big album art", default: UNSET, action: || Action::ToggleArtExpanded },
     Bindable { id: "normalview", label: "Normal view", default: UNSET, action: || Action::NormalView },
     Bindable { id: "views", label: "Open the Views panel", default: Key::Y, action: || Action::OpenViewsPanel },

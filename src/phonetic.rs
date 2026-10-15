@@ -1,7 +1,7 @@
 //! Lyrics respelled in Latin letters, so a song in a language you do not
 //! read can still be sung along to. Russian and Korean are transliterated
-//! letter by letter, Chinese is written in pinyin, and German and Turkish
-//! are respelled the way an English reader would say them.
+//! letter by letter, Chinese is written in pinyin, and German, Polish and
+//! Turkish are respelled the way an English reader would say them.
 //!
 //! These are plain approximations, not dictionary pronunciations.
 
@@ -25,6 +25,8 @@ pub fn respell(line: &str) -> Option<String> {
         hangul(line)
     } else if has[2] {
         han(line)
+    } else if line.chars().any(|c| "ąćęłńśźżĄĆĘŁŃŚŹŻ".contains(c)) || looks_polish(line) {
+        polish(line)
     } else if line.chars().any(|c| "äöüßÄÖÜ".contains(c)) || looks_german(line) {
         german(line)
     } else if line.chars().any(|c| "çşğıİöüÇŞĞ".contains(c)) {
@@ -33,6 +35,18 @@ pub fn respell(line: &str) -> Option<String> {
         return None;
     };
     (!out.trim().is_empty() && out != line).then_some(out)
+}
+
+fn looks_polish(line: &str) -> bool {
+    const WORDS: [&str; 14] = [
+        "nie", "się", "jest", "ale", "jak", "tak", "już", "mnie", "ciebie", "dla", "będzie", "czy", "ten", "tylko",
+    ];
+    let lower = line.to_lowercase();
+    lower
+        .split(|c: char| !c.is_alphabetic())
+        .filter(|word| WORDS.contains(word))
+        .count()
+        >= 2
 }
 
 fn looks_german(line: &str) -> bool {
@@ -161,6 +175,52 @@ fn german(line: &str) -> String {
     out
 }
 
+fn polish(line: &str) -> String {
+    let chars: Vec<char> = line.to_lowercase().chars().collect();
+    let vowel = |c: Option<&char>| c.is_some_and(|c| "aeiouyąęó".contains(*c));
+    let mut out = String::new();
+    let mut i = 0;
+    let at = |i: usize, pattern: &str| {
+        pattern.chars().enumerate().all(|(k, c)| chars.get(i + k) == Some(&c))
+    };
+    while i < chars.len() {
+        let step = if at(i, "szcz") { out.push_str("shch"); 4 }
+        else if at(i, "sz") { out.push_str("sh"); 2 }
+        else if at(i, "cz") { out.push_str("ch"); 2 }
+        else if at(i, "rz") { out.push_str("zh"); 2 }
+        else if at(i, "ch") { out.push_str("kh"); 2 }
+        else if at(i, "dzi") && vowel(chars.get(i + 3)) { out.push('j'); 3 }
+        else if at(i, "dz") && !at(i, "dzi") { out.push_str("dz"); 2 }
+        else if at(i, "dź") || at(i, "dż") { out.push('j'); 2 }
+        else if at(i, "ej") { out.push_str("ay"); 2 }
+        else if at(i, "ie") { out.push_str("yeh"); 2 }
+        else if at(i, "ci") && vowel(chars.get(i + 2)) { out.push_str("ch"); 2 }
+        else if at(i, "si") && vowel(chars.get(i + 2)) { out.push_str("sh"); 2 }
+        else if at(i, "zi") && vowel(chars.get(i + 2)) { out.push_str("zh"); 2 }
+        else if at(i, "ni") && vowel(chars.get(i + 2)) { out.push_str("ny"); 2 }
+        else {
+            match chars[i] {
+                'ą' => out.push_str("on"),
+                'ę' => out.push_str("en"),
+                'ł' => out.push('w'),
+                'ó' | 'u' => out.push_str("oo"),
+                'ż' | 'ź' => out.push_str("zh"),
+                'ś' => out.push_str("sh"),
+                'ć' => out.push_str("ch"),
+                'ń' => out.push_str("ny"),
+                'c' => out.push_str("ts"),
+                'j' => out.push('y'),
+                'w' => out.push('v'),
+                'y' => out.push_str("ih"),
+                c => out.push(c),
+            }
+            1
+        };
+        i += step;
+    }
+    out
+}
+
 fn turkish(line: &str) -> String {
     let mut out = String::new();
     for c in line.chars() {
@@ -189,6 +249,12 @@ mod tests {
     #[test]
     fn korean_is_romanized() {
         assert_eq!(respell("사랑").as_deref(), Some("sarang"));
+    }
+
+    #[test]
+    fn polish_is_respelled() {
+        assert_eq!(respell("dziękuję").as_deref(), Some("jenkooyen"));
+        assert!(respell("nie wiem jak się nazywa").is_some());
     }
 
     #[test]

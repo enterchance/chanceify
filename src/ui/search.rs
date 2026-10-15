@@ -89,6 +89,7 @@ fn recent(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     ui.add_space(6.0);
     if app.settings.search_history.is_empty() {
+        super::home::recently_played(app, ui);
         widgets::empty_state(
             ui,
             &palette,
@@ -115,6 +116,8 @@ fn recent(app: &mut App, ui: &mut egui::Ui) {
             }
         }
     });
+    ui.add_space(14.0);
+    super::home::recently_played(app, ui);
 }
 
 fn all(app: &mut App, ui: &mut egui::Ui, results: &SearchResults) {

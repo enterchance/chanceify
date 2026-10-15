@@ -412,7 +412,7 @@ fn lyrics_menu(app: &mut App, page: &egui::Response, side: bool) {
                     ui,
                     &palette,
                     Some(Icon::Settings),
-                    &gettext(app.locale, "Visualizer settings"),
+                    &gettext(app.locale, "Settings"),
                 ) {
                     app.actions.push(Action::ToggleVisPanel);
                 }
@@ -1362,7 +1362,7 @@ pub(super) fn controls_box_inner(app: &mut App, ui: &mut egui::Ui, top_left: egu
         let response = ui.interact(gear, egui::Id::new("pop-out-gear"), Sense::click());
         let colour = if response.hovered() { palette.text } else { palette.dim };
         theme::paint_icon(ui, Icon::Settings, gear, 11.0, colour);
-        if response.on_hover_text(gettext(app.locale, "Visualizer settings").into_owned()).clicked() {
+        if response.on_hover_text(gettext(app.locale, "Settings").into_owned()).clicked() {
             app.actions.push(Action::ToggleVisPanel);
         }
     }

@@ -12,9 +12,7 @@ const ROW: f32 = 34.0;
 
 /// One line of whichever table is open, already turned into text.
 struct Line {
-    cells: [String; 8],
-    /// The measured loudness shape, drawn in the WAVEFORM column.
-    wave: Vec<u8>,
+    cells: [String; 10],
     /// For the sort: the number behind the BPM column, if any.
     bpm: Option<f32>,
     length_ms: u64,
@@ -28,8 +26,27 @@ struct Line {
     liked: bool,
 }
 
-const HEADINGS: [&str; 8] = ["TITLE", "ARTIST", "ALBUM", "GENRE", "BPM", "KEY", "WAVEFORM", "LENGTH"];
-const SHARES: [f32; 8] = [0.23, 0.17, 0.15, 0.11, 0.06, 0.10, 0.11, 0.07];
+const HEADINGS: [&str; 10] =
+    ["#", "TITLE", "ARTIST", "PLAYLIST", "ALBUM", "ADDED", "RELEASED", "BPM", "LENGTH", "LIKED"];
+const SHARES: [f32; 10] = [0.04, 0.20, 0.15, 0.13, 0.14, 0.08, 0.07, 0.05, 0.06, 0.05];
+
+/// A day count since 1970 as `YYYY-MM-DD` (no time zone: the day the file
+/// was last written, which is when it was added to the folder).
+fn day_text(seconds: u64) -> String {
+    if seconds == 0 {
+        return String::new();
+    }
+    let z = (seconds / 86_400) as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
+}
 
 fn length(ms: u64) -> String {
     let s = ms / 1000;
@@ -102,29 +119,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             if let Err(error) = crate::opener::open(&folder) {
                 app.toast_error(format!("Could not open the folder: {error}"));
             }
-        }
-        if theme::soft_button(ui, &palette, Some(Icon::Info), "Export analysis report", false)
-            .clicked()
-        {
-            let file = index.join("analysis_report.csv");
-            match std::fs::write(&file, crate::local_library::report(&app.local_songs)) {
-                Ok(()) => app.local_ui.message = format!("Saved {}", file.display()),
-                Err(error) => app.local_ui.message = format!("Could not save the report: {error}"),
-            }
-        }
-        if theme::soft_button(ui, &palette, Some(Icon::ListMusic), "Import Exportify files", false)
-            .clicked()
-        {
-            let (done, problems) = crate::exportify::import_all(&index);
-            app.offline_playlists = crate::exportify::load_offline(&index);
-            app.local_ui.message = if problems.is_empty() {
-                format!(
-                    "Imported {done} playlist(s). Put Exportify CSV files in {} first.",
-                    crate::exportify::import_dir(&index).display()
-                )
-            } else {
-                format!("Imported {done}. Problems: {}", problems.join("; "))
-            };
         }
     });
     // The folders being read, each with a way to stop reading it.
@@ -211,82 +205,58 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     )
                 })
                 .collect();
-            for song in &app.local_songs.songs {
+            for (number, song) in app.local_songs.songs.iter().enumerate() {
                 let was = was_in
                     .get(&crate::exportify::match_key(&song.title, &first(&song.artist)))
-                    .map(|playlist| format!("was in {playlist}"));
-                let key = match (&song.key, &song.camelot) {
-                    (Some(k), Some(c)) => format!("{k} ({c})"),
-                    _ => String::new(),
-                };
+                    .cloned();
+                let liked = app
+                    .local_matches
+                    .uri_of(&song.path)
+                    .is_some_and(|uri| app.is_saved(uri).unwrap_or(false));
                 lines.push(Line {
                     cells: [
+                        format!("{}", number + 1),
                         if let Some(error) = &song.error {
                             format!("{} - {error}", song.title)
                         } else {
                             song.title.clone()
                         },
                         song.artist.clone(),
-                        match was {
-                            Some(was) if song.album.is_empty() => was,
-                            Some(was) => format!("{} ({was})", song.album),
-                            None => song.album.clone(),
-                        },
-                        if song.genre.trim().is_empty() {
-                            app.local_sync.genre_of(&song.path).to_string()
-                        } else {
-                            song.genre.clone()
-                        },
+                        was.unwrap_or_default(),
+                        song.album.clone(),
+                        day_text(song.modified),
+                        song.year.clone(),
                         song.bpm.map_or(String::new(), |b| format!("{}", b.round())),
-                        key,
-                        String::new(),
                         length(song.duration_ms),
+                        if liked { "♥".to_string() } else { String::new() },
                     ],
-                    wave: song.waveform.clone(),
                     bpm: song.bpm,
                     length_ms: song.duration_ms,
                     have_file: None,
                     path: Some(song.path.clone()),
                     spotify: app.local_matches.uri_of(&song.path).map(str::to_string),
-                    liked: app
-                        .local_matches
-                        .uri_of(&song.path)
-                        .is_some_and(|uri| app.is_saved(uri).unwrap_or(false)),
+                    liked,
                 });
             }
         }
         Some(playlist) => {
-            for track in &playlist.tracks {
+            for (number, track) in playlist.tracks.iter().enumerate() {
                 let found = app.local_songs.find_match(&track.name, &track.artists);
                 let have = found.is_some();
                 let path = found.map(|song| song.path.clone());
-                let key = match (track.key, track.minor) {
-                    (Some(k), Some(minor)) => crate::analysis::Key {
-                        tonic: k,
-                        minor,
-                        confidence: 1.0,
-                    }
-                    .name(),
-                    (Some(k), None) => crate::analysis::Key {
-                        tonic: k,
-                        minor: false,
-                        confidence: 1.0,
-                    }
-                    .name(),
-                    _ => String::new(),
-                };
                 lines.push(Line {
                     cells: [
+                        format!("{}", number + 1),
                         track.name.clone(),
                         track.artists.clone(),
+                        playlist.name.clone(),
                         track.album.clone(),
-                        track.genres.join(", "),
-                        track.tempo.map_or(String::new(), |t| format!("{}", t.round())),
-                        key,
                         String::new(),
+                        String::new(),
+                        track.tempo.map_or(String::new(), |t| format!("{}", t.round())),
                         length(track.duration_ms),
+                        String::new(),
                     ],
-                    wave: Vec::new(),
                     bpm: track.tempo,
                     length_ms: track.duration_ms,
                     have_file: Some(have),
@@ -300,15 +270,21 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if !needle.is_empty() {
         lines.retain(|line| line.cells.iter().any(|c| c.to_lowercase().contains(&needle)));
     }
-    let sort = app.local_ui.sort.min(7) as usize;
+    let sort = app.local_ui.sort.min(9) as usize;
     let descending = app.local_ui.descending;
     lines.sort_by(|a, b| {
         let order = match sort {
-            4 => a
+            0 => a
+                .cells[0]
+                .parse::<u32>()
+                .unwrap_or(0)
+                .cmp(&b.cells[0].parse::<u32>().unwrap_or(0)),
+            7 => a
                 .bpm
                 .unwrap_or(f32::MAX)
                 .total_cmp(&b.bpm.unwrap_or(f32::MAX)),
-            7 => a.length_ms.cmp(&b.length_ms),
+            8 => a.length_ms.cmp(&b.length_ms),
+            9 => b.liked.cmp(&a.liked),
             _ => a.cells[sort].to_lowercase().cmp(&b.cells[sort].to_lowercase()),
         };
         if descending { order.reverse() } else { order }
@@ -441,42 +417,20 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     let w = (width - 16.0) * SHARES[i];
                     let clip = Rect::from_min_size(pos2(x, rect.top()), vec2(w - 8.0, ROW));
                     let mut text = cell.clone();
-                    if i == 0 {
+                    if i == 1 {
                         match line.have_file {
                             Some(true) => text = format!("✓ {text}"),
                             Some(false) => text = format!("  {text}"),
                             None => {}
                         }
                     }
-                    let color = if i == 0 && is_playing {
+                    let color = if i == 1 && is_playing {
                         palette.accent
-                    } else if i == 0 {
+                    } else if i == 1 {
                         palette.text
                     } else {
                         palette.secondary
                     };
-                    if i == 6 {
-                        // The waveform: one thin bar for each slice of the song.
-                        if !line.wave.is_empty() {
-                            let bars = line.wave.len().min(40);
-                            let step = (clip.width() / bars as f32).max(1.0);
-                            for b in 0..bars {
-                                let value = f32::from(line.wave[b * line.wave.len() / bars]) / 255.0;
-                                let h = (value.clamp(0.04, 1.0)) * (ROW - 12.0);
-                                let x0 = clip.left() + b as f32 * step;
-                                painter.rect_filled(
-                                    Rect::from_center_size(
-                                        pos2(x0 + step * 0.4, rect.center().y),
-                                        vec2((step * 0.6).max(1.0), h),
-                                    ),
-                                    CornerRadius::same(1),
-                                    palette.accent.gamma_multiply(0.8),
-                                );
-                            }
-                        }
-                        x += w;
-                        continue;
-                    }
                     painter.with_clip_rect(clip).text(
                         pos2(clip.left(), rect.center().y),
                         Align2::LEFT_CENTER,
@@ -487,7 +441,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     x += w;
                 }
                 // The song as Spotify would search for it.
-                let search = format!("{} {}", line.cells[0], line.cells[1]).trim().to_string();
+                let search = format!("{} {}", line.cells[1], line.cells[2]).trim().to_string();
                 let play_from_here = |pending: &mut Vec<Action>| {
                     if let Some(at) = playable
                         .iter()

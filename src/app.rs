@@ -4052,7 +4052,7 @@ impl App {
 
     /// The lights feed (see `lights.rs`): what the visualizer shows now.
     fn lights_tick(&mut self, ctx: &egui::Context) {
-        if !self.settings.lights_feed {
+        if !cfg!(feature = "lights-feed") || !self.settings.lights_feed {
             self.lights.stop();
             return;
         }
@@ -5030,7 +5030,8 @@ impl App {
         match page {
             Page::Home => self.load_home(false),
             Page::TopSongs => self.load_top_songs(false),
-            Page::Search => {}
+            // Recently played sits under the search box.
+            Page::Search => self.load_home(false),
             Page::LikedSongs => self.ensure_liked_songs(),
             Page::Albums => {
                 if !self.library.albums.loaded_once {
@@ -5151,6 +5152,58 @@ impl App {
                 offset: 0,
             });
         }
+    }
+
+    /// Starts "Recommended for you" from these seeds (artist, title). With
+    /// none, the songs played on this computer, then the recently played
+    /// ones, stand in; with nothing at all the shelf says what to do.
+    fn begin_recommendations(&mut self, generation: u64, mut seeds: Vec<(String, String)>) {
+        // A recent answer is reused: it costs Spotify searches.
+        if let Some(cached) = self.recs_cache_load() {
+            self.home.recommendations = Loadable::Loaded(cached);
+            return;
+        }
+        if seeds.is_empty() {
+            let now = jiff::Timestamp::now().as_second();
+            let (_, songs) = self.stats.ranking(now, crate::stats::local_offset(), crate::stats::Range::Ever);
+            seeds = songs
+                .iter()
+                .filter(|row| !row.sub.is_empty())
+                .take(5)
+                .map(|row| (row.sub.clone(), row.name.clone()))
+                .collect();
+        }
+        if seeds.is_empty()
+            && let Loadable::Loaded(history) = &self.home.recently_played
+        {
+            seeds = history
+                .iter()
+                .filter_map(|entry| {
+                    entry
+                        .track
+                        .artists
+                        .first()
+                        .map(|artist| (artist.name.clone(), entry.track.name.clone()))
+                })
+                .take(5)
+                .collect();
+        }
+        if seeds.is_empty() {
+            if self.home.recommendations.get().is_none() {
+                self.home.recommendations =
+                    Loadable::Failed("Play a few songs and suggestions will show up here.".into());
+            }
+            return;
+        }
+        if self.home.recommendations.get().is_none() {
+            self.home.recommendations = Loadable::Loading;
+        }
+        let lastfm_key = self.art_key();
+        self.backend.api(ApiRequest::Recommendations {
+            seeds,
+            lastfm_key,
+            generation,
+        });
     }
 
     fn load_home(&mut self, force: bool) {
@@ -6524,7 +6577,14 @@ impl App {
                 // A failed refresh (a rate limit, a dropped connection) must
                 // never throw away the queue already on screen: keep what is
                 // shown and let the next refresh try again.
-                if result.is_ok() || !matches!(self.queue, Loadable::Loaded(_)) {
+                // Likewise an empty answer while only the remembered song is
+                // showing (nothing playing yet after a restart): Spotify has
+                // no queue for a player that is idle, and the rows saved at
+                // close stay until something really plays.
+                let idle_empty = result.as_ref().is_ok_and(|fetched| fetched.queue.is_empty())
+                    && self.resume_only()
+                    && self.queue.get().is_some_and(|held| !held.queue.is_empty());
+                if !idle_empty && (result.is_ok() || !matches!(self.queue, Loadable::Loaded(_))) {
                     self.queue = Loadable::from_result(result);
                 }
                 self.reconcile_pending_queue();
@@ -6621,20 +6681,7 @@ impl App {
                         })
                         .take(5)
                         .collect();
-                    // A recent answer is reused: it costs Spotify searches.
-                    if let Some(cached) = self.recs_cache_load() {
-                        self.home.recommendations = Loadable::Loaded(cached);
-                    } else if !seeds.is_empty() {
-                        if self.home.recommendations.get().is_none() {
-                            self.home.recommendations = Loadable::Loading;
-                        }
-                        let lastfm_key = self.art_key();
-                        self.backend.api(ApiRequest::Recommendations {
-                            seeds,
-                            lastfm_key,
-                            generation,
-                        });
-                    }
+                    self.begin_recommendations(generation, seeds);
                     let uris: Vec<String> = tracks.iter().map(|track| track.uri.clone()).collect();
                     self.request_contains(uris);
                     self.home.top_tracks = Loadable::Loaded(tracks);
@@ -6644,6 +6691,9 @@ impl App {
                     && self.home.top_tracks.get().is_none()
                 {
                     self.home.top_tracks = Loadable::Failed(error.to_string());
+                    // Spotify's top songs failing must not leave the
+                    // recommendations loading for ever.
+                    self.begin_recommendations(generation, Vec::new());
                 }
             }
             ApiResponse::TopArtists { generation, result } => {
@@ -13380,7 +13430,7 @@ impl App {
                 last_queue_rows: self
                     .queue
                     .get()
-                    .map(|queue| queue.queue.iter().take(30).cloned().collect())
+                    .map(|queue| queue.queue.iter().take(100).cloned().collect())
                     .unwrap_or_default(),
                 shuffle_on: self.shuffle_wanted,
                 sorts: self

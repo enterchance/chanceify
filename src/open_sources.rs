@@ -42,10 +42,26 @@ pub async fn similar_tracks(
             query.push(("api_key", api_key));
         }
         let url = if proxied { crate::lastfm::PROXY_URL } else { LASTFM_URL };
-        let body: Option<Value> = async {
-            client.get(url).query(&query).send().await.ok()?.json().await.ok()
+        // One more try when the first answer does not come: Last.fm drops
+        // a request now and then.
+        let mut body: Option<Value> = None;
+        for attempt in 0..2 {
+            body = async {
+                client.get(url).query(&query).send().await.ok()?.json().await.ok()
+            }
+            .await;
+            let found = body
+                .as_ref()
+                .and_then(|body| body.pointer("/similartracks/track"))
+                .and_then(Value::as_array)
+                .is_some_and(|list| !list.is_empty());
+            if found {
+                break;
+            }
+            if attempt == 0 {
+                tokio::time::sleep(Duration::from_millis(400)).await;
+            }
         }
-        .await;
         let list = body
             .as_ref()
             .and_then(|body| body.pointer("/similartracks/track"))
@@ -62,6 +78,69 @@ pub async fn similar_tracks(
             })
             .unwrap_or_default();
         per_seed.push(list);
+    }
+    // No song of those had a "similar" list: ask for artists like the
+    // seeds' artists and take their best known songs.
+    if per_seed.iter().all(Vec::is_empty) {
+        let url = if proxied { crate::lastfm::PROXY_URL } else { LASTFM_URL };
+        let mut artists_done = std::collections::HashSet::new();
+        for (artist, _) in seeds.iter().take(4) {
+            if !artists_done.insert(artist.to_lowercase()) {
+                continue;
+            }
+            let mut query: Vec<(&str, &str)> = vec![
+                ("method", "artist.getsimilar"),
+                ("artist", artist.as_str()),
+                ("limit", "4"),
+                ("autocorrect", "1"),
+                ("format", "json"),
+            ];
+            if !proxied {
+                query.push(("api_key", api_key));
+            }
+            let body: Option<Value> = async {
+                client.get(url).query(&query).send().await.ok()?.json().await.ok()
+            }
+            .await;
+            let names: Vec<String> = body
+                .as_ref()
+                .and_then(|body| body.pointer("/similarartists/artist"))
+                .and_then(Value::as_array)
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|a| a.get("name")?.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut list = Vec::new();
+            for name in names.iter().take(4) {
+                let mut query: Vec<(&str, &str)> = vec![
+                    ("method", "artist.gettoptracks"),
+                    ("artist", name.as_str()),
+                    ("limit", "3"),
+                    ("format", "json"),
+                ];
+                if !proxied {
+                    query.push(("api_key", api_key));
+                }
+                let body: Option<Value> = async {
+                    client.get(url).query(&query).send().await.ok()?.json().await.ok()
+                }
+                .await;
+                if let Some(tracks) = body
+                    .as_ref()
+                    .and_then(|body| body.pointer("/toptracks/track"))
+                    .and_then(Value::as_array)
+                {
+                    for track in tracks {
+                        if let Some(title) = track.get("name").and_then(Value::as_str) {
+                            list.push((name.clone(), title.to_string()));
+                        }
+                    }
+                }
+            }
+            per_seed.push(list);
+        }
     }
     // Round-robin across the seeds, without repeats.
     let mut mixed: Vec<(String, String)> = Vec::new();

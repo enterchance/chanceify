@@ -44,9 +44,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         }
     } else {
         stats_section(app, ui);
-        top_artists(app, ui);
-        top_tracks(app, ui);
-        recently_played(app, ui);
     }
 }
 
@@ -790,7 +787,7 @@ fn made_for_you(app: &mut App, ui: &mut egui::Ui) {
     );
 }
 
-fn recently_played(app: &mut App, ui: &mut egui::Ui) {
+pub(super) fn recently_played(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let history = match app.home.recently_played.clone() {
         Loadable::Loaded(history) => history,
@@ -1036,6 +1033,7 @@ fn podcasts(app: &mut App, ui: &mut egui::Ui) {
     );
 }
 
+#[allow(dead_code)]
 fn top_artists(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let artists = match app.home.top_artists.clone() {
@@ -1191,6 +1189,7 @@ fn track_list(
     ui.add_space(16.0);
 }
 
+#[allow(dead_code)]
 fn top_tracks(app: &mut App, ui: &mut egui::Ui) {
     let tracks = app.home.top_tracks.clone();
     let title = gettext(app.locale, "Your top songs");
