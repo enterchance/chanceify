@@ -31,7 +31,10 @@ export default {
         );
         const thumb = (await meta.json()).thumbnail_url;
         if (typeof thumb === "string" && /^https:\/\/i\.scdn\.co\//.test(thumb)) {
-          const picture = await fetch(thumb, { cf: { cacheTtl: 86400, cacheEverything: true } });
+          // oEmbed hands back a 300 px picture; the 640 px one sits at the same
+          // address with a different prefix. Fall back if it is not there.
+          let picture = await fetch(big(thumb), { cf: { cacheTtl: 86400, cacheEverything: true } });
+          if (!picture.ok) picture = await fetch(thumb, { cf: { cacheTtl: 86400, cacheEverything: true } });
           if (picture.ok) {
             return new Response(picture.body, {
               headers: {
@@ -64,7 +67,7 @@ export default {
           );
           const art = (await found.json()).results?.[0]?.artworkUrl100;
           if (typeof art === "string" && /^https:\/\/[a-z0-9.-]+\.mzstatic\.com\//.test(art)) {
-            image = url.origin + "/f?u=" + encodeURIComponent(art.replace(/\/\d+x\d+bb\./, "/600x600bb."));
+            image = url.origin + "/f?u=" + encodeURIComponent(art.replace(/\/\d+x\d+bb\./, "/1000x1000bb."));
           }
         } catch (_) {}
         return new Response(page({ title: t || a, artist: t ? a : "", id: null, image, find: t ? "play" : "artist" }), html());
@@ -109,7 +112,7 @@ export default {
       );
       if (res.ok) {
         const data = await res.json();
-        if (!image) image = data.thumbnail_url || "";
+        if (!image) image = big(data.thumbnail_url || "");
         if (!title) title = data.title || "";
       }
     } catch (_) {}
@@ -271,4 +274,9 @@ ${kind === "u" ? "" : `<iframe class="play" title="Play a preview" src="https://
 })();
 </script>
 </body></html>`;
+}
+
+// Spotify's 300 px cover address, rewritten to the 640 px one.
+function big(thumb) {
+  return typeof thumb === "string" ? thumb.replace("ab67616d00001e02", "ab67616d0000b273") : thumb;
 }

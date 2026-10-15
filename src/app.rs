@@ -643,6 +643,11 @@ pub struct App {
     /// A play request made while the local engine was still connecting; it
     /// starts the moment the engine reports ready.
     queued_play: Option<PlayRequest>,
+    /// The last thing started on this computer, so a refused audio key can
+    /// be answered by starting it again on a fresh session.
+    last_local_request: Option<(Instant, PlayRequest)>,
+    key_retry: Option<(Instant, PlayRequest)>,
+    key_retry_spent: Option<Instant>,
     /// Last list sent to local playback. Used for autoplay because librespot
     /// cannot continue a list without a context URI.
     local_list: Option<Vec<String>>,
@@ -1270,6 +1275,9 @@ impl App {
             pending_play_keys: Vec::new(),
             pending_play_at: None,
             queued_play: None,
+            last_local_request: None,
+            key_retry: None,
+            key_retry_spent: None,
             local_list: None,
             pending_transfer_to: None,
             remote_recheck_at: None,
@@ -3359,8 +3367,19 @@ impl App {
                 if self.unavailable_at.len() >= if key_refused { 1 } else { 3 }
                     && self
                         .last_unavailable_reconnect
-                        .is_none_or(|at| at.elapsed() > Duration::from_secs(if key_refused { 25 } else { 60 }))
+                        .is_none_or(|at| at.elapsed() > Duration::from_secs(if key_refused { 8 } else { 60 }))
                 {
+                    // The song that was refused is started again, once, as
+                    // soon as the fresh session is up: no waiting, and no
+                    // loop if it is refused again.
+                    if key_refused
+                        && let Some((at, request)) = self.last_local_request.clone()
+                        && at.elapsed() < Duration::from_secs(60)
+                        && self.key_retry.is_none()
+                        && self.key_retry_spent.is_none_or(|spent| spent.elapsed() > Duration::from_secs(120))
+                    {
+                        self.key_retry = Some((Instant::now(), request));
+                    }
                     self.unavailable_at.clear();
                     self.last_unavailable_reconnect = Some(now);
                     crate::crash::trail("reconnecting the Spotify session after refused or unavailable audio");
@@ -3396,7 +3415,17 @@ impl App {
         }
         if reconnected {
             if let Some(request) = self.queued_play.take() {
+                // Something newer was asked for while it reconnected.
+                self.key_retry = None;
                 self.play_request(request, false);
+            } else if let Some((at, request)) = self.key_retry.take()
+                && at.elapsed() < Duration::from_secs(45)
+            {
+                crate::crash::trail("starting the refused song again on the fresh session");
+                self.play_request(request, false);
+                // Marked as tried, so a second refusal is not retried again.
+                self.key_retry = None;
+                self.key_retry_spent = Some(Instant::now());
             }
             // Retry names requested before the session connected.
             let unresolved: Vec<String> = self
@@ -8617,6 +8646,8 @@ impl App {
             }
             Target::Local => {
                 self.queued_play = None;
+                self.key_retry = None;
+                self.last_local_request = Some((Instant::now(), request.clone()));
                 let mut load = local_load(&request, shuffle);
                 load.repeat = Some(self.local.repeat);
                 self.local_list = load.context_uri.is_none().then(|| load.uris.clone());

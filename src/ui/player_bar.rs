@@ -1349,8 +1349,16 @@ pub(super) fn visualizer_shape(
                     sheets: app.settings.player_bar_vis_flow_sheets() as usize,
                     // The lyrics page is the whole window, so the same depth
                     // is a lot taller there than in the bar: it is eased down.
+                    // In the mini player the picture is the whole window, so a
+                    // full-height flow would climb to the very top of it.
                     depth: app.settings.player_bar_vis_flow_depth()
-                        * if app.lyrics_fullscreen.is_some() { 0.55 } else { 1.0 },
+                        * if app.lyrics_fullscreen.is_some() {
+                            0.55
+                        } else if app.mini_active {
+                            0.5
+                        } else {
+                            1.0
+                        },
                     offset: app.settings.player_bar_vis_flow_offset(),
                 },
             );
@@ -1446,7 +1454,7 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
     // Fixed content width: three columns plus the scroll bar's lane. The
     // outer width (frame included) is measured, but only to keep the panel
     // inside the window; the size the panel is drawn at never depends on it.
-    let natural_w = 3.0 * vis_col_w(0.0) + 36.0 + 34.0;
+    let natural_w = vis_panel_inner_w() + 34.0;
     let outer_id = egui::Id::new(("vis-panel-outer-w", app.mini_active));
     let outer_w = ctx
         .data(|data| data.get_temp::<f32>(outer_id))
@@ -1758,6 +1766,12 @@ fn vis_col_w(_screen_w: f32) -> f32 {
 /// never be reduced to a few pixels.
 const VIS_PANEL_MIN_H: f32 = 340.0;
 
+/// The room the settings page needs: the wider of the two rows. Bars and flow
+/// side by side, or the swirl beside the bass jump.
+fn vis_panel_inner_w() -> f32 {
+    (2.0 * vis_col_w(0.0) + 18.0).max(vis_col_w(0.0) + 18.0 + VIS_SINGLE_W)
+}
+
 /// Width of the one column on the tabs that have only one.
 const VIS_SINGLE_W: f32 = 272.0;
 
@@ -1792,7 +1806,7 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     {
         {
-            ui.set_max_width(3.0 * vis_col_w(0.0) + 36.0);
+            ui.set_max_width(vis_panel_inner_w());
             ui.spacing_mut().item_spacing.y = 3.0;
             // Three independent switches: any mix, or none (which closes
             // the visualizer down to the song-length bar).
@@ -1812,9 +1826,9 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             let view = app.vis_view_now.unwrap_or(0);
             let last_tab: u8 = if matches!(view, 0 | 3) { 1 } else { 3 };
             let tab = std::cell::Cell::new(0u8);
-            let mut columns = |ui: &mut egui::Ui| {
+            let mut columns = |app: &mut App, ui: &mut egui::Ui, which: u8| {
             ui.spacing_mut().item_spacing.x = 18.0;
-            ui.vertical(|ui| {
+            if which == 0 { ui.vertical(|ui| {
             ui.set_width(col_w);
             {
                 let on = shapes & crate::settings::Settings::SHAPE_BARS != 0;
@@ -1903,8 +1917,8 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
             }
-            });
-            ui.vertical(|ui| {
+            }); }
+            if which == 0 { ui.vertical(|ui| {
             ui.set_width(col_w);
             {
                 let on = shapes & crate::settings::Settings::SHAPE_FLOW != 0;
@@ -2006,8 +2020,8 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                 });
 
             }
-            });
-            ui.vertical(|ui| {
+            }); }
+            if which == 1 { ui.vertical(|ui| {
             ui.set_width(col_w);
             {
                 let on = shapes & crate::settings::Settings::SHAPE_SWIRL != 0;
@@ -2122,15 +2136,17 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                     }
                 }
             }
-            });
+            }); }
             };
+            // Two columns across the top (bars, flow); the swirl goes below,
+            // beside the bass jump, so the panel is a third narrower.
             if columns_fit {
-                ui.horizontal_top(|ui| columns(ui));
+                ui.horizontal_top(|ui| columns(&mut *app, ui, 0));
             } else {
-                ui.vertical(|ui| columns(ui));
+                ui.vertical(|ui| columns(&mut *app, ui, 0));
             }
             // The settings every shape shares, then the title, then the lyrics.
-            let mut shared = |ui: &mut egui::Ui| {
+            let mut shared = |app: &mut App, ui: &mut egui::Ui| {
             ui.spacing_mut().item_spacing.x = 18.0;
             if tab.get() == 1 { ui.vertical(|ui| {
             ui.set_width(VIS_SINGLE_W);
@@ -2573,7 +2589,14 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             for part in 1..=last_tab {
                 super::widgets::menu_separator(ui, &palette);
                 tab.set(part);
-                ui.horizontal_top(|ui| shared(ui));
+                if part == 1 {
+                    ui.horizontal_top(|ui| {
+                        columns(&mut *app, ui, 1);
+                        shared(&mut *app, ui);
+                    });
+                } else {
+                    ui.horizontal_top(|ui| shared(&mut *app, ui));
+                }
             }
             super::widgets::menu_separator(ui, &palette);
             theme::subtle(ui, &palette, &gettext(app.locale, "EQUALIZER"));

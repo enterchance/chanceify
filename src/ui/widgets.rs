@@ -514,6 +514,23 @@ pub(super) fn paint_cover_with_thumbnail(
     }
 }
 
+/// The decoded texture for `url`, if it is already loaded.
+pub(super) fn ready_cover_texture(
+    ui: &Ui,
+    url: &str,
+    art: &crate::images::ArtLoader,
+) -> Option<egui::load::SizedTexture> {
+    if !art.is_ready(url) {
+        return None;
+    }
+    art.touch(url);
+    let image = egui::Image::new(url).show_loading_spinner(false);
+    match image.load_for_size(ui.ctx(), Vec2::splat(640.0)) {
+        Ok(egui::load::TexturePoll::Ready { texture }) => Some(texture),
+        _ => None,
+    }
+}
+
 fn paint_ready_cover_url(
     ui: &Ui,
     url: &str,

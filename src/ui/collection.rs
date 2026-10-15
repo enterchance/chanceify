@@ -69,8 +69,16 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
         .thumbnail
         .and_then(|uri| app.softened_covers.texture(ui.ctx(), &art, uri));
     let backdrop_slot = ui.painter().add(egui::Shape::Noop);
-    let backdrop_top = ui.cursor().top();
-    let (text_main, text_soft) = if softened.is_some() {
+    let sharp = [hero.images.image, hero.images.previous]
+        .into_iter()
+        .flatten()
+        .find_map(|url| widgets::ready_cover_texture(ui, url, app.backend.art()));
+    let source = sharp.or_else(|| {
+        softened
+            .as_ref()
+            .map(egui::load::SizedTexture::from_handle)
+    });
+    let (text_main, text_soft) = if source.is_some() {
         (egui::Color32::WHITE, egui::Color32::from_white_alpha(200))
     } else {
         (palette.text, palette.secondary)
@@ -191,34 +199,68 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
         });
     });
     ui.add_space(20.0);
-    if let Some(texture) = &softened {
-        // The cover, blurred, across the full width behind the header and
-        // a stretch below it, darkened and fading into the page.
-        let full = ui.max_rect();
-        let area = Rect::from_min_max(
-            pos2(full.left() - 40.0, backdrop_top - 40.0),
-            pos2(full.right() + 40.0, ui.cursor().top() + 160.0),
-        );
-        let aspect = area.width() / area.height();
-        let visible_h = (1.0 / aspect).min(1.0);
-        let inset = (1.0 - visible_h) / 2.0;
-        let uv = Rect::from_min_max(pos2(0.0, inset), pos2(1.0, 1.0 - inset));
-        let mut mesh = egui::Mesh::with_texture(texture.id());
-        let top = egui::Color32::from_rgba_unmultiplied(70, 70, 70, 255);
-        let bottom = palette.panel;
-        let i = mesh.vertices.len() as u32;
-        let v = |pos: egui::Pos2, uv: egui::Pos2, color: egui::Color32| egui::epaint::Vertex {
-            pos,
-            uv,
-            color,
-        };
-        mesh.vertices.push(v(area.left_top(), uv.left_top(), top));
-        mesh.vertices.push(v(area.right_top(), uv.right_top(), top));
-        mesh.vertices.push(v(area.right_bottom(), uv.right_bottom(), bottom));
-        mesh.vertices.push(v(area.left_bottom(), uv.left_bottom(), bottom));
-        mesh.indices.extend_from_slice(&[i, i + 1, i + 2, i, i + 2, i + 3]);
-        let clipped = ui.painter().with_clip_rect(ui.clip_rect());
-        clipped.set(backdrop_slot, egui::Shape::mesh(mesh));
+    // The cover across the whole visible page, cropped square (so a tall or
+    // wide upload still looks right), darkened so the page's own elements
+    // stay readable, and held still while the list scrolls past.
+    if let Some(texture) = source {
+        let area = ui.clip_rect();
+        if area.width() > 1.0 && area.height() > 1.0 {
+            let side = area.width().max(area.height());
+            let square = Rect::from_min_size(
+                pos2(area.center().x - side / 2.0, area.top()),
+                Vec2::splat(side),
+            );
+            let aspect = texture.size.x / texture.size.y;
+            let uv = if aspect > 1.0 {
+                let inset = (1.0 - 1.0 / aspect) / 2.0;
+                Rect::from_min_max(pos2(inset, 0.0), pos2(1.0 - inset, 1.0))
+            } else {
+                let inset = (1.0 - aspect) / 2.0;
+                Rect::from_min_max(pos2(0.0, inset), pos2(1.0, 1.0 - inset))
+            };
+            let (top, bottom) = if palette.dark {
+                (
+                    egui::Color32::from_gray(105),
+                    egui::Color32::from_gray(48),
+                )
+            } else {
+                (egui::Color32::from_gray(110), palette.panel)
+            };
+            // Light themes fade back to the page colour by mid-window so dark
+            // list text stays readable.
+            let fade_to = if palette.dark { 1.0 } else { 0.55 };
+            let mid = Rect::from_min_max(
+                square.left_top(),
+                pos2(square.right(), area.top() + area.height() * fade_to),
+            );
+            let mut mesh = egui::Mesh::with_texture(texture.id);
+            let v = |pos: egui::Pos2, uv: egui::Pos2, color: egui::Color32| {
+                egui::epaint::Vertex { pos, uv, color }
+            };
+            let uv_at = |y: f32| {
+                let t = ((y - square.top()) / side).clamp(0.0, 1.0);
+                uv.min.y + (uv.max.y - uv.min.y) * t
+            };
+            let mid_y = mid.bottom();
+            let end_y = square.bottom();
+            let mid_uv = uv_at(mid_y);
+            mesh.vertices.push(v(square.left_top(), uv.left_top(), top));
+            mesh.vertices.push(v(square.right_top(), uv.right_top(), top));
+            mesh.vertices
+                .push(v(pos2(square.right(), mid_y), pos2(uv.max.x, mid_uv), bottom));
+            mesh.vertices
+                .push(v(pos2(square.left(), mid_y), pos2(uv.min.x, mid_uv), bottom));
+            mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+            if end_y > mid_y + 0.5 {
+                mesh.vertices
+                    .push(v(pos2(square.right(), end_y), uv.right_bottom(), bottom));
+                mesh.vertices
+                    .push(v(pos2(square.left(), end_y), uv.left_bottom(), bottom));
+                mesh.indices.extend_from_slice(&[3, 2, 4, 3, 4, 5]);
+            }
+            let clipped = ui.painter().with_clip_rect(area);
+            clipped.set(backdrop_slot, egui::Shape::mesh(mesh));
+        }
     }
 }
 

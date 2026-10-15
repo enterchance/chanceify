@@ -2212,7 +2212,7 @@ fn hertz(hz: f32) -> String {
 pub(super) fn eq_panel(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let locale = app.locale;
-    ui.set_width(500.0);
+    ui.set_width(470.0);
     let mut on = app.settings.eq_on;
     if widgets::switch(ui, &palette, &gettext(locale, "On"), &mut on).changed() {
         app.actions.push(Action::ToggleEq);
@@ -2234,7 +2234,7 @@ pub(super) fn eq_panel(app: &mut App, ui: &mut egui::Ui) {
     eq_curve(ui, &palette, &crate::app::eq_settings(&app.settings));
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 10.0;
+        ui.spacing_mut().item_spacing.x = 6.0;
         let on = app.settings.eq_on;
         let mut preamp = app.settings.eq_preamp_db;
         if eq_slider(ui, &palette, &pgettext(locale, "equalizer", "Pre"), &mut preamp, on) {
@@ -2308,7 +2308,9 @@ fn eq_slider(ui: &mut egui::Ui, palette: &Palette, label: &str, value: &mut f32,
 /// it: the shape says what a row of numbers cannot.
 fn eq_curve(ui: &mut egui::Ui, palette: &Palette, settings: &crate::eq::EqSettings) {
     use egui::{Shape, Stroke, pos2, vec2};
-    let width = ui.available_width().min(720.0);
+    // The width of the panel's own column, never what the page around it
+    // happens to offer (that ran past the window's right edge).
+    let width = ui.available_width().min(470.0);
     let (rect, _) = ui.allocate_exact_size(vec2(width, 120.0), egui::Sense::hover());
     let painter = ui.painter();
     painter.rect_filled(rect, theme::RADIUS as f32, palette.surface);
