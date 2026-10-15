@@ -673,7 +673,7 @@ impl Settings {
 
     /// The settings each view keeps for itself (see `vis_views`).
     fn is_view_key(key: &str) -> bool {
-        (Self::is_vis_key(key) && !matches!(key, "vis_panel_w" | "vis_panel_h" | "vis_live_preview"))
+        (Self::is_vis_key(key) && !matches!(key, "vis_panel_w" | "vis_panel_h" | "vis_panel_stacked" | "vis_live_preview"))
             || matches!(
                 key,
                 "jump_shake" | "jump_sens" | "jump_gap" | "jump_floor" | "jump_adapt" | "sway_sens" | "lyrics_flags"
@@ -1119,6 +1119,14 @@ pub struct Settings {
     /// Size of the visualizer settings panel (0 = fit the content).
     pub vis_panel_w: f32,
     pub vis_panel_h: f32,
+    /// The visualizer's settings in one column, up and down (off: two
+    /// columns side by side).
+    pub vis_panel_stacked: bool,
+    /// The playlist and album pages' cover background: shown, how dark and how
+    /// blurred (0 to 1).
+    pub page_backdrop: bool,
+    pub page_backdrop_dark: f32,
+    pub page_backdrop_blur: f32,
     /// The mini player window: x, y, width, height.
     pub mini_window: Option<[f32; 4]>,
     /// The extra visualizer window: x, y, width, height.
@@ -1583,6 +1591,10 @@ impl Default for Settings {
             float_window: None,
             vis_panel_w: 0.0,
             vis_panel_h: 0.0,
+            vis_panel_stacked: false,
+            page_backdrop: true,
+            page_backdrop_dark: 0.6,
+            page_backdrop_blur: 0.0,
             mini_window: None,
             extra_window: None,
             mini_restore_size: None,

@@ -320,8 +320,17 @@ fn stats_section(app: &mut App, ui: &mut egui::Ui) {
     });
     ui.add_space(10.0);
     ui.add_space(12.0);
-    for songs in [false, true] {
-        ranked_shelf(app, ui, songs, now);
+    if app.settings.home.stats_list {
+        // The list is one narrow column each, so artists and songs sit side
+        // by side instead of leaving the page's width empty.
+        ui.columns(2, |columns| {
+            ranked_shelf(app, &mut columns[0], false, now);
+            ranked_shelf(app, &mut columns[1], true, now);
+        });
+    } else {
+        for songs in [false, true] {
+            ranked_shelf(app, ui, songs, now);
+        }
     }
     ui.add_space(8.0);
 }
@@ -333,7 +342,7 @@ fn ranked_shelf(app: &mut App, ui: &mut egui::Ui, songs: bool, now: i64) {
     let saved = if songs { app.settings.home.song_range } else { app.settings.home.artist_range };
     let range = crate::stats::Range::from_saved(saved);
     let title = if songs { "Your songs" } else { "Your artists" };
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         theme::section_title(ui, &palette, &gettext(app.locale, title));
         for (label, choice) in [

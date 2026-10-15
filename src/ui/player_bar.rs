@@ -1859,6 +1859,17 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             ui.spacing_mut().item_spacing.y = 3.0;
             // Three independent switches: any mix, or none (which closes
             // the visualizer down to the song-length bar).
+            // Side by side (two columns) or stacked (one column, up and down).
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                for (label, stacked) in [("Side by side", false), ("Stacked", true)] {
+                    if chip(ui, &palette, &gettext(app.locale, label), app.settings.vis_panel_stacked == stacked, 110.0).clicked() {
+                        app.settings.vis_panel_stacked = stacked;
+                        app.mark_settings_dirty();
+                    }
+                }
+            });
+            ui.add_space(4.0);
             let shapes = app.settings.vis_shapes_value();
             // Three columns side by side when the window is wide enough for
             // them, one under another when it is not, so the panel never
@@ -1866,7 +1877,7 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             let screen_w = ui.ctx().content_rect().width();
             // Two columns from a modest width when the swirl's column is
             // not open, so the panel is shorter and fits one screen.
-            let columns_fit = true;
+            let columns_fit = !app.settings.vis_panel_stacked;
             let col_w = vis_col_w(screen_w);
             // One page, top to bottom, with a bar between the parts: the
             // visualizer, bass and colour, then (in the full screen views) the
@@ -2110,6 +2121,29 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                     (9.0 / app.settings.swirl_drift_secs()) as f32,
                     |value| app.actions.push(Action::SetSwirlDrift(value)),
                 );
+                // One-click speed, music boost and colour drift together.
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    let speed_now = app.settings.swirl_tune_value(8);
+                    let boost_now = app.settings.swirl_tune_value(9);
+                    let drift_now = (9.0 / app.settings.swirl_drift_secs()) as f32;
+                    let width = ((col_w - 12.0) / 4.0).max(40.0);
+                    for (label, speed, boost, drift) in [
+                        ("Slow", 30.0f32, 30.0f32, 0.6f32),
+                        ("Calm", 60.0, 60.0, 1.2),
+                        ("Lively", 130.0, 140.0, 2.6),
+                        ("Fast", 220.0, 220.0, 4.0),
+                    ] {
+                        let active = (speed_now - speed).abs() < 1.0
+                            && (boost_now - boost).abs() < 1.0
+                            && (drift_now - drift).abs() < 0.05;
+                        if chip(ui, &palette, &gettext(app.locale, label), active, width).clicked() {
+                            app.actions.push(Action::SetSwirlTune(8, speed));
+                            app.actions.push(Action::SetSwirlTune(9, boost));
+                            app.actions.push(Action::SetSwirlDrift(drift));
+                        }
+                    }
+                });
                 if art_scroll {
                     slider_row(
                         ui,
@@ -2638,8 +2672,13 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             for part in 1..=last_tab {
                 super::widgets::menu_separator(ui, &palette);
                 tab.set(part);
-                if part == 1 {
+                if part == 1 && columns_fit {
                     ui.horizontal_top(|ui| {
+                        columns(&mut *app, ui, 1);
+                        shared(&mut *app, ui);
+                    });
+                } else if part == 1 {
+                    ui.vertical(|ui| {
                         columns(&mut *app, ui, 1);
                         shared(&mut *app, ui);
                     });
@@ -3334,6 +3373,14 @@ fn numbered_rows(
 }
 
 /// A fixed-width selectable chip.
+/// A small dot at the top right of a button that is switched on, so its state
+/// reads even when the accent colour matches what is around it.
+fn on_dot(ui: &egui::Ui, rect: egui::Rect, palette: &crate::theme::Palette) {
+    let at = rect.right_top() + egui::vec2(-3.0, 3.0);
+    ui.painter().circle_filled(at, 3.4, palette.window);
+    ui.painter().circle_filled(at, 2.4, palette.text);
+}
+
 fn chip(
     ui: &mut egui::Ui,
     palette: &crate::theme::Palette,
@@ -5653,6 +5700,9 @@ fn transport_impl(
             gettext(app.locale, "Shuffle"),
         )
     });
+    if shuffle {
+        on_dot(ui, shuffle_button.rect, &palette);
+    }
     if shuffle_button.clicked() {
         app.actions.push(Action::ToggleShuffle);
     }
@@ -5671,7 +5721,7 @@ fn transport_impl(
         ),
     };
     let mut cell = centered(ui, slot(widths[4]));
-    if theme::icon_button(
+    let repeat_button = theme::icon_button(
         &mut cell,
         repeat_icon,
         17.0 * kc,
@@ -5682,9 +5732,11 @@ fn transport_impl(
             palette.accent_hover
         },
         &tooltip,
-    )
-    .clicked()
-    {
+    );
+    if repeat != RepeatMode::Off {
+        on_dot(ui, repeat_button.rect, &palette);
+    }
+    if repeat_button.clicked() {
         app.actions.push(Action::CycleRepeat);
     }
 
