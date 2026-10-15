@@ -352,6 +352,19 @@ fn ranked_shelf(app: &mut App, ui: &mut egui::Ui, songs: bool, now: i64) {
                 app.mark_settings_dirty();
             }
         }
+        // Grid of small tiles, or one column.
+        let list = app.settings.home.stats_list;
+        if theme::pill_button(
+            ui,
+            &palette,
+            &gettext(app.locale, if list { "Grid" } else { "List" }),
+            false,
+        )
+        .clicked()
+        {
+            app.settings.home.stats_list = !list;
+            app.mark_settings_dirty();
+        }
     });
     ui.add_space(4.0);
     let (artists, tracks) = app.stats.ranking(now, crate::stats::local_offset(), range);
@@ -364,7 +377,11 @@ fn ranked_shelf(app: &mut App, ui: &mut egui::Ui, songs: bool, now: i64) {
     // A grid that fills the page's width, no sideways scrolling.
     let gap = 10.0;
     let available = ui.available_width();
-    let columns = ((available / 260.0).floor() as usize).clamp(1, 6);
+    let columns = if app.settings.home.stats_list {
+        1
+    } else {
+        ((available / 175.0).floor() as usize).clamp(1, 10)
+    };
     let width = (available - gap * (columns as f32 - 1.0)) / columns as f32;
     let mut index = 0;
     for chunk in rows.chunks(columns) {
@@ -379,6 +396,8 @@ fn ranked_shelf(app: &mut App, ui: &mut egui::Ui, songs: bool, now: i64) {
     ui.add_space(14.0);
 }
 
+const TILE: f32 = 36.0;
+
 /// One ranked artist or song. Clicking it opens the artist or plays the
 /// song; clicking the artist's name under a song opens that artist.
 fn stat_tile(
@@ -390,7 +409,7 @@ fn stat_tile(
     width: f32,
 ) {
     let palette = app.palette;
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 60.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(width, TILE), Sense::click());
     if !ui.is_rect_visible(rect) {
         return;
     }
@@ -401,7 +420,7 @@ fn stat_tile(
         CornerRadius::same(6),
         if hovered { palette.surface_hover } else { palette.surface },
     );
-    let badge = Rect::from_min_size(rect.min, Vec2::splat(60.0));
+    let badge = Rect::from_min_size(rect.min, Vec2::splat(TILE));
     widgets::paint_cover(
         ui,
         &palette,
@@ -412,28 +431,28 @@ fn stat_tile(
         Some(app.backend.art()),
     );
     // The rank, on a small dark chip so it reads over any picture.
-    let chip = Rect::from_min_size(badge.min + vec2(3.0, 3.0), vec2(20.0, 16.0));
+    let chip = Rect::from_min_size(badge.min + vec2(2.0, 2.0), vec2(16.0, 13.0));
     ui.painter()
         .rect_filled(chip, CornerRadius::same(4), egui::Color32::from_black_alpha(150));
     ui.painter().text(
         chip.center(),
         egui::Align2::CENTER_CENTER,
         format!("{}", index + 1),
-        theme::semibold(11.0),
+        theme::semibold(9.5),
         egui::Color32::WHITE,
     );
     let text = Rect::from_min_max(
-        pos2(badge.right() + 10.0, rect.top()),
-        pos2(rect.right() - 10.0, rect.bottom()),
+        pos2(badge.right() + 8.0, rect.top()),
+        pos2(rect.right() - 6.0, rect.bottom()),
     );
     let painter = ui.painter().with_clip_rect(text);
     crate::bidi::paint_line(
         &painter,
         text.left(),
         text.right(),
-        rect.center().y - 11.0,
+        rect.center().y - 8.0,
         &row.name,
-        theme::bold(13.5),
+        theme::bold(12.5),
         palette.text,
     );
     if song && !row.uri.is_empty() && response.hovered() {
@@ -446,9 +465,9 @@ fn stat_tile(
             &painter,
             text.left(),
             text.right(),
-            rect.center().y + 3.0,
+            rect.center().y + 8.0,
             &row.sub,
-            theme::regular(12.0),
+            theme::regular(11.0),
             if row.artist_id.is_empty() { palette.secondary } else { palette.text },
         );
         if !row.artist_id.is_empty() {
@@ -463,13 +482,14 @@ fn stat_tile(
             }
             artist_clicked = link.clicked();
         }
+        let plays_left = (sub_rect.right() + 6.0).min(text.right());
         crate::bidi::paint_line(
             &painter,
-            text.left(),
+            plays_left,
             text.right(),
-            rect.center().y + 19.0,
+            rect.center().y + 8.0,
             &plays,
-            theme::regular(11.5),
+            theme::regular(10.5),
             palette.dim,
         );
     } else {
@@ -477,9 +497,9 @@ fn stat_tile(
             &painter,
             text.left(),
             text.right(),
-            rect.center().y + 9.0,
+            rect.center().y + 8.0,
             &plays,
-            theme::regular(12.0),
+            theme::regular(11.0),
             palette.secondary,
         );
     }

@@ -207,7 +207,7 @@ impl Stats {
         }
         let sort = |mut rows: Vec<Ranked>| {
             rows.sort_by(|a, b| b.plays.cmp(&a.plays).then_with(|| a.name.cmp(&b.name)));
-            rows.truncate(30);
+            rows.truncate(50);
             rows
         };
         (sort(artists.into_values().collect()), sort(songs.into_values().collect()))

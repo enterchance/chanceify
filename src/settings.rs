@@ -393,6 +393,8 @@ pub struct HomeSettings {
     /// Top artists and songs: 0 last 30 days, 1 last 7 days, 2 all time.
     pub artist_range: u8,
     pub song_range: u8,
+    /// Top artists and songs as one column (true) or a grid of small tiles.
+    pub stats_list: bool,
     /// How many recommended songs show: 0 is the usual 20.
     pub recommended_shown: u8,
     /// Whether the full Recently played shelf is open.
