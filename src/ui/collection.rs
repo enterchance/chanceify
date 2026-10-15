@@ -70,7 +70,7 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
         .and_then(|uri| app.softened_covers.texture(ui.ctx(), &art, uri));
     let backdrop_slot = ui.painter().add(egui::Shape::Noop);
     let backdrop_on = app.settings.page_backdrop;
-    let sharp = if backdrop_on {
+    let fresh_sharp = if backdrop_on {
         [hero.images.image, hero.images.previous]
             .into_iter()
             .flatten()
@@ -78,27 +78,33 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
     } else {
         None
     };
-    let soft = if backdrop_on {
+    let fresh_soft = if backdrop_on {
         softened
             .as_ref()
             .map(egui::load::SizedTexture::from_handle)
     } else {
         None
     };
-    let source = sharp.or(soft);
-    // Hold the last picture that was on screen for this page: while the cover
-    // is briefly not ready (scrolling a long list, art being refreshed) the
-    // background must not blink out and back.
-    let held_id = egui::Id::new(("page-backdrop-held", hero.title));
-    let held: Option<(egui::TextureId, Vec2)> = ui.data(|data| data.get_temp(held_id));
-    let source = match source {
-        Some(texture) => {
-            ui.data_mut(|data| data.insert_temp(held_id, (texture.id, texture.size)));
-            Some(texture)
+    // Each picture, once shown for this page, is held until its replacement is
+    // ready: while a cover is briefly not ready (scrolling a long list, art
+    // being refreshed) the background must not blink or swap between the
+    // sharp and the soft one.
+    let held = |slot: &str, fresh: Option<egui::load::SizedTexture>, ui: &egui::Ui| {
+        let id = egui::Id::new(("page-backdrop-held", slot, hero.title));
+        match fresh {
+            Some(texture) => {
+                ui.data_mut(|data| data.insert_temp(id, (texture.id, texture.size)));
+                Some(texture)
+            }
+            None if backdrop_on => ui
+                .data(|data| data.get_temp::<(egui::TextureId, Vec2)>(id))
+                .map(|(id, size)| egui::load::SizedTexture { id, size }),
+            None => None,
         }
-        None if backdrop_on => held.map(|(id, size)| egui::load::SizedTexture { id, size }),
-        None => None,
     };
+    let sharp = held("sharp", fresh_sharp, ui);
+    let soft = held("soft", fresh_soft, ui);
+    let source = sharp.or(soft);
     let (text_main, text_soft) = if source.is_some() {
         (egui::Color32::WHITE, egui::Color32::from_white_alpha(200))
     } else {
@@ -295,11 +301,7 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
                     }
                 }
                 (Some(only), None) | (None, Some(only)) => layers.push(make(only, 1.0)),
-                (None, None) => {
-                    if let Some(held) = source {
-                        layers.push(make(held, 1.0));
-                    }
-                }
+                (None, None) => {}
             }
             let clipped = ui.painter().with_clip_rect(area);
             clipped.set(backdrop_slot, egui::Shape::Vec(layers));
