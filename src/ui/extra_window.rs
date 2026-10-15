@@ -83,6 +83,46 @@ pub fn show(app: &mut App, ctx: &Context) {
         if ctx.input(|input| input.key_pressed(egui::Key::F11)) {
             ctx.send_viewport_cmd(ViewportCommand::Fullscreen(!full));
         }
+        // The same hotkeys as the main window. The queue and lyrics keys
+        // act on this window's own queue and lyrics, not the main window's.
+        {
+            let before = app.actions.len();
+            super::keys::handle(app, &ctx);
+            let mut i = before;
+            while i < app.actions.len() {
+                match app.actions[i] {
+                    crate::model::Action::ToggleQueuePanel => {
+                        app.actions.remove(i);
+                        app.extra_queue_open = !app.extra_queue_open;
+                    }
+                    crate::model::Action::ToggleQueueAndLyrics => {
+                        app.actions.remove(i);
+                        let both = app.extra_queue_open && app.settings.vis_lyrics;
+                        app.extra_queue_open = !both;
+                        if app.settings.vis_lyrics == both {
+                            app.actions.push(crate::model::Action::ToggleVisLyrics);
+                        }
+                    }
+                    crate::model::Action::ToggleLyricsPanel
+                    | crate::model::Action::ToggleLyricsFullscreen => {
+                        app.actions.remove(i);
+                        app.actions.push(crate::model::Action::ToggleVisLyrics);
+                        i = app.actions.len();
+                    }
+                    crate::model::Action::GoToPlayingTop => {
+                        app.actions.remove(i);
+                    }
+                    _ => i += 1,
+                }
+            }
+        }
+        // How much of the right side the queue takes, so the lyrics move over.
+        let queue_width = if app.extra_queue_open {
+            (ctx.content_rect().width() - 24.0).clamp(220.0, 360.0) + 24.0
+        } else {
+            0.0
+        };
+        ctx.data_mut(|data| data.insert_temp(egui::Id::new("extra-queue-width"), queue_width));
         // This window is only ever the visualizer. Its lyrics button shows the
         // lyrics beside the cover, like the full screen visualizer's.
         let lyrics_mode = false;

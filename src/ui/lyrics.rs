@@ -803,7 +803,15 @@ pub fn vis_overlay(app: &mut App, ui: &mut egui::Ui) {
     let layout = 0;
     let cover = super::player_bar::fullscreen_cover(rect, layout);
     let left = cover.right() + rect.width() * 0.05;
-    let right = rect.right() - rect.width() * 0.08;
+    let queue_width: f32 = ui
+        .ctx()
+        .data(|data| data.get_temp(egui::Id::new("extra-queue-width")))
+        .unwrap_or(0.0);
+    let right = if queue_width > 0.0 {
+        rect.right() - queue_width - 12.0
+    } else {
+        rect.right() - rect.width() * 0.08
+    };
     if right - left < 220.0 {
         return;
     }
