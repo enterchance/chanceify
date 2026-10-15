@@ -2216,10 +2216,49 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             // How dark the colours run, for all three shapes: Bright is the
             // cover lifted to full colour, Deep and Night keep it nearer
             // the cover's own darkness.
+            // Each look is a small swatch of this very cover's colours as
+            // that look would draw them; the name is on hover.
+            let sample = {
+                let colours = app.swirl_colours();
+                let first = colours.first().copied().unwrap_or(palette.accent);
+                let second = colours.get(1).copied().unwrap_or(first);
+                (first, second)
+            };
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
                 for (value, look) in crate::settings::VIS_LOOKS.iter().enumerate() {
-                    if chip(ui, &palette, &gettext(app.locale, look.name), app.settings.vis_depth as usize == value, 62.0).clicked() {
+                    let (rect, response) = ui.allocate_exact_size(vec2(40.0, 28.0), Sense::click());
+                    let (a, b) = (deepen(sample.0, value as u8), deepen(sample.1, value as u8));
+                    let half = rect.width() / 2.0;
+                    let left = Rect::from_min_size(rect.min, vec2(half, rect.height()));
+                    let right = Rect::from_min_size(pos2(rect.left() + half, rect.top()), vec2(half, rect.height()));
+                    ui.painter().rect_filled(
+                        left,
+                        egui::CornerRadius { nw: 7, sw: 7, ne: 0, se: 0 },
+                        a,
+                    );
+                    ui.painter().rect_filled(
+                        right,
+                        egui::CornerRadius { nw: 0, sw: 0, ne: 7, se: 7 },
+                        b,
+                    );
+                    let active = app.settings.vis_depth as usize == value;
+                    if active {
+                        ui.painter().rect_stroke(
+                            rect.expand(2.0),
+                            egui::CornerRadius::same(9),
+                            egui::Stroke::new(2.0, palette.text),
+                            egui::StrokeKind::Outside,
+                        );
+                    } else if response.hovered() {
+                        ui.painter().rect_stroke(
+                            rect.expand(1.0),
+                            egui::CornerRadius::same(8),
+                            egui::Stroke::new(1.0, palette.secondary),
+                            egui::StrokeKind::Outside,
+                        );
+                    }
+                    if response.on_hover_text(gettext(app.locale, look.name).into_owned()).clicked() {
                         app.actions.push(Action::SetVisDepth(value as u8));
                     }
                 }
@@ -2426,7 +2465,6 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             {
                 app.actions.push(Action::ToggleVisArtist);
             }
-            font_grid(app, ui);
             }); }); }
             let on_page = app.lyrics_fullscreen.is_some();
             if tab.get() == 3 { ui.horizontal_top(|ui| { ui.vertical(|ui| {
@@ -2658,6 +2696,7 @@ fn sway_gate(app: &App) -> f32 {
 /// Every title font as a cell showing the playing song in that very font,
 /// so the choice is made by looking. With the live preview on, hovering a
 /// cell puts that font on the visualizer's title straight away.
+#[allow(dead_code)]
 fn font_grid(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     ui.horizontal(|ui| {
@@ -2745,37 +2784,16 @@ fn font_grid(app: &mut App, ui: &mut egui::Ui) {
 
 /// The font the title is drawn in this frame: the one the reader is hovering
 /// in the grid when the live preview is on, otherwise the chosen one.
-fn vis_font_in_use(ctx: &egui::Context, chosen: u8, random: bool, uri: &str) -> usize {
-    let last = crate::system_fonts::VIS_FONTS.len() - 1;
-    let hovered = ctx
-        .data(|data| data.get_temp::<(u8, u64)>(egui::Id::new("vis-font-preview")))
-        .filter(|(_, pass)| pass + 2 >= ctx.cumulative_pass_nr());
-    if let Some((index, _)) = hovered {
-        return usize::from(index).min(last);
-    }
-    if random {
-        // One face per song, from the ones this computer has.
-        let id = egui::Id::new("vis-fonts-available");
-        let available = ctx.data(|data| data.get_temp::<Vec<u8>>(id)).unwrap_or_else(|| {
-            let found: Vec<u8> = (1..=last)
-                .filter(|index| crate::system_fonts::vis_font_bytes(*index).is_some())
-                .map(|index| index as u8)
-                .collect();
-            ctx.data_mut(|data| data.insert_temp(id, found.clone()));
-            found
-        });
-        if !available.is_empty() {
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            uri.hash(&mut hasher);
-            return usize::from(available[(hasher.finish() % available.len() as u64) as usize]);
-        }
-    }
-    usize::from(chosen).min(last)
+fn vis_font_in_use(_ctx: &egui::Context, _chosen: u8, _random: bool, _uri: &str) -> usize {
+    // The title font is not a setting any more: choosing one made the
+    // picture draw with a face the renderer had not been given yet. The
+    // title always uses the app's own face.
+    0
 }
 
 /// The family for visualizer font `font_index`, loading the file the first
 /// time it is asked for. Falls back to Inter while it loads or is missing.
+#[allow(dead_code)]
 fn vis_font_family(ctx: &egui::Context, font_index: usize) -> egui::FontFamily {
     let mut family = egui::FontFamily::Proportional;
     if font_index > 0 {
