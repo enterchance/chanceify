@@ -1101,10 +1101,31 @@ fn swirl_phase(app: &mut App, ui: &egui::Ui, now: Option<&NowPlaying>) -> f64 {
 /// The two colours the visualizer's colour pair is at this moment (what the
 /// bars and flow run between), for the lights feed.
 pub(crate) fn lights_pair(app: &App, time: f64) -> Option<(Color32, Color32)> {
-    swirl_wash(app, time).map(|(a, b)| (within_brightness(a, true), within_brightness(b, true)))
+    swirl_wash_raw(app, time).map(|(a, b)| (within_brightness(a, true), within_brightness(b, true)))
 }
 
+/// The wash as the picture draws it: the cover's colours, brought down to
+/// the chosen depth.
 fn swirl_wash(app: &App, time: f64) -> Option<(Color32, Color32)> {
+    let depth = app.settings.vis_depth;
+    swirl_wash_raw(app, time).map(|(a, b)| (deepen(a, depth), deepen(b, depth)))
+}
+
+/// A colour darkened to a depth (0 leaves it alone), hue kept, so the
+/// picture can sit as dark as the cover itself instead of washed to pastel.
+pub(crate) fn deepen(colour: Color32, depth: u8) -> Color32 {
+    let factor = match depth {
+        0 => return colour,
+        1 => 0.5,
+        _ => 0.3,
+    };
+    let mut hsva = egui::ecolor::Hsva::from(colour);
+    hsva.v *= factor;
+    hsva.s = (hsva.s * 1.08).min(1.0);
+    Color32::from(hsva)
+}
+
+fn swirl_wash_raw(app: &App, time: f64) -> Option<(Color32, Color32)> {
     let colours = app.swirl_colours();
     if colours.len() < 2 {
         return None;
@@ -1203,7 +1224,8 @@ pub(super) fn vis_gradient(
         let (low, _) = vis_colours(base, dark);
         (low, low)
     };
-    (low, high)
+    let depth = app.settings.vis_depth;
+    (deepen(low, depth), deepen(high, depth))
 }
 
 pub(super) fn visualizer_shape(
@@ -2176,6 +2198,17 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                 |value| app.actions.push(Action::SetJumpTune(3, value)));
             ui.add_space(6.0);
             theme::subtle(ui, &palette, &gettext(app.locale, "COLOUR"));
+            // How dark the colours run, for all three shapes: Bright is the
+            // cover lifted to full colour, Deep and Night keep it nearer
+            // the cover's own darkness.
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                for (value, label) in [(0u8, "Bright"), (1, "Deep"), (2, "Night")] {
+                    if chip(ui, &palette, &gettext(app.locale, label), app.settings.vis_depth == value, 62.0).clicked() {
+                        app.actions.push(Action::SetVisDepth(value));
+                    }
+                }
+            });
             if chip(
                 ui,
                 &palette,

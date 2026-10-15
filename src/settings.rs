@@ -1013,6 +1013,11 @@ pub struct Settings {
     /// second colour.
     #[serde(default)]
     pub vis_no_gradient: bool,
+    /// How dark the visualizer's colours run: 0 bright (as it was), 1 deep,
+    /// 2 night. Deep keeps the cover's own hues but at the brightness a
+    /// wallpaper would have, instead of lifted towards pastel.
+    #[serde(default)]
+    pub vis_depth: u8,
     /// Lyrics drawn over the full-screen visualizer.
     #[serde(default)]
     pub vis_lyrics: bool,
@@ -1528,6 +1533,7 @@ impl Default for Settings {
             seek_custom_width: 0.0,
             volume_custom_width: 0.0,
             vis_no_gradient: false,
+            vis_depth: 0,
             vis_lyrics: false,
             vis_text_still: false,
             vis_sway: 0,

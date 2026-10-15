@@ -11873,6 +11873,10 @@ impl App {
                 self.settings.vis_no_gradient = !self.settings.vis_no_gradient;
                 self.mark_settings_dirty();
             }
+            Action::SetVisDepth(depth) => {
+                self.settings.vis_depth = depth.min(2);
+                self.mark_settings_dirty();
+            }
             Action::SetVisSway(index) => {
                 self.settings.vis_sway = index.min(crate::settings::Settings::SWAY_PRESETS.len() as u8 - 1);
                 // Choosing a style means wanting it to move.

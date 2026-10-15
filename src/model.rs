@@ -1510,6 +1510,7 @@ pub enum Action {
     /// The volume bar's width in pixels; 0 goes back to the standard.
     SetVolumeWidth(f32),
     ToggleVisGradient,
+    SetVisDepth(u8),
     ToggleVisLyrics,
     ToggleVisTextSway,
     ToggleVisSwayBeat,
