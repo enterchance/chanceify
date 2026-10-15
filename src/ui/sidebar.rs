@@ -156,6 +156,10 @@ fn cover_play_button(
 /// Whether this row is a playlist holding songs that can no longer be played
 /// (from the last "Unavailable songs" scan in Settings).
 fn needs_attention(app: &App, entry: &Entry) -> bool {
+    // The same switch as the dot on the profile picture.
+    if !app.settings.unavailable_dot {
+        return false;
+    }
     let Page::Playlist(id) = &entry.page else {
         return false;
     };

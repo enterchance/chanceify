@@ -848,6 +848,7 @@ pub fn show(app: &mut App, ctx: &Context) {
         .order(egui::Order::Foreground)
         .frame(frame)
         .fixed_pos(panel_pos)
+        .constrain_to(super::player_bar::unscaled_screen(ctx, pivot, scale))
         .min_width(width)
         .max_width(width)
         .resizable(false)

@@ -1412,6 +1412,17 @@ fn vis_menu(app: &mut App, response: &egui::Response) {
     }
 }
 
+/// The window's rectangle as a layer scaled by `fit` about `pivot` (the
+/// transform `TSTransform::new(pivot * (1 - fit), fit)`) sees it: the area of
+/// the layer's own coordinates that lands exactly on the screen.
+pub(super) fn unscaled_screen(ctx: &egui::Context, pivot: egui::Pos2, fit: f32) -> egui::Rect {
+    let screen = ctx.content_rect();
+    let fit = fit.max(0.05);
+    let shift = pivot.to_vec2() * (1.0 - fit);
+    let back = |point: egui::Pos2| ((point.to_vec2() - shift) / fit).to_pos2();
+    egui::Rect::from_min_max(back(screen.min), back(screen.max))
+}
+
 /// The visualizer settings window, opened with V.
 pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
     if !app.vis_panel {
@@ -1495,6 +1506,12 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
         .max_width(natural_w)
         .movable(false)
         .constrain(false)
+        // The window paints inside this rectangle, in its own (unscaled)
+        // coordinates. The default is the screen rectangle, which the scale
+        // shrinks towards the panel's corner: the right and bottom of a
+        // panel near the screen's edge were cut off. This is the screen
+        // seen through the scale instead.
+        .constrain_to(unscaled_screen(ctx, fixed_pos, fit))
         .fixed_pos(fixed_pos);
     let layer = egui::LayerId::new(egui::Order::Middle, win_id);
     ctx.set_transform_layer(

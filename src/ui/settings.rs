@@ -741,6 +741,76 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     }
                 },
             );
+            filtered_row(ui, &palette, &needle, &playback, &playback_rows[10], |ui| {
+                // The control area lays out right-to-left: add the rightmost item first.
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    if widgets::switch(ui, &palette, &audio_cache, &mut app.settings.audio_cache)
+                        .on_hover_text("Keeps songs you have played on this computer, so replaying one never downloads it again. The slider is the most disk space it may use (2 GB holds roughly 400 songs). When it is full, the oldest songs are deleted.")
+                        .changed()
+                    {
+                        changed = true;
+                        playback_dirty = true;
+                    }
+                    if app.settings.audio_cache {
+                        ui.add_space(6.0);
+                        let mut mb = app.settings.audio_cache_mb as f64;
+                        let response = ui.add(
+                            egui::Slider::new(&mut mb, 128.0..=51200.0)
+                                .logarithmic(true)
+                                .custom_formatter(|value, _| {
+                                    if value >= 1024.0 {
+                                        format!("{:.1} GB", value / 1024.0)
+                                    } else {
+                                        format!("{value:.0} MB")
+                                    }
+                                })
+                                .custom_parser(|text| {
+                                    let text = text.trim().to_lowercase();
+                                    let number: f64 = text
+                                        .trim_end_matches(|c: char| c.is_alphabetic() || c == ' ')
+                                        .parse()
+                                        .ok()?;
+                                    Some(if text.ends_with("gb") || text.ends_with('g') {
+                                        number * 1024.0
+                                    } else {
+                                        number
+                                    })
+                                }),
+                        );
+                        let response = response.on_hover_text("Keeps songs you have played on this computer, so replaying one never downloads it again. The slider is the most disk space it may use (2 GB holds roughly 400 songs). When it is full, the oldest songs are deleted.");
+                        if response.changed() {
+                            app.settings.audio_cache_mb = mb.round().max(128.0) as u64;
+                            changed = true;
+                            playback_dirty = true;
+                        }
+                    }
+                });
+            });
+            #[cfg(windows)]
+            filtered_row(ui, &palette, &needle, &playback, &playback_rows[9], |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let current = app.settings.audio_buffer_ms;
+                    for ms in [50u32, 100, 200] {
+                        let label = format!("{ms} ms");
+                        let tip = match ms {
+                            50 => "50 ms: a tiny cushion of music. Pause and volume react almost instantly, but a busy or slow computer may crackle or skip.",
+                            100 => "100 ms: the good middle. Controls feel quick and the music holds steady on most computers.",
+                            _ => "200 ms: a big cushion. The music will not crackle or skip even when the computer is busy, but Pause and volume are heard about a fifth of a second late.",
+                        };
+                        if theme::soft_button(ui, &palette, None, &label, current == ms)
+                            .on_hover_text(tip)
+                            .clicked()
+                            && current != ms
+                        {
+                            app.settings.audio_buffer_ms = ms;
+                            changed = true;
+                            playback_dirty = true;
+                        }
+                    }
+                });
+            });
             filtered_row(ui, &palette, &needle, &playback, &playback_rows[3], |ui| {
                 if widgets::switch(
                     ui,
@@ -792,23 +862,6 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     });
                 });
             }
-            #[cfg(windows)]
-            filtered_row(ui, &palette, &needle, &playback, &playback_rows[9], |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    let current = app.settings.audio_buffer_ms;
-                    for ms in [50u32, 100, 200] {
-                        let label = format!("{ms} ms");
-                        if theme::soft_button(ui, &palette, None, &label, current == ms).clicked()
-                            && current != ms
-                        {
-                            app.settings.audio_buffer_ms = ms;
-                            changed = true;
-                            playback_dirty = true;
-                        }
-                    }
-                });
-            });
             if needle.is_empty() {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
@@ -839,50 +892,6 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     "Only for songs from your own files. It starts with the next list you play.",
                 );
             }
-            filtered_row(ui, &palette, &needle, &playback, &playback_rows[10], |ui| {
-                // The control area lays out right-to-left: add the rightmost item first.
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    if widgets::switch(ui, &palette, &audio_cache, &mut app.settings.audio_cache)
-                        .changed()
-                    {
-                        changed = true;
-                        playback_dirty = true;
-                    }
-                    if app.settings.audio_cache {
-                        ui.add_space(6.0);
-                        let mut mb = app.settings.audio_cache_mb as f64;
-                        let response = ui.add(
-                            egui::Slider::new(&mut mb, 128.0..=51200.0)
-                                .logarithmic(true)
-                                .custom_formatter(|value, _| {
-                                    if value >= 1024.0 {
-                                        format!("{:.1} GB", value / 1024.0)
-                                    } else {
-                                        format!("{value:.0} MB")
-                                    }
-                                })
-                                .custom_parser(|text| {
-                                    let text = text.trim().to_lowercase();
-                                    let number: f64 = text
-                                        .trim_end_matches(|c: char| c.is_alphabetic() || c == ' ')
-                                        .parse()
-                                        .ok()?;
-                                    Some(if text.ends_with("gb") || text.ends_with('g') {
-                                        number * 1024.0
-                                    } else {
-                                        number
-                                    })
-                                }),
-                        );
-                        if response.changed() {
-                            app.settings.audio_cache_mb = mb.round().max(128.0) as u64;
-                            changed = true;
-                            playback_dirty = true;
-                        }
-                    }
-                });
-            });
             ui.add_space(4.0);
             if playback_dirty
                 || playback_rows[11].matches(&needle, &playback)
