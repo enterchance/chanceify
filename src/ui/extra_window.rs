@@ -207,6 +207,33 @@ pub fn show(app: &mut App, ctx: &Context) {
             app.fullscreen_vis = saved_full;
             app.settings.float_detached = detached;
         }
+        // The queue, over the right side of the picture.
+        if app.extra_queue_open {
+            if matches!(app.queue, crate::model::Loadable::NotLoaded) {
+                app.actions.push(crate::model::Action::RefreshQueue);
+            }
+            let width = (rect.width() - 24.0).clamp(220.0, 360.0);
+            let top = rect.top() + 56.0;
+            let height = (rect.height() - 56.0 - 90.0).max(120.0);
+            let palette = app.palette;
+            egui::Area::new(egui::Id::new("extra-queue"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(pos2(rect.right() - width - 12.0, top))
+                .show(&ctx, |ui| {
+                    Frame::new()
+                        .fill(palette.panel.gamma_multiply(0.86))
+                        .corner_radius(egui::CornerRadius::same(10))
+                        .inner_margin(egui::Margin::same(8))
+                        .show(ui, |ui| {
+                            ui.set_width(width - 16.0);
+                            ui.set_height(height - 16.0);
+                            egui::ScrollArea::vertical()
+                                .id_salt("extra-queue-scroll")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| super::queue::contents(app, ui, true));
+                        });
+                });
+        }
         // Three small buttons: settings, visualizer or lyrics, and close.
         let (pointer, pressed) = ctx.input(|input| (input.pointer.hover_pos(), input.pointer.primary_pressed()));
         let near = pointer.is_some_and(|p| rect.contains(p) && p.y < rect.top() + 70.0);
@@ -216,13 +243,14 @@ pub fn show(app: &mut App, ctx: &Context) {
         let swap = egui::Rect::from_min_size(pos2(rect.left() + 48.0, rect.top() + 10.0), size);
         let exit = egui::Rect::from_min_size(pos2(rect.right() - 42.0, rect.top() + 10.0), size);
         let pin = egui::Rect::from_min_size(pos2(rect.left() + 86.0, rect.top() + 10.0), size);
+        let queue_button = egui::Rect::from_min_size(pos2(rect.left() + 124.0, rect.top() + 10.0), size);
         let swap_icon = theme::Icon::Mic;
         let painter = ui.painter().clone();
-        for (button, icon) in [(wave, theme::Icon::Settings), (swap, swap_icon), (pin, theme::Icon::Pin), (exit, theme::Icon::X)] {
+        for (button, icon) in [(wave, theme::Icon::Settings), (swap, swap_icon), (pin, theme::Icon::Pin), (queue_button, theme::Icon::ListMusic), (exit, theme::Icon::X)] {
             let hot = pointer.is_some_and(|p| button.contains(p));
             painter.circle_filled(button.center(), 16.0, Color32::from_black_alpha(if hot { 190 } else { 120 }));
             let icon_rect = egui::Rect::from_center_size(button.center(), egui::vec2(18.0, 18.0));
-            let lit = hot || (button == pin && extra_top);
+            let lit = hot || (button == pin && extra_top) || (button == queue_button && app.extra_queue_open);
             theme::paint_icon(ui, icon, icon_rect, 18.0, Color32::from_white_alpha(if lit { 255 } else { alpha }));
             if hot {
                 ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -235,6 +263,8 @@ pub fn show(app: &mut App, ctx: &Context) {
                 app.actions.push(crate::model::Action::ToggleVisLyrics);
             } else if pin.contains(p) {
                 app.actions.push(crate::model::Action::ToggleExtraOnTop);
+            } else if queue_button.contains(p) {
+                app.extra_queue_open = !app.extra_queue_open;
             } else if exit.contains(p) {
                 close = true;
             }

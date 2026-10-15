@@ -357,6 +357,8 @@ pub struct App {
     pub extra_vis: bool,
     /// The visualizer settings panel open inside the extra window.
     pub extra_vis_panel: bool,
+    /// Whether the extra visualizer window shows the queue beside the picture.
+    pub extra_queue_open: bool,
     /// What the extra window shows: 0 the visualizer, 1 the lyrics.
     pub extra_mode: u8,
     pub extra_vis_since: Option<std::time::Instant>,
@@ -1082,6 +1084,7 @@ impl App {
             extra_drawing: false,
             extra_vis: false,
             extra_vis_panel: false,
+            extra_queue_open: false,
             extra_mode: 0,
             extra_vis_since: None,
             theme_preview: None,
