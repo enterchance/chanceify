@@ -2476,6 +2476,37 @@ impl Settings {
         }
     }
 
+    /// Same as `save`, but the file is written on a worker thread. Writes are
+    /// taken one at a time and in order, so a later save never loses to an
+    /// earlier one.
+    pub fn save_in_background(self, path: std::path::PathBuf) {
+        static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let text = match self.encode_for_profile(path == crate::paths::AppDirs::legacy().settings_file()) {
+            Ok(text) => text,
+            Err(error) => {
+                log::warn!("unable to encode settings: {error}");
+                return;
+            }
+        };
+        let spawned = std::thread::Builder::new()
+            .name("settings-save".into())
+            .spawn(move || {
+                let _turn = WRITING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let temporary = path.with_extension("json.tmp");
+                let written = std::fs::write(&temporary, text)
+                    .and_then(|()| crate::util::replace_file(&temporary, &path));
+                if let Err(error) = written {
+                    log::warn!("unable to save settings to {}: {error}", path.display());
+                }
+            });
+        if let Err(error) = spawned {
+            log::warn!("unable to start the settings writer: {error}");
+        }
+    }
+
     fn encode_for_profile(&self, legacy: bool) -> serde_json::Result<String> {
         if !legacy {
             return serde_json::to_string_pretty(self);

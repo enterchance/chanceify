@@ -4261,7 +4261,7 @@ impl App {
             self.evict_stale_pages();
         }
         if self.settings_dirty && self.last_settings_save.elapsed() > Duration::from_secs(2) {
-            self.save_settings();
+            self.write_settings(true);
         }
         if self.session_dirty && self.last_session_save.elapsed() > Duration::from_secs(2) {
             self.save_session();
@@ -4380,6 +4380,12 @@ impl App {
     }
 
     fn save_settings(&mut self) {
+        self.write_settings(false);
+    }
+
+    /// Saves the settings now, or (`background`) hands the file write to a
+    /// worker thread so the window never waits on the disk.
+    fn write_settings(&mut self, background: bool) {
         if self.settings.proxy_password_legacy {
             self.settings_dirty = false;
             self.last_settings_save = Instant::now();
@@ -4398,7 +4404,11 @@ impl App {
         }
         let mut saved = self.settings.clone();
         self.applied_proxy_preferences.apply_to(&mut saved);
-        saved.save(&self.dirs.settings_file());
+        if background {
+            saved.save_in_background(self.dirs.settings_file());
+        } else {
+            saved.save(&self.dirs.settings_file());
+        }
     }
 
     /// Where the membership index is kept between runs. It is a cache of
@@ -13212,10 +13222,21 @@ impl App {
         let jump = self.jump_level();
         if jump > 0.0 {
             let t = ctx.input(|input| input.time) as f32;
-            let amp = 7.0 * jump * self.settings.jump_shake.clamp(0.1, 3.0);
+            // Eased in over a few milliseconds and out over the rest, so the
+            // start is a push and not a pop.
+            let since = self.jump_at.map_or(1.0, |at| at.elapsed().as_secs_f32());
+            let attack = (since / 0.03).clamp(0.0, 1.0);
+            let envelope = attack * attack * (3.0 - 2.0 * attack) * jump * jump;
+            let amp = 7.0 * envelope * self.settings.jump_shake.clamp(0.1, 3.0);
             let shift = egui::vec2((t * 95.0).sin() * amp, (t * 71.0).cos() * amp * 0.7);
-            let transform = egui::emath::TSTransform::from_translation(shift);
-            let layers: Vec<egui::LayerId> = ctx.memory(|memory| memory.layer_ids().collect());
+            // The picture is also grown a hair about the middle, by just as
+            // much as it moves, so the shake never slides an edge in and shows
+            // the bare window behind it (the colour seam on the jump).
+            let screen = ctx.content_rect();
+            let reach = amp.abs() * 1.02 + 1.0;
+            let grow = 1.0 + 2.0 * reach / screen.width().min(screen.height()).max(200.0);
+            let centre = screen.center().to_vec2();
+            let transform = egui::emath::TSTransform::new(centre * (1.0 - grow) + shift, grow);
             for layer in layers {
                 ctx.transform_layer_shapes(layer, transform);
             }
