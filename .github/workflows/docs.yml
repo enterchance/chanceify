@@ -1,12 +1,7 @@
 name: Docs
 
+# Manual only (the site is not published from this fork on every push).
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - docs/**
-      - .github/workflows/docs.yml
   workflow_dispatch:
 
 permissions:
