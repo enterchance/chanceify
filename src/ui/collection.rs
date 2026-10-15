@@ -73,7 +73,7 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
     let (text_main, text_soft) = if softened.is_some() {
         (egui::Color32::WHITE, egui::Color32::from_white_alpha(200))
     } else {
-        (text_main, text_soft)
+        (palette.text, palette.secondary)
     };
     ui.add_space(12.0);
     let cover_size = if ui.available_width() > 720.0 {
