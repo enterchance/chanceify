@@ -3347,15 +3347,19 @@ impl App {
             // row is the session's audio-key service gone bad, which
             // leaves librespot feeding the decoder encrypted bytes and
             // skipping through the whole album. A fresh session cures it.
-            if error.starts_with("This item isn't available") {
+            // A refused audio key is the same sickness, so it gets a fresh
+            // session at once (one refusal, not three) and the song is
+            // picked up again after it.
+            let key_refused = error.starts_with("Spotify refused the audio key");
+            if error.starts_with("This item isn't available") || key_refused {
                 let now = Instant::now();
                 self.unavailable_at
                     .retain(|at| now.duration_since(*at) < Duration::from_secs(20));
                 self.unavailable_at.push(now);
-                if self.unavailable_at.len() >= 3
+                if self.unavailable_at.len() >= if key_refused { 1 } else { 3 }
                     && self
                         .last_unavailable_reconnect
-                        .is_none_or(|at| at.elapsed() > Duration::from_secs(60))
+                        .is_none_or(|at| at.elapsed() > Duration::from_secs(if key_refused { 25 } else { 60 }))
                 {
                     self.unavailable_at.clear();
                     self.last_unavailable_reconnect = Some(now);
