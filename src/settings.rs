@@ -2049,6 +2049,7 @@ impl Settings {
         "track_columns", "tracklist_compact", "vis", "vis_bar_sides", "vis_flow_sides", "vis_shapes",
         "vis_shapes_last", "vis_shapes_set", "volume_presets", "zoom",
         "volume_custom_width", "vis_no_gradient", "vis_lyrics", "vis_text_still", "vis_sway", "vis_sway_amount", "vis_sway_react", "sway_sens", "vis_text_no_outline", "vis_text_back", "vis_back_alpha", "vis_back_round", "vis_back_pad", "vis_back_block", "vis_live_preview", "vis_font_random", "vis_text_font", "vis_text_no_artist", "vis_lyrics_no_back", "vis_bars_stay", "lyrics_vis", "lyrics_vis_dark", "lyrics_vis_mode", "window_opacity", "anchor_controls", "anchor_volume", "bar_stacked", "bar_layout", "bar_free", "lyrics_ctl_off", "vis_bars_opacity", "vis_flow_opacity", "swirl_react_mode", "vis_jump_react", "vis_jump_on", "float_idle",
+        "jump_sens", "jump_gap", "jump_floor", "jump_adapt", "vis_sway_beat", "vis_depth", "vis_art_border", "calm_look", "disc_dim", "vis_views", "vis_view_mini", "vis_reverse_flow", "vis_reverse_swirl", "extra_show_title", "extra_show_artist", "extra_show_heart", "lyrics_phonetic",
     ];
 
     /// The shareable part of the settings, as the text of a file.
@@ -2068,6 +2069,32 @@ impl Settings {
     /// Takes the shareable settings out of a file's text and puts them over
     /// these. Anything not on the list stays as it is. Returns how many were
     /// taken.
+    /// Chance's own look and feel, shipped inside the program.
+    pub const CHANCE_DEFAULTS: &'static str = include_str!("../assets/chance-defaults.json");
+
+    /// Puts Chance's look and feel over these settings.
+    pub fn apply_chance_defaults(&mut self) -> Result<usize, String> {
+        self.apply_shared(Self::CHANCE_DEFAULTS)
+    }
+
+    /// Puts the plain, untouched values back for everything Chance's
+    /// defaults touch. Accounts, playlists and windows are left alone.
+    pub fn reset_look_to_vanilla(&mut self) -> Result<usize, String> {
+        let chance: serde_json::Value =
+            serde_json::from_str(Self::CHANCE_DEFAULTS).map_err(|error| error.to_string())?;
+        let plain = serde_json::to_value(Self::default()).map_err(|error| error.to_string())?;
+        let mut out = serde_json::Map::new();
+        out.insert("chanceify_settings".into(), serde_json::Value::from(1));
+        if let Some(keys) = chance.as_object() {
+            for key in keys.keys() {
+                if let Some(value) = plain.get(key) {
+                    out.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        self.apply_shared(&serde_json::Value::Object(out).to_string())
+    }
+
     pub fn apply_shared(&mut self, text: &str) -> Result<usize, String> {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         let shared: serde_json::Value =
@@ -2432,7 +2459,13 @@ impl Settings {
                 settings.proxy_password_legacy = !settings.proxy_password.is_empty();
                 settings.with_shipped_spotify_app()
             }
-            Err(_) => Self::default().with_shipped_spotify_app(),
+            Err(_) => {
+                // A first start: begin with Chance's look. The plain values
+                // are one button away in the settings.
+                let mut settings = Self::default();
+                let _ = settings.apply_chance_defaults();
+                settings.with_shipped_spotify_app()
+            }
         }
     }
 

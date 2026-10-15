@@ -11699,7 +11699,28 @@ impl App {
                 }
             }
             Action::ImportSettings => self.import_settings_file("chanceify-settings.json"),
-            Action::LoadDefaultSettings => self.import_settings_file("defaults.json"),
+            Action::LoadDefaultSettings => {
+                // A defaults.json beside the settings wins; otherwise the
+                // copy shipped inside the program.
+                if self.dirs.index_settings_dir().join("defaults.json").exists() {
+                    self.import_settings_file("defaults.json");
+                } else {
+                    match self.settings.apply_chance_defaults() {
+                        Ok(count) => {
+                            self.mark_settings_dirty();
+                            self.toast(format!("Loaded {count} of Chance's settings"));
+                        }
+                        Err(error) => self.toast_error(format!("Could not load Chance's settings: {error}")),
+                    }
+                }
+            }
+            Action::ResetSettingsToVanilla => match self.settings.reset_look_to_vanilla() {
+                Ok(count) => {
+                    self.mark_settings_dirty();
+                    self.toast(format!("Put {count} settings back to the plain defaults"));
+                }
+                Err(error) => self.toast_error(format!("Could not reset the settings: {error}")),
+            },
             Action::ToggleViewsPanel => self.views_panel = !self.views_panel,
             Action::OpenViewsPanel => self.views_panel = !self.views_panel,
             Action::RegisterLinks => match crate::link::register_links() {

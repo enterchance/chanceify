@@ -1642,6 +1642,9 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                 if theme::soft_button(ui, &palette, None, "Load chance's defaults", false).clicked() {
                     app.actions.push(Action::LoadDefaultSettings);
                 }
+                if theme::soft_button(ui, &palette, None, "Reset to plain defaults", false).clicked() {
+                    app.actions.push(Action::ResetSettingsToVanilla);
+                }
                 if theme::soft_button(ui, &palette, Some(Icon::ExternalLink), "Open index folder", false)
                     .clicked()
                 {

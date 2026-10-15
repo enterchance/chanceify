@@ -1405,6 +1405,7 @@ pub enum Action {
     ExportSettings,
     ImportSettings,
     LoadDefaultSettings,
+    ResetSettingsToVanilla,
     OpenIndexFolder,
     /// Opens or closes the floating Views and panels window.
     ToggleViewsPanel,
