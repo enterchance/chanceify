@@ -243,7 +243,7 @@
  "jump_adapt": 5.0,
  "vis_sway_beat": true,
  "vis_depth": 0,
- "vis_art_border": true,
+ "vis_art_border": false,
  "calm_look": 1,
  "disc_dim": 0.28,
  "vis_views": [
@@ -299,7 +299,7 @@
    ],
    "swirl_warp": 0.0,
    "swirl_waves": 0,
-   "vis_art_border": true,
+   "vis_art_border": false,
    "vis_back_alpha": 0.18800048530101776,
    "vis_back_block": true,
    "vis_back_pad": 35.02224349975586,
@@ -385,7 +385,7 @@
    ],
    "swirl_warp": 0.0,
    "swirl_waves": 0,
-   "vis_art_border": true,
+   "vis_art_border": false,
    "vis_back_alpha": 0.18800048530101776,
    "vis_back_block": true,
    "vis_back_pad": 35.02224349975586,
@@ -457,7 +457,7 @@
    "swirl_tune": [],
    "swirl_warp": 0.0,
    "swirl_waves": 0,
-   "vis_art_border": true,
+   "vis_art_border": false,
    "vis_back_alpha": 0.3630004823207855,
    "vis_back_block": true,
    "vis_back_pad": 35.02224349975586,
@@ -544,7 +544,7 @@
   ],
   "swirl_warp": 0.0,
   "swirl_waves": 0,
-  "vis_art_border": true,
+  "vis_art_border": false,
   "vis_back_alpha": 0.18800048530101776,
   "vis_back_block": true,
   "vis_back_pad": 35.02224349975586,
@@ -582,6 +582,5 @@
  "vis_reverse_swirl": false,
  "extra_show_title": true,
  "extra_show_artist": true,
- "extra_show_heart": true,
- "lyrics_phonetic": true
+ "extra_show_heart": true
 }

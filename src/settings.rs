@@ -673,7 +673,7 @@ impl Settings {
 
     /// The settings each view keeps for itself (see `vis_views`).
     fn is_view_key(key: &str) -> bool {
-        (Self::is_vis_key(key) && !matches!(key, "vis_panel_w" | "vis_panel_h" | "vis_live_preview"))
+        (Self::is_vis_key(key) && !matches!(key, "vis_panel_w" | "vis_panel_h" | "vis_panel_stacked" | "vis_live_preview"))
             || matches!(
                 key,
                 "jump_shake" | "jump_sens" | "jump_gap" | "jump_floor" | "jump_adapt" | "sway_sens" | "lyrics_flags"
@@ -1119,6 +1119,14 @@ pub struct Settings {
     /// Size of the visualizer settings panel (0 = fit the content).
     pub vis_panel_w: f32,
     pub vis_panel_h: f32,
+    /// The visualizer's settings in one column, up and down (off: two
+    /// columns side by side).
+    pub vis_panel_stacked: bool,
+    /// The playlist and album pages' cover background: shown, how dark and how
+    /// blurred (0 to 1).
+    pub page_backdrop: bool,
+    pub page_backdrop_dark: f32,
+    pub page_backdrop_blur: f32,
     /// The mini player window: x, y, width, height.
     pub mini_window: Option<[f32; 4]>,
     /// The extra visualizer window: x, y, width, height.
@@ -1284,8 +1292,6 @@ pub struct Settings {
     pub mini_lyrics: bool,
     /// Save the covers and artist pictures Last.fm lacks as songs play.
     pub lastfm_art_auto: bool,
-    /// Lyrics also show a Latin-letter respelling under each line.
-    pub lyrics_phonetic: bool,
     /// Show the volume bar in the mini player.
     pub mini_volume: bool,
     /// Whether the mini player stays on top of other windows.
@@ -1556,7 +1562,7 @@ impl Default for Settings {
             vis_font_random: false,
             vis_text_font: 0,
             vis_text_no_artist: false,
-            vis_art_border: true,
+            vis_art_border: false,
             extra_show_title: true,
             extra_show_artist: true,
             extra_show_heart: true,
@@ -1583,6 +1589,10 @@ impl Default for Settings {
             float_window: None,
             vis_panel_w: 0.0,
             vis_panel_h: 0.0,
+            vis_panel_stacked: false,
+            page_backdrop: true,
+            page_backdrop_dark: 0.6,
+            page_backdrop_blur: 0.0,
             mini_window: None,
             extra_window: None,
             mini_restore_size: None,
@@ -1656,7 +1666,6 @@ impl Default for Settings {
             mini_queue: true,
             mini_lyrics: false,
             lastfm_art_auto: true,
-            lyrics_phonetic: false,
             mini_volume: true,
             mini_on_top: false,
             main_on_top: false,
@@ -2052,7 +2061,7 @@ impl Settings {
         "track_columns", "tracklist_compact", "vis", "vis_bar_sides", "vis_flow_sides", "vis_shapes",
         "vis_shapes_last", "vis_shapes_set", "volume_presets", "zoom",
         "volume_custom_width", "vis_no_gradient", "vis_lyrics", "vis_text_still", "vis_sway", "vis_sway_amount", "vis_sway_react", "sway_sens", "vis_text_no_outline", "vis_text_back", "vis_back_alpha", "vis_back_round", "vis_back_pad", "vis_back_block", "vis_live_preview", "vis_font_random", "vis_text_font", "vis_text_no_artist", "vis_lyrics_no_back", "vis_bars_stay", "lyrics_vis", "lyrics_vis_dark", "lyrics_vis_mode", "window_opacity", "anchor_controls", "anchor_volume", "bar_stacked", "bar_layout", "bar_free", "lyrics_ctl_off", "vis_bars_opacity", "vis_flow_opacity", "swirl_react_mode", "vis_jump_react", "vis_jump_on", "float_idle",
-        "jump_sens", "jump_gap", "jump_floor", "jump_adapt", "vis_sway_beat", "vis_depth", "vis_art_border", "calm_look", "disc_dim", "vis_views", "vis_view_mini", "vis_reverse_flow", "vis_reverse_swirl", "extra_show_title", "extra_show_artist", "extra_show_heart", "lyrics_phonetic",
+        "jump_sens", "jump_gap", "jump_floor", "jump_adapt", "vis_sway_beat", "vis_depth", "vis_art_border", "calm_look", "disc_dim", "vis_views", "vis_view_mini", "vis_reverse_flow", "vis_reverse_swirl", "extra_show_title", "extra_show_artist", "extra_show_heart",
     ];
 
     /// The shareable part of the settings, as the text of a file.

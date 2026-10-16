@@ -214,13 +214,6 @@ pub(super) fn contents(app: &mut App, ui: &mut egui::Ui) {
                 } else {
                     line.text.as_str()
                 };
-                let phonetic_text = app
-                    .settings
-                    .lyrics_phonetic
-                    .then(|| crate::phonetic::respell(text))
-                    .flatten()
-                    .map(|romanized| format!("{text}\n{romanized}"));
-                let text = phonetic_text.as_deref().unwrap_or(text);
                 let sense = if lyrics.synced {
                     Sense::click()
                 } else {
@@ -367,10 +360,6 @@ fn lyrics_menu(app: &mut App, page: &egui::Response, side: bool) {
                     app.actions
                         .push(Action::ToggleSideLyricsFlag(Settings::LYRICS_HIDE_STAMPS));
                 }
-                if widgets::menu_item(ui, &palette, tick(app.settings.lyrics_phonetic), "Phonetic lyrics") {
-                    app.settings.lyrics_phonetic = !app.settings.lyrics_phonetic;
-                    app.mark_settings_dirty();
-                }
                 widgets::menu_separator(ui, &palette);
                 for (value, label) in [(1u8, "Smaller lines"), (0, "Normal lines"), (2, "Larger lines")] {
                     let on = app.settings.side_lyrics_size == value;
@@ -393,10 +382,6 @@ fn lyrics_menu(app: &mut App, page: &egui::Response, side: bool) {
                 if widgets::menu_item(ui, &palette, tick(on), &gettext(app.locale, label)) {
                     app.actions.push(Action::ToggleLyricsFlag(bit));
                 }
-            }
-            if widgets::menu_item(ui, &palette, tick(app.settings.lyrics_phonetic), "Phonetic lyrics") {
-                app.settings.lyrics_phonetic = !app.settings.lyrics_phonetic;
-                app.mark_settings_dirty();
             }
             widgets::menu_separator(ui, &palette);
             if widgets::menu_item(
@@ -1065,13 +1050,6 @@ fn fullscreen_contents(app: &mut App, ui: &mut egui::Ui) {
                 } else {
                     line.text.as_str()
                 };
-                let phonetic_text = app
-                    .settings
-                    .lyrics_phonetic
-                    .then(|| crate::phonetic::respell(text))
-                    .flatten()
-                    .map(|romanized| format!("{text}\n{romanized}"));
-                let text = phonetic_text.as_deref().unwrap_or(text);
                 let sense = if lyrics.synced {
                     Sense::click()
                 } else {

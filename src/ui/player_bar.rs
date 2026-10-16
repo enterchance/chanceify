@@ -1201,7 +1201,7 @@ pub(crate) fn vis_gradient_ctx(
             app.settings.player_bar_vis_color,
             crate::settings::VisColor::AlbumArt
         ) {
-        swirl_wash(app, ctx.input(|input| input.time)).map_or(base, |(first, _)| first)
+        swirl_wash_raw(app, ctx.input(|input| input.time)).map_or(base, |(first, _)| first)
     } else {
         base
     };
@@ -1218,7 +1218,7 @@ pub(crate) fn vis_gradient_ctx(
         let second = if matches!(mode, PlayerBarVis::Flow | PlayerBarVis::Spectrum)
             && !app.settings.swirl_colours_fixed
         {
-            swirl_wash(app, time).map(|(_, second)| second)
+            swirl_wash_raw(app, time).map(|(_, second)| second)
         } else {
             None
         }
@@ -1859,6 +1859,17 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             ui.spacing_mut().item_spacing.y = 3.0;
             // Three independent switches: any mix, or none (which closes
             // the visualizer down to the song-length bar).
+            // Two columns, or everything in one row that scrolls sideways.
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                for (label, stacked) in [("2 columns", false), ("In a row", true)] {
+                    if chip(ui, &palette, &gettext(app.locale, label), app.settings.vis_panel_stacked == stacked, 110.0).clicked() {
+                        app.settings.vis_panel_stacked = stacked;
+                        app.mark_settings_dirty();
+                    }
+                }
+            });
+            ui.add_space(4.0);
             let shapes = app.settings.vis_shapes_value();
             // Three columns side by side when the window is wide enough for
             // them, one under another when it is not, so the panel never
@@ -1866,14 +1877,18 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             let screen_w = ui.ctx().content_rect().width();
             // Two columns from a modest width when the swirl's column is
             // not open, so the panel is shorter and fits one screen.
-            let columns_fit = true;
+            let columns_fit = !app.settings.vis_panel_stacked;
             let col_w = vis_col_w(screen_w);
             // One page, top to bottom, with a bar between the parts: the
             // visualizer, bass and colour, then (in the full screen views) the
             // title and the lyrics, and the equalizer at the very end.
             // `tab` is the part being drawn right now.
             let view = app.vis_view_now.unwrap_or(0);
-            let last_tab: u8 = if matches!(view, 0 | 3) { 1 } else { 3 };
+            let last_tab: u8 = match view {
+                3 => 1,
+                0 => 2,
+                _ => 3,
+            };
             let tab = std::cell::Cell::new(0u8);
             let mut columns = |app: &mut App, ui: &mut egui::Ui, which: u8| {
             ui.spacing_mut().item_spacing.x = 18.0;
@@ -2110,6 +2125,29 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                     (9.0 / app.settings.swirl_drift_secs()) as f32,
                     |value| app.actions.push(Action::SetSwirlDrift(value)),
                 );
+                // One-click speed, music boost and colour drift together.
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    let speed_now = app.settings.swirl_tune_value(8);
+                    let boost_now = app.settings.swirl_tune_value(9);
+                    let drift_now = (9.0 / app.settings.swirl_drift_secs()) as f32;
+                    let width = ((col_w - 12.0) / 4.0).max(40.0);
+                    for (label, speed, boost, drift) in [
+                        ("Slow", 30.0f32, 30.0f32, 0.6f32),
+                        ("Calm", 60.0, 60.0, 1.2),
+                        ("Lively", 130.0, 140.0, 2.6),
+                        ("Fast", 220.0, 220.0, 4.0),
+                    ] {
+                        let active = (speed_now - speed).abs() < 1.0
+                            && (boost_now - boost).abs() < 1.0
+                            && (drift_now - drift).abs() < 0.05;
+                        if chip(ui, &palette, &gettext(app.locale, label), active, width).clicked() {
+                            app.actions.push(Action::SetSwirlTune(8, speed));
+                            app.actions.push(Action::SetSwirlTune(9, boost));
+                            app.actions.push(Action::SetSwirlDrift(drift));
+                        }
+                    }
+                });
                 if art_scroll {
                     slider_row(
                         ui,
@@ -2191,8 +2229,6 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             // beside the bass jump, so the panel is a third narrower.
             if columns_fit {
                 ui.horizontal_top(|ui| columns(&mut *app, ui, 0));
-            } else {
-                ui.vertical(|ui| columns(&mut *app, ui, 0));
             }
             // The settings every shape shares, then the title, then the lyrics.
             let mut shared = |app: &mut App, ui: &mut egui::Ui| {
@@ -2494,36 +2530,6 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                     |value| app.actions.push(Action::SetVisSwayAmount(value / 100.0)),
                 );
             }
-            if chip_i(
-                ui,
-                &palette,
-                "Title outline",
-                !app.settings.vis_text_no_outline,
-                ui.available_width().min(290.0),
-            )
-            .clicked()
-            {
-                app.actions.push(Action::ToggleVisTextOutline);
-            }
-            if chip_i(
-                ui,
-                &palette,
-                "Panel behind the title",
-                app.settings.vis_text_back,
-                ui.available_width().min(290.0),
-            )
-            .clicked()
-            {
-                app.actions.push(Action::ToggleVisTextBack);
-            }
-            if app.settings.vis_text_back {
-                slider_row(ui, &palette, "Panel solidity", 10.0..=100.0, app.settings.vis_back_alpha * 100.0,
-                    |value| app.actions.push(Action::SetVisBack(0, value / 100.0)));
-                slider_row(ui, &palette, "Panel roundness", 0.0..=30.0, app.settings.vis_back_round,
-                    |value| app.actions.push(Action::SetVisBack(1, value)));
-                slider_row(ui, &palette, "Room round the words", 0.0..=40.0, app.settings.vis_back_pad,
-                    |value| app.actions.push(Action::SetVisBack(2, value)));
-            }
             }); ui.vertical(|ui| {
             ui.set_width(VIS_SINGLE_W);
             if chip_i(
@@ -2635,17 +2641,36 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             }
             }); }); }
             };
-            for part in 1..=last_tab {
-                super::widgets::menu_separator(ui, &palette);
-                tab.set(part);
-                if part == 1 {
-                    ui.horizontal_top(|ui| {
-                        columns(&mut *app, ui, 1);
-                        shared(&mut *app, ui);
-                    });
-                } else {
-                    ui.horizontal_top(|ui| shared(&mut *app, ui));
+            if columns_fit {
+                for part in 1..=last_tab {
+                    super::widgets::menu_separator(ui, &palette);
+                    tab.set(part);
+                    if part == 1 {
+                        ui.horizontal_top(|ui| {
+                            columns(&mut *app, ui, 1);
+                            shared(&mut *app, ui);
+                        });
+                    } else {
+                        ui.horizontal_top(|ui| shared(&mut *app, ui));
+                    }
                 }
+            } else {
+                // Every part in one row, with a bar to scroll sideways.
+                egui::ScrollArea::horizontal()
+                    .id_salt("vis-panel-row")
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.horizontal_top(|ui| {
+                            columns(&mut *app, ui, 0);
+                            for part in 1..=last_tab {
+                                tab.set(part);
+                                if part == 1 {
+                                    columns(&mut *app, ui, 1);
+                                }
+                                shared(&mut *app, ui);
+                            }
+                        });
+                    });
             }
             super::widgets::menu_separator(ui, &palette);
             theme::subtle(ui, &palette, &gettext(app.locale, "EQUALIZER"));
@@ -3334,6 +3359,14 @@ fn numbered_rows(
 }
 
 /// A fixed-width selectable chip.
+/// A small dot at the top right of a button that is switched on, so its state
+/// reads even when the accent colour matches what is around it.
+fn on_dot(ui: &egui::Ui, rect: egui::Rect, palette: &crate::theme::Palette) {
+    let at = rect.right_top() + egui::vec2(-3.0, 3.0);
+    ui.painter().circle_filled(at, 3.4, palette.window);
+    ui.painter().circle_filled(at, 2.4, palette.text);
+}
+
 fn chip(
     ui: &mut egui::Ui,
     palette: &crate::theme::Palette,
@@ -5653,6 +5686,9 @@ fn transport_impl(
             gettext(app.locale, "Shuffle"),
         )
     });
+    if shuffle {
+        on_dot(ui, shuffle_button.rect, &palette);
+    }
     if shuffle_button.clicked() {
         app.actions.push(Action::ToggleShuffle);
     }
@@ -5671,7 +5707,7 @@ fn transport_impl(
         ),
     };
     let mut cell = centered(ui, slot(widths[4]));
-    if theme::icon_button(
+    let repeat_button = theme::icon_button(
         &mut cell,
         repeat_icon,
         17.0 * kc,
@@ -5682,9 +5718,11 @@ fn transport_impl(
             palette.accent_hover
         },
         &tooltip,
-    )
-    .clicked()
-    {
+    );
+    if repeat != RepeatMode::Off {
+        on_dot(ui, repeat_button.rect, &palette);
+    }
+    if repeat_button.clicked() {
         app.actions.push(Action::CycleRepeat);
     }
 

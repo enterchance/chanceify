@@ -69,15 +69,42 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
         .thumbnail
         .and_then(|uri| app.softened_covers.texture(ui.ctx(), &art, uri));
     let backdrop_slot = ui.painter().add(egui::Shape::Noop);
-    let sharp = [hero.images.image, hero.images.previous]
-        .into_iter()
-        .flatten()
-        .find_map(|url| widgets::ready_cover_texture(ui, url, app.backend.art()));
-    let source = sharp.or_else(|| {
+    let backdrop_on = app.settings.page_backdrop;
+    let fresh_sharp = if backdrop_on {
+        [hero.images.image, hero.images.previous]
+            .into_iter()
+            .flatten()
+            .find_map(|url| widgets::ready_cover_texture(ui, url, app.backend.art()))
+    } else {
+        None
+    };
+    let fresh_soft = if backdrop_on {
         softened
             .as_ref()
             .map(egui::load::SizedTexture::from_handle)
-    });
+    } else {
+        None
+    };
+    // Each picture, once shown for this page, is held until its replacement is
+    // ready: while a cover is briefly not ready (scrolling a long list, art
+    // being refreshed) the background must not blink or swap between the
+    // sharp and the soft one.
+    let held = |slot: &str, fresh: Option<egui::load::SizedTexture>, ui: &egui::Ui| {
+        let id = egui::Id::new(("page-backdrop-held", slot, hero.title));
+        match fresh {
+            Some(texture) => {
+                ui.data_mut(|data| data.insert_temp(id, (texture.id, texture.size)));
+                Some(texture)
+            }
+            None if backdrop_on => ui
+                .data(|data| data.get_temp::<(egui::TextureId, Vec2)>(id))
+                .map(|(id, size)| egui::load::SizedTexture { id, size }),
+            None => None,
+        }
+    };
+    let sharp = held("sharp", fresh_sharp, ui);
+    let soft = held("soft", fresh_soft, ui);
+    let source = sharp.or(soft);
     let (text_main, text_soft) = if source.is_some() {
         (egui::Color32::WHITE, egui::Color32::from_white_alpha(200))
     } else {
@@ -202,7 +229,7 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
     // The cover across the whole visible page, cropped square (so a tall or
     // wide upload still looks right), darkened so the page's own elements
     // stay readable, and held still while the list scrolls past.
-    if let Some(texture) = source {
+    if source.is_some() {
         let area = ui.clip_rect();
         if area.width() > 1.0 && area.height() > 1.0 {
             let side = area.width().max(area.height());
@@ -210,56 +237,74 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
                 pos2(area.center().x - side / 2.0, area.top()),
                 Vec2::splat(side),
             );
-            let aspect = texture.size.x / texture.size.y;
-            let uv = if aspect > 1.0 {
-                let inset = (1.0 - 1.0 / aspect) / 2.0;
-                Rect::from_min_max(pos2(inset, 0.0), pos2(1.0 - inset, 1.0))
-            } else {
-                let inset = (1.0 - aspect) / 2.0;
-                Rect::from_min_max(pos2(0.0, inset), pos2(1.0, 1.0 - inset))
-            };
+            let darkness = app.settings.page_backdrop_dark.clamp(0.0, 1.0);
+            let top_gray = (255.0 * (1.0 - darkness)).round() as u8;
             let (top, bottom) = if palette.dark {
                 (
-                    egui::Color32::from_gray(105),
-                    egui::Color32::from_gray(48),
+                    egui::Color32::from_gray(top_gray),
+                    egui::Color32::from_gray((f32::from(top_gray) * 0.45).round() as u8),
                 )
             } else {
-                (egui::Color32::from_gray(110), palette.panel)
+                (egui::Color32::from_gray(top_gray), palette.panel)
             };
             // Light themes fade back to the page colour by mid-window so dark
             // list text stays readable.
             let fade_to = if palette.dark { 1.0 } else { 0.55 };
-            let mid = Rect::from_min_max(
-                square.left_top(),
-                pos2(square.right(), area.top() + area.height() * fade_to),
-            );
-            let mut mesh = egui::Mesh::with_texture(texture.id);
-            let v = |pos: egui::Pos2, uv: egui::Pos2, color: egui::Color32| {
-                egui::epaint::Vertex { pos, uv, color }
-            };
-            let uv_at = |y: f32| {
-                let t = ((y - square.top()) / side).clamp(0.0, 1.0);
-                uv.min.y + (uv.max.y - uv.min.y) * t
-            };
-            let mid_y = mid.bottom();
+            let mid_y = area.top() + area.height() * fade_to;
             let end_y = square.bottom();
-            let mid_uv = uv_at(mid_y);
-            mesh.vertices.push(v(square.left_top(), uv.left_top(), top));
-            mesh.vertices.push(v(square.right_top(), uv.right_top(), top));
-            mesh.vertices
-                .push(v(pos2(square.right(), mid_y), pos2(uv.max.x, mid_uv), bottom));
-            mesh.vertices
-                .push(v(pos2(square.left(), mid_y), pos2(uv.min.x, mid_uv), bottom));
-            mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
-            if end_y > mid_y + 0.5 {
+            let make = |texture: egui::load::SizedTexture, alpha: f32| {
+                let aspect = texture.size.x / texture.size.y;
+                let uv = if aspect > 1.0 {
+                    let inset = (1.0 - 1.0 / aspect) / 2.0;
+                    Rect::from_min_max(pos2(inset, 0.0), pos2(1.0 - inset, 1.0))
+                } else {
+                    let inset = (1.0 - aspect) / 2.0;
+                    Rect::from_min_max(pos2(0.0, inset), pos2(1.0, 1.0 - inset))
+                };
+                let uv_at = |y: f32| {
+                    let t = ((y - square.top()) / side).clamp(0.0, 1.0);
+                    uv.min.y + (uv.max.y - uv.min.y) * t
+                };
+                let (top, bottom) = (top.gamma_multiply(alpha), bottom.gamma_multiply(alpha));
+                let mid_uv = uv_at(mid_y);
+                let v = |pos: egui::Pos2, uv: egui::Pos2, color: egui::Color32| {
+                    egui::epaint::Vertex { pos, uv, color }
+                };
+                let mut mesh = egui::Mesh::with_texture(texture.id);
+                mesh.vertices.push(v(square.left_top(), uv.left_top(), top));
+                mesh.vertices.push(v(square.right_top(), uv.right_top(), top));
                 mesh.vertices
-                    .push(v(pos2(square.right(), end_y), uv.right_bottom(), bottom));
+                    .push(v(pos2(square.right(), mid_y), pos2(uv.max.x, mid_uv), bottom));
                 mesh.vertices
-                    .push(v(pos2(square.left(), end_y), uv.left_bottom(), bottom));
-                mesh.indices.extend_from_slice(&[3, 2, 4, 3, 4, 5]);
+                    .push(v(pos2(square.left(), mid_y), pos2(uv.min.x, mid_uv), bottom));
+                mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+                if end_y > mid_y + 0.5 {
+                    mesh.vertices
+                        .push(v(pos2(square.right(), end_y), uv.right_bottom(), bottom));
+                    mesh.vertices
+                        .push(v(pos2(square.left(), end_y), uv.left_bottom(), bottom));
+                    mesh.indices.extend_from_slice(&[3, 2, 4, 3, 4, 5]);
+                }
+                egui::Shape::mesh(mesh)
+            };
+            // Blur: the softened cover underneath, the sharp one over it, fading
+            // out as the blur goes up.
+            let blur = app.settings.page_backdrop_blur.clamp(0.0, 1.0);
+            let mut layers = Vec::new();
+            match (soft, sharp) {
+                (Some(soft), Some(sharp)) => {
+                    if blur > 0.01 {
+                        layers.push(make(soft, 1.0));
+                    }
+                    if blur < 0.99 {
+                        layers.push(make(sharp, if blur > 0.01 { 1.0 - blur } else { 1.0 }));
+                    }
+                }
+                (Some(only), None) | (None, Some(only)) => layers.push(make(only, 1.0)),
+                (None, None) => {}
             }
             let clipped = ui.painter().with_clip_rect(area);
-            clipped.set(backdrop_slot, egui::Shape::mesh(mesh));
+            clipped.set(backdrop_slot, egui::Shape::Vec(layers));
         }
     }
 }
@@ -432,9 +477,37 @@ pub fn actions_row(
                     &gettext(locale, "Columns"),
                 );
                 let mut columns = app.settings.track_columns;
+                let mut backdrop = (
+                    app.settings.page_backdrop,
+                    app.settings.page_backdrop_dark,
+                    app.settings.page_backdrop_blur,
+                );
                 egui::Popup::menu(&gear)
                     .frame(widgets::menu_frame(&palette))
-                    .show(|ui| widgets::columns_menu(ui, &palette, locale, &mut columns));
+                    .show(|ui| {
+                        widgets::columns_menu(ui, &palette, locale, &mut columns);
+                        widgets::menu_separator(ui, &palette);
+                        widgets::switch_labeled(ui, &palette, "cover background", &mut backdrop.0);
+                        if backdrop.0 {
+                            ui.add_space(4.0);
+                            theme::subtle(ui, &palette, "darkness");
+                            ui.add(egui::Slider::new(&mut backdrop.1, 0.0..=1.0).show_value(false));
+                            theme::subtle(ui, &palette, "blur");
+                            ui.add(egui::Slider::new(&mut backdrop.2, 0.0..=1.0).show_value(false));
+                        }
+                    });
+                if backdrop
+                    != (
+                        app.settings.page_backdrop,
+                        app.settings.page_backdrop_dark,
+                        app.settings.page_backdrop_blur,
+                    )
+                {
+                    app.settings.page_backdrop = backdrop.0;
+                    app.settings.page_backdrop_dark = backdrop.1;
+                    app.settings.page_backdrop_blur = backdrop.2;
+                    app.mark_settings_dirty();
+                }
                 if columns != app.settings.track_columns {
                     app.settings.track_columns = columns;
                     app.actions.push(Action::SettingsChanged);

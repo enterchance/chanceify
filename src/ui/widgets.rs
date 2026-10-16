@@ -1274,11 +1274,19 @@ pub(crate) fn playlist_picker(
     highlighted = highlighted.filter(|index| *index < matches.len());
     ui.data_mut(|data| data.insert_temp(highlight_id, (frame, highlighted, query.clone())));
     if enter && let Some((id, name)) = highlighted.and_then(|index| matches.get(index)) {
-        app.actions.push(Action::AddToPlaylist {
-            playlist_id: id.clone(),
-            playlist_name: name.clone(),
-            items: items.to_vec(),
-        });
+        if app.playlist_has_all(id, items) {
+            // Already there: choosing it again takes the song out.
+            app.actions.push(Action::RemoveFromPlaylist {
+                playlist_id: id.clone(),
+                uris: items.iter().map(|item| item.uri().to_string()).collect(),
+            });
+        } else {
+            app.actions.push(Action::AddToPlaylist {
+                playlist_id: id.clone(),
+                playlist_name: name.clone(),
+                items: items.to_vec(),
+            });
+        }
         ui.close();
     }
     if matches.is_empty() {
@@ -1314,11 +1322,20 @@ pub(crate) fn playlist_picker(
                         row.scroll_to_me(None);
                     }
                     if clicked {
-                        app.actions.push(Action::AddToPlaylist {
-                            playlist_id: id.clone(),
-                            playlist_name: name.clone(),
-                            items: items.to_vec(),
-                        });
+                        if present {
+                            // The check mark is showing: clicking it again
+                            // removes the song from that playlist.
+                            app.actions.push(Action::RemoveFromPlaylist {
+                                playlist_id: id.clone(),
+                                uris: items.iter().map(|item| item.uri().to_string()).collect(),
+                            });
+                        } else {
+                            app.actions.push(Action::AddToPlaylist {
+                                playlist_id: id.clone(),
+                                playlist_name: name.clone(),
+                                items: items.to_vec(),
+                            });
+                        }
                     }
                 });
             }
@@ -1391,6 +1408,14 @@ pub fn item_menu(
         ui.set_max_width(widest);
     }
     let uri = item.uri().to_string();
+    // A song from a file that is also on Spotify: its links and pages are
+    // the Spotify song's.
+    let matched = if crate::file_deck::is_file_uri(item.uri()) {
+        app.deck_spotify_match(item.uri()).map(PlayableItem::Track)
+    } else {
+        None
+    };
+    let shown = matched.as_ref().unwrap_or(item);
     let label = item.name().to_string();
     if menu_item(
         ui,
@@ -1500,7 +1525,7 @@ pub fn item_menu(
         }
     }
     menu_separator(ui, &palette);
-    match item {
+    match shown {
         PlayableItem::Track(track) => {
             if menu_item(
                 ui,
@@ -1583,10 +1608,10 @@ pub fn item_menu(
         Some(Icon::ExternalLink),
         &gettext(locale, "Open in Spotify"),
     ) {
-        app.actions.push(Action::OpenInSpotify(uri));
+        app.actions.push(Action::OpenInSpotify(shown.uri().to_string()));
     }
     // The very bottom: the same song on Last.fm.
-    if let PlayableItem::Track(track) = item {
+    if let PlayableItem::Track(track) = shown {
         let artist = track.artists.first().map(|artist| artist.name.clone()).unwrap_or_default();
         if !artist.is_empty()
             && menu_item(
@@ -1605,7 +1630,7 @@ pub fn item_menu(
         // The very bottom: chanceify's own page for the song, and the same
         // link as a named one for pasting in Discord.
         let artist = track.artists.first().map(|artist| artist.name.clone()).unwrap_or_default();
-        if let Some(url) = crate::discord::song_link(item.uri(), &track.name, &artist) {
+        if let Some(url) = crate::discord::song_link(shown.uri(), &track.name, &artist) {
             if menu_item(
                 ui,
                 &palette,
@@ -1616,7 +1641,7 @@ pub fn item_menu(
             }
             if menu_item(ui, &palette, Some(Icon::Copy), "copy for Discord") {
                 app.actions.push(Action::CopyForDiscord {
-                    uri: item.uri().to_string(),
+                    uri: shown.uri().to_string(),
                     title: track.name.clone(),
                     artist,
                 });
@@ -1650,28 +1675,28 @@ pub fn context_menu_items(
             ui,
             &palette,
             Some(Icon::Shuffle),
-            &gettext(locale, "Shuffle play"),
+            "shuffle",
         )
     {
         app.actions.push(Action::ShufflePlay(uri.to_string()));
     }
     if kind == "playlist"
-        && menu_item(ui, &palette, Some(Icon::Shuffle), "Smart shuffle (by tempo)")
+        && menu_item(ui, &palette, Some(Icon::Shuffle), "shuffle bpm")
     {
         app.actions.push(Action::SmartShufflePlay(uri.to_string()));
     }
     if (kind == "playlist" || uri.ends_with(":collection"))
-        && menu_item(ui, &palette, Some(Icon::Shuffle), "Shuffle: songs I haven't heard lately")
+        && menu_item(ui, &palette, Some(Icon::Shuffle), "shuffle unheard")
     {
         app.actions.push(Action::FreshShufflePlay(uri.to_string()));
     }
     if kind == "playlist"
-        && menu_item(ui, &palette, Some(Icon::ListMusic), "Save list to index (offline)")
+        && menu_item(ui, &palette, Some(Icon::ListMusic), "save to index")
     {
         app.actions.push(Action::SavePlaylistToIndex(uri.to_string()));
     }
     if kind == "playlist"
-        && menu_item(ui, &palette, Some(Icon::Disc), "New releases from these artists")
+        && menu_item(ui, &palette, Some(Icon::Disc), "new releases")
         && let Some(id) = uri.rsplit(':').next()
     {
         app.actions.push(Action::CheckNewReleases(Some(id.to_string())));
@@ -2867,18 +2892,27 @@ fn track_row_contents(
                 pos2(x, rect.top()),
                 pos2(x + cols.album - 12.0, rect.bottom()),
             );
-            let mut child = ui.new_child(
-                UiBuilder::new()
-                    .max_rect(album_rect)
-                    .layout(Layout::left_to_right(Align::Center)),
+            // The album name wraps onto a second line before it is cut off
+            // with an ellipsis, so a narrow column still says something.
+            let width = (cols.album - 12.0).max(10.0);
+            let galley = ellipsized(ui, &album.name, theme::regular(13.0), subtitle_color, width, 2);
+            let size = galley.size();
+            let text_rect = Rect::from_min_size(
+                pos2(x, rect.center().y - size.y / 2.0),
+                size,
             );
-            child.set_clip_rect(album_rect.intersect(ui.clip_rect()));
-            let response = theme::link(
-                &mut child,
-                album.name.clone(),
-                theme::regular(13.0),
-                subtitle_color,
+            let response = ui.interact(
+                text_rect.intersect(album_rect),
+                ui.id().with(("album-link", row.item.uri())),
+                Sense::click(),
             );
+            if response.hovered() && !album.id.is_empty() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            let colour = if response.hovered() { palette.text } else { subtitle_color };
+            ui.painter()
+                .with_clip_rect(album_rect.intersect(ui.clip_rect()))
+                .galley(text_rect.min, galley, colour);
             if response.clicked() && !album.id.is_empty() {
                 app.actions
                     .push(Action::Open(Page::Album(album.id.clone())));
