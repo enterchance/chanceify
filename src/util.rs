@@ -630,4 +630,3 @@ pub fn memory_used_mb() -> Option<u64> {
         None
     }
 }
-pub fn ci_probe() -> u8 { "not a number" }

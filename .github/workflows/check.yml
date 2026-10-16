@@ -46,7 +46,7 @@ jobs:
           cargo check --profile fast --features lights-feed 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath check.log
           if ($LASTEXITCODE -ne 0) {
             $lines = Get-Content check.log
-            $hits = $lines | Select-String -Pattern '^(error|warning: unused)' -Context 0,12 | ForEach-Object { $_.Context.PreContext + $_.Line + $_.Context.PostContext }
+            $hits = $lines | Select-String -Pattern '^error' -Context 0,12 | ForEach-Object { $_.Context.PreContext + $_.Line + $_.Context.PostContext }
             if (-not $hits) { $hits = $lines | Select-Object -Last 60 }
             $msg = (($hits | Select-Object -First 150) -join "`n").Replace('%','%25').Replace("`r",'').Replace("`n",'%0A')
             Write-Output "::error title=build failed::$msg"
