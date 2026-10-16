@@ -879,7 +879,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         .default_size(app.settings.sidebar_width)
         .size_range(fit.range.clone())
         .show_separator_line(false)
-        .frame(Frame::new().fill(palette.panel).inner_margin(Margin {
+        .frame(Frame::new().fill(if super::player_bar::swirl_behind_panels(app) { palette.panel.gamma_multiply(0.45) } else { palette.panel }).inner_margin(Margin {
             left: 12,
             right: 8,
             top,
@@ -1388,7 +1388,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, grid_art: Option<Rect>) {
             .width(250.0)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
-                ui.set_max_width(290.0);
+                super::widgets::fit_menu(ui, 290.0);
                 let _ = (filter, sort);
                 library_menu_body(app, ui, filter, sort);
             });
@@ -2583,8 +2583,7 @@ fn entry_menu(app: &mut App, response: &egui::Response, entry: &Entry, custom_or
             .show(|ui| {
                 // The same width as every other menu; without it the menu
                 // stretches as wide as the window.
-                ui.set_min_width(200.0);
-                ui.set_max_width(300.0);
+                super::widgets::fit_menu(ui, 300.0);
                 if super::widgets::menu_item(
                     ui,
                     &app.palette,

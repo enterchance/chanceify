@@ -2,7 +2,7 @@
 //! tempo, key and waveform measured from the sound, and playlists imported
 //! from Exportify files that can be browsed with no internet.
 
-use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, pos2, vec2};
+use egui::{Align2, CornerRadius, Rect, Sense, Stroke, pos2, vec2};
 
 use crate::app::App;
 use crate::model::Action;
@@ -10,9 +10,10 @@ use crate::theme::{self, Icon};
 
 const ROW: f32 = 34.0;
 
-/// One line of whichever table is open, already turned into text.
+/// One line of whichever table is open, already turned into text, one
+/// cell per column id (see [`COLUMNS`]).
 struct Line {
-    cells: [String; 10],
+    cells: [String; 9],
     /// For the sort: the number behind the BPM column, if any.
     bpm: Option<f32>,
     length_ms: u64,
@@ -22,13 +23,42 @@ struct Line {
     path: Option<String>,
     /// The Spotify song this file is, once it has been matched.
     spotify: Option<String>,
-    /// Whether that song is in the account's Liked Songs.
-    liked: bool,
 }
 
-const HEADINGS: [&str; 10] =
-    ["#", "TITLE", "ARTIST", "PLAYLIST", "ALBUM", "ADDED", "RELEASED", "BPM", "LENGTH", "LIKED"];
-const SHARES: [f32; 10] = [0.04, 0.20, 0.15, 0.13, 0.14, 0.08, 0.07, 0.05, 0.06, 0.05];
+/// Every column the table can show, by id: its heading and its share of the
+/// width when first shown.
+const COLUMNS: [(&str, f32); 9] = [
+    ("#", 0.05),
+    ("TITLE", 0.30),
+    ("ARTIST", 0.20),
+    ("ALBUM", 0.18),
+    ("ADDED", 0.09),
+    ("BPM", 0.06),
+    ("KEY", 0.06),
+    ("LENGTH", 0.07),
+    ("GENRE", 0.10),
+];
+
+/// The columns shown, in order, with their shares; a saved list with
+/// nothing usable in it falls back to the usual set.
+fn shown_columns(app: &App) -> Vec<(u8, f32)> {
+    let mut seen = [false; COLUMNS.len()];
+    let cols: Vec<(u8, f32)> = app
+        .settings
+        .local_columns
+        .iter()
+        .filter(|(id, _)| {
+            let id = *id as usize;
+            id < COLUMNS.len() && !std::mem::replace(&mut seen[id], true)
+        })
+        .map(|(id, share)| (*id, share.clamp(0.02, 0.8)))
+        .collect();
+    if cols.iter().any(|(id, _)| *id == 1) {
+        cols
+    } else {
+        crate::settings::Settings::default().local_columns
+    }
+}
 
 /// A day count since 1970 as `YYYY-MM-DD` (no time zone: the day the file
 /// was last written, which is when it was added to the folder).
@@ -190,29 +220,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let mut lines: Vec<Line> = Vec::new();
     match app.local_ui.open_playlist.and_then(|i| app.offline_playlists.get(i)) {
         None => {
-            // Files that are songs Spotify no longer lets you play say which
-            // playlist they were taken out of.
-            let user = app.user.as_ref().map(|user| user.id.clone()).unwrap_or_default();
-            let first = |artists: &str| artists.split([',', ';', '&']).next().unwrap_or("").trim().to_string();
-            let was_in: std::collections::HashMap<String, String> = app
-                .unavailable
-                .entries_for(&user)
-                .iter()
-                .map(|entry| {
-                    (
-                        crate::exportify::match_key(&entry.title, &first(&entry.artists)),
-                        entry.playlist_name.clone(),
-                    )
-                })
-                .collect();
             for (number, song) in app.local_songs.songs.iter().enumerate() {
-                let was = was_in
-                    .get(&crate::exportify::match_key(&song.title, &first(&song.artist)))
-                    .cloned();
-                let liked = app
-                    .local_matches
-                    .uri_of(&song.path)
-                    .is_some_and(|uri| app.is_saved(uri).unwrap_or(false));
                 lines.push(Line {
                     cells: [
                         format!("{}", number + 1),
@@ -222,20 +230,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                             song.title.clone()
                         },
                         song.artist.clone(),
-                        was.unwrap_or_default(),
                         song.album.clone(),
                         day_text(song.modified),
-                        song.year.clone(),
                         song.bpm.map_or(String::new(), |b| format!("{}", b.round())),
+                        song.camelot.clone().or_else(|| song.key.clone()).unwrap_or_default(),
                         length(song.duration_ms),
-                        if liked { "♥".to_string() } else { String::new() },
+                        song.genre.clone(),
                     ],
                     bpm: song.bpm,
                     length_ms: song.duration_ms,
                     have_file: None,
                     path: Some(song.path.clone()),
                     spotify: app.local_matches.uri_of(&song.path).map(str::to_string),
-                    liked,
                 });
             }
         }
@@ -249,11 +255,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         format!("{}", number + 1),
                         track.name.clone(),
                         track.artists.clone(),
-                        playlist.name.clone(),
                         track.album.clone(),
                         String::new(),
-                        String::new(),
                         track.tempo.map_or(String::new(), |t| format!("{}", t.round())),
+                        String::new(),
                         length(track.duration_ms),
                         String::new(),
                     ],
@@ -261,7 +266,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     length_ms: track.duration_ms,
                     have_file: Some(have),
                     spotify: None,
-                    liked: false,
                     path,
                 });
             }
@@ -270,7 +274,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if !needle.is_empty() {
         lines.retain(|line| line.cells.iter().any(|c| c.to_lowercase().contains(&needle)));
     }
-    let sort = app.local_ui.sort.min(9) as usize;
+    let sort = (app.local_ui.sort as usize).min(COLUMNS.len() - 1);
     let descending = app.local_ui.descending;
     lines.sort_by(|a, b| {
         let order = match sort {
@@ -279,12 +283,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 .parse::<u32>()
                 .unwrap_or(0)
                 .cmp(&b.cells[0].parse::<u32>().unwrap_or(0)),
-            7 => a
+            5 => a
                 .bpm
                 .unwrap_or(f32::MAX)
                 .total_cmp(&b.bpm.unwrap_or(f32::MAX)),
-            8 => a.length_ms.cmp(&b.length_ms),
-            9 => b.liked.cmp(&a.liked),
+            7 => a.length_ms.cmp(&b.length_ms),
             _ => a.cells[sort].to_lowercase().cmp(&b.cells[sort].to_lowercase()),
         };
         if descending { order.reverse() } else { order }
@@ -335,16 +338,26 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     });
     ui.add_space(6.0);
 
-    // Header.
+    // Header: click to sort, drag a heading to move the column, drag the
+    // line between two headings to resize, right-click for the columns.
+    let cols = shown_columns(app);
     let width = ui.available_width();
-    let (header, _) = ui.allocate_exact_size(vec2(width, 30.0), Sense::hover());
+    let inner = width - 16.0;
+    let total: f32 = cols.iter().map(|(_, share)| share).sum::<f32>().max(0.01);
+    let widths: Vec<f32> = cols.iter().map(|(_, share)| inner * share / total).collect();
+    let (header, header_response) = ui.allocate_exact_size(vec2(width, 30.0), Sense::click());
     let mut x = header.left() + 8.0;
     let mut clicked_sort: Option<u8> = None;
-    for (i, name) in HEADINGS.iter().enumerate() {
-        let w = (width - 16.0) * SHARES[i];
+    let mut new_cols: Option<Vec<(u8, f32)>> = None;
+    let drag_id = ui.id().with("local-head-drag");
+    let dragging: Option<usize> = ui.data(|data| data.get_temp(drag_id));
+    // Right-clicking a heading opens the header's menu too.
+    let mut menu_anchor = header_response.clone();
+    for (at, (id, _)) in cols.iter().enumerate() {
+        let w = widths[at];
         let cell = Rect::from_min_size(pos2(x, header.top()), vec2(w, header.height()));
-        let response = ui.interact(cell, ui.id().with(("local-head", i)), Sense::click());
-        let active = sort == i;
+        let response = ui.interact(cell, ui.id().with(("local-head", *id)), Sense::click_and_drag());
+        let active = sort == *id as usize;
         let color = if active {
             palette.accent
         } else if response.hovered() {
@@ -357,20 +370,130 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         } else {
             ""
         };
-        ui.painter().text(
+        ui.painter().with_clip_rect(cell.shrink2(vec2(2.0, 0.0))).text(
             pos2(cell.left(), cell.center().y),
             Align2::LEFT_CENTER,
-            format!("{name}{arrow}"),
+            format!("{}{arrow}", COLUMNS[*id as usize].0),
             theme::regular(theme::SMALL_TEXT),
             color,
         );
         if response.clicked() {
-            clicked_sort = Some(i as u8);
+            clicked_sort = Some(*id);
+        }
+        menu_anchor = menu_anchor.union(response.clone());
+        if response.drag_started() {
+            ui.data_mut(|data| data.insert_temp(drag_id, at));
+        }
+        if response.drag_stopped()
+            && let Some(from) = dragging
+            && let Some(pointer) = ui.ctx().pointer_interact_pos()
+        {
+            // Drop where the pointer is: before the first column whose middle
+            // is past it.
+            let mut left = header.left() + 8.0;
+            let mut to = cols.len();
+            for (i, w) in widths.iter().enumerate() {
+                if pointer.x < left + w / 2.0 {
+                    to = i;
+                    break;
+                }
+                left += w;
+            }
+            let mut moved = cols.clone();
+            let column = moved.remove(from);
+            let to = if to > from { to - 1 } else { to };
+            moved.insert(to.min(moved.len()), column);
+            new_cols = Some(moved);
+            ui.data_mut(|data| data.remove::<usize>(drag_id));
+        }
+        // The resize handle on the right edge of every heading but the last.
+        if at + 1 < cols.len() {
+            let handle = Rect::from_center_size(pos2(cell.right(), cell.center().y), vec2(8.0, header.height()));
+            let grip = ui
+                .interact(handle, ui.id().with(("local-head-size", *id)), Sense::drag())
+                .on_hover_cursor(egui::CursorIcon::ResizeColumn);
+            if grip.hovered() || grip.dragged() {
+                ui.painter().vline(cell.right(), header.y_range().shrink(6.0), Stroke::new(1.0, palette.outline));
+            }
+            if grip.dragged() {
+                let delta = grip.drag_delta().x / inner * total;
+                let mut sized = cols.clone();
+                let room = sized[at].1 + sized[at + 1].1;
+                let left = (sized[at].1 + delta).clamp(0.02, room - 0.02);
+                sized[at].1 = left;
+                sized[at + 1].1 = room - left;
+                new_cols = Some(sized);
+            }
         }
         x += w;
     }
+    // While a heading is dragged, a line shows where it will land.
+    if dragging.is_some()
+        && let Some(pointer) = ui.ctx().pointer_hover_pos()
+        && header.expand(20.0).contains(pointer)
+    {
+        let mut left = header.left() + 8.0;
+        let mut mark = left + inner;
+        for w in &widths {
+            if pointer.x < left + w / 2.0 {
+                mark = left;
+                break;
+            }
+            left += w;
+        }
+        ui.painter().vline(mark, header.y_range(), Stroke::new(2.0, palette.accent));
+    }
     ui.painter()
         .hline(header.x_range().shrink(8.0), header.bottom() - 0.5, Stroke::new(1.0, palette.outline));
+    // Right-click the header: which columns show, and the sort.
+    egui::Popup::context_menu(&menu_anchor)
+        .frame(super::widgets::menu_frame(&palette))
+        .show(|ui| {
+            super::widgets::fit_menu(ui, 260.0);
+            super::widgets::menu_group(ui, &palette, "Columns");
+            for (id, (name, share)) in COLUMNS.iter().enumerate() {
+                let id = id as u8;
+                let on = cols.iter().any(|(shown, _)| *shown == id);
+                // The title always shows.
+                let enabled = id != 1;
+                if super::widgets::menu_item_enabled(
+                    ui,
+                    &palette,
+                    on.then_some(Icon::Check),
+                    &title_case(name),
+                    enabled,
+                ) {
+                    let mut changed = cols.clone();
+                    if on {
+                        changed.retain(|(shown, _)| *shown != id);
+                    } else {
+                        changed.push((id, *share));
+                    }
+                    new_cols = Some(changed);
+                }
+            }
+            super::widgets::menu_separator(ui, &palette);
+            super::widgets::menu_group(ui, &palette, "Sort by");
+            for (id, _) in &cols {
+                let active = sort == *id as usize;
+                if super::widgets::menu_item(
+                    ui,
+                    &palette,
+                    active.then_some(if descending { Icon::ArrowDown } else { Icon::ArrowUp }),
+                    &title_case(COLUMNS[*id as usize].0),
+                ) {
+                    clicked_sort = Some(*id);
+                }
+            }
+            super::widgets::menu_separator(ui, &palette);
+            if super::widgets::menu_item(ui, &palette, Some(Icon::Refresh), "Reset columns") {
+                new_cols = Some(crate::settings::Settings::default().local_columns);
+            }
+        });
+    if let Some(changed) = new_cols {
+        app.settings.local_columns = changed;
+        app.mark_settings_dirty();
+    }
     if let Some(column) = clicked_sort {
         if app.local_ui.sort == column {
             app.local_ui.descending = !app.local_ui.descending;
@@ -399,34 +522,27 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         .rect_filled(rect, CornerRadius::same(6), palette.surface_hover);
                 }
                 let painter = ui.painter().with_clip_rect(rect);
-                // A small green dot: this file is also on Spotify (a ring
-                // heart-coloured when it is in Liked Songs).
+                // A small green dot: this file is also on Spotify.
                 if line.spotify.is_some() {
                     let centre = pos2(rect.left() + 4.0, rect.center().y);
                     painter.circle_filled(centre, 2.5, palette.accent);
-                    if line.liked {
-                        painter.circle_stroke(
-                            centre,
-                            4.0,
-                            Stroke::new(1.0, Color32::from_rgb(0xff, 0x5c, 0x7a)),
-                        );
-                    }
                 }
                 let mut x = rect.left() + 8.0;
-                for (i, cell) in line.cells.iter().enumerate() {
-                    let w = (width - 16.0) * SHARES[i];
-                    let clip = Rect::from_min_size(pos2(x, rect.top()), vec2(w - 8.0, ROW));
-                    let mut text = cell.clone();
-                    if i == 1 {
+                for (at, (id, _)) in cols.iter().enumerate() {
+                    let w = widths[at];
+                    let id = *id as usize;
+                    let clip = Rect::from_min_size(pos2(x, rect.top()), vec2((w - 8.0).max(1.0), ROW));
+                    let mut text = line.cells[id].clone();
+                    if id == 1 {
                         match line.have_file {
                             Some(true) => text = format!("✓ {text}"),
                             Some(false) => text = format!("  {text}"),
                             None => {}
                         }
                     }
-                    let color = if i == 1 && is_playing {
+                    let color = if id == 1 && is_playing {
                         palette.accent
-                    } else if i == 1 {
+                    } else if id == 1 {
                         palette.text
                     } else {
                         palette.secondary
@@ -503,40 +619,42 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 if response.double_clicked() && !used_button {
                     play_from_here(&mut pending);
                 }
-                response.context_menu(|ui| {
-                    if line.path.is_some() && ui.button("Play from here").clicked() {
-                        play_from_here(&mut pending);
-                        ui.close();
-                    }
-                    if let Some(path) = &line.path
-                        && ui.button("Show file in folder").clicked()
-                    {
-                        if let Err(error) = crate::opener::reveal(std::path::Path::new(path)) {
+                egui::Popup::context_menu(&response)
+                    .frame(super::widgets::menu_frame(&palette))
+                    .show(|ui| {
+                        super::widgets::fit_menu(ui, 280.0);
+                        if line.path.is_some()
+                            && super::widgets::menu_item(ui, &palette, Some(Icon::Play), "Play from here")
+                        {
+                            play_from_here(&mut pending);
+                        }
+                        if let Some(path) = &line.path
+                            && super::widgets::menu_item(ui, &palette, Some(Icon::ExternalLink), "Show file in folder")
+                            && let Err(error) = crate::opener::reveal(std::path::Path::new(path))
+                        {
                             log::warn!("could not show the file in its folder: {error}");
                         }
-                        ui.close();
-                    }
-                    if ui.button("Search this song on Spotify").clicked() && !search.is_empty() {
-                        pending.push(Action::Search(search.clone()));
-                        ui.close();
-                    }
-                    if let Some(uri) = &line.spotify {
-                        let label = if line.liked {
-                            "Remove from Liked Songs on Spotify"
-                        } else {
-                            "Like on Spotify"
-                        };
-                        if ui.button(label).clicked() {
-                            pending.push(Action::ToggleSaved(uri.clone()));
-                            ui.close();
+                        if super::widgets::menu_item(ui, &palette, Some(Icon::Search), "Search this song on Spotify")
+                            && !search.is_empty()
+                        {
+                            pending.push(Action::Search(search.clone()));
                         }
-                        if ui.button("Open its album on Spotify").clicked() {
+                        if let Some(uri) = &line.spotify
+                            && super::widgets::menu_item(ui, &palette, Some(Icon::Disc), "Open it on Spotify")
+                        {
                             pending.push(Action::OpenLink(uri.clone()));
-                            ui.close();
                         }
-                    }
-                });
+                    });
             }
         });
     app.actions.extend(pending);
+}
+
+/// "TITLE" as "Title", for the menus.
+fn title_case(heading: &str) -> String {
+    let mut chars = heading.chars();
+    match chars.next() {
+        Some(first) => first.to_string() + &chars.as_str().to_lowercase(),
+        None => String::new(),
+    }
 }

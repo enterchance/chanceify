@@ -38,7 +38,13 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
     // Over the picture (full screen visualizer or lyrics) the panel is a
     // little see-through, so the music still shows around the list.
     let over_picture = app.fullscreen_vis || app.lyrics_fullscreen.is_some();
-    let fill = if over_picture { palette.panel.gamma_multiply(0.78) } else { palette.panel };
+    let fill = if over_picture {
+        palette.panel.gamma_multiply(0.78)
+    } else if super::player_bar::swirl_behind_panels(app) {
+        palette.panel.gamma_multiply(0.45)
+    } else {
+        palette.panel
+    };
     let panel = egui::Panel::right("queue-panel")
         .resizable(true)
         .default_size(app.settings.queue_width)

@@ -11097,6 +11097,11 @@ impl App {
                     self.refresh_queue(true);
                 }
             }
+            Action::ToggleLyricsPanel if self.lyrics_panel_auto_off && !self.show_lyrics_panel => {
+                // Hidden for a song with no words: the button turns the panel
+                // off for good (and the marker standing in for it goes).
+                self.lyrics_panel_auto_off = false;
+            }
             Action::ToggleLyricsPanel => {
                 self.lyrics_panel_auto_off = false;
                 self.leave_lyrics_fullscreen(ctx);
@@ -12692,6 +12697,44 @@ impl App {
                 match written {
                     Ok(()) => self.toast(format!("Equalizers saved in {} (and copied)", dir.display())),
                     Err(error) => self.toast_error(format!("Could not save the equalizers: {error}")),
+                }
+            }
+            Action::CopyEqCode(which) => {
+                let bands = self.settings.eq_bands_db;
+                let (name, bands) = match which.and_then(|index| self.settings.custom_eqs.get(index)) {
+                    Some((name, bands)) => (name.clone(), *bands),
+                    None => {
+                        let name = self
+                            .settings
+                            .custom_eqs
+                            .iter()
+                            .find(|(_, own)| *own == bands)
+                            .map(|(name, _)| name.clone())
+                            .or_else(|| {
+                                crate::eq::PRESETS
+                                    .iter()
+                                    .find(|preset| preset.bands_db == bands)
+                                    .map(|preset| preset.name.to_string())
+                            })
+                            .unwrap_or_else(|| "My curve".to_string());
+                        (name, bands)
+                    }
+                };
+                ctx.copy_text(crate::settings::Settings::eq_code(&name, &bands));
+                self.toast(format!("Code for \"{name}\" copied: paste it to a friend"));
+            }
+            Action::ImportEqCode(text) => {
+                let added = self.settings.import_eq_codes(&text);
+                if let Some(last) = added.last() {
+                    if let Some(index) = self.settings.custom_eqs.iter().position(|(name, _)| name == last) {
+                        self.settings.eq_bands_db = self.settings.custom_eqs[index].1;
+                        self.settings.eq_on = true;
+                        self.push_eq();
+                    }
+                    self.mark_settings_dirty();
+                    self.toast(format!("Added {}", added.join(", ")));
+                } else {
+                    self.toast_error("That isn't an equalizer code (they start with CEQ:)".to_string());
                 }
             }
             Action::ImportEq => {

@@ -840,6 +840,47 @@ fn visualizer(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying>
     moving
 }
 
+/// Whether the swirl fills the window behind the side panels and top bar.
+pub(super) fn swirl_behind_panels(app: &App) -> bool {
+    app.settings.swirl_behind_panels
+        && app.settings.vis_shapes_value() & crate::settings::Settings::SHAPE_SWIRL != 0
+        && !app.fullscreen_vis
+        && app.lyrics_fullscreen.is_none()
+}
+
+/// The swirl laid over `rect` and clipped to `clip`, so two pieces drawn
+/// with the same `rect` meet seamlessly.
+pub(super) fn swirl_fill(app: &mut App, ui: &egui::Ui, rect: Rect, clip: Rect) {
+    let now = app.now_playing();
+    let art = app.swirl_art(ui.ctx());
+    let previous = app.swirl_previous(ui.ctx());
+    let dark = ui.visuals().dark_mode;
+    let painter = ui.painter().with_clip_rect(clip);
+    let strength = if dark { 1.0 } else { LIGHT_STRENGTH };
+    let phase = swirl_phase(app, ui, now.as_ref());
+    let phase = if app.settings.vis_reverse_swirl { -phase } else { phase };
+    let run = SwirlRun {
+        bright: app.settings.swirl_tune_value(10) / 100.0,
+        wash: app.settings.swirl_tune_value(11) / 100.0,
+        bands: app.settings.swirl_tune_value(12),
+        art: app.settings.swirl_art_scroll,
+        mirror: !app.settings.swirl_art_single,
+    };
+    swirl(
+        &painter,
+        rect,
+        &[],
+        strength,
+        phase,
+        false,
+        art.as_ref(),
+        previous,
+        run,
+        swirl_wash(app, ui.input(|input| input.time)),
+    );
+    ui.ctx().request_repaint();
+}
+
 /// What moves behind the full-screen lyrics: the bars (0), the flow (1) or
 /// the swirl (2), over the whole page. Returns whether it is still moving.
 pub(super) fn lyrics_backdrop(
@@ -2177,6 +2218,14 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                         app.actions.push(Action::ToggleSwirlArtSingle);
                     }
                 });
+                // Only the default view has a library, queue and top bar to go behind.
+                if app.vis_view_now.unwrap_or(0) == 0 {
+                    let behind = app.settings.swirl_behind_panels;
+                    if chip(ui, &palette, "Behind the side panels and top bar", behind, ui.available_width().min(290.0)).clicked() {
+                        app.settings.swirl_behind_panels = !behind;
+                        app.mark_settings_dirty();
+                    }
+                }
                 theme::subtle(ui, &palette, &gettext(app.locale, "MOVES WITH"));
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
@@ -2529,19 +2578,6 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                     app.settings.vis_sway_strength() * 100.0,
                     |value| app.actions.push(Action::SetVisSwayAmount(value / 100.0)),
                 );
-            }
-            }); ui.vertical(|ui| {
-            ui.set_width(VIS_SINGLE_W);
-            if chip_i(
-                ui,
-                &palette,
-                "Artist name under the title",
-                !app.settings.vis_text_no_artist,
-                ui.available_width().min(290.0),
-            )
-            .clicked()
-            {
-                app.actions.push(Action::ToggleVisArtist);
             }
             }); }); }
             let on_page = app.lyrics_fullscreen.is_some();
@@ -4232,12 +4268,25 @@ fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying
     } else {
         now.artists.iter().map(|artist| artist.name.as_str()).collect::<Vec<_>>().join(", ")
     };
-    let show_artist = !app.settings.vis_text_no_artist && !artist_line.is_empty();
+    // The artist shows only while the pointer is over the cover or the words
+    // under it, faded in so it grows out of the title.
+    let hover_zone = Rect::from_min_max(
+        pos2(cover.center().x - max_width / 2.0, cover.top()),
+        pos2(cover.center().x + max_width / 2.0, cover.bottom() + clear + title_size * 3.0),
+    );
+    let hovered = ui
+        .ctx()
+        .input(|input| input.pointer.hover_pos())
+        .is_some_and(|at| hover_zone.contains(at));
+    let reveal = ui
+        .ctx()
+        .animate_bool_with_time(egui::Id::new("vis-artist-reveal"), hovered, 0.15);
+    let show_artist = reveal > 0.02 && !artist_line.is_empty();
     let artist_size = (title_size * 0.5).max(12.0);
     let artist = show_artist.then(|| {
         let mut job = egui::text::LayoutJob::single_section(
             artist_line.clone(),
-            format(artist_size, 0.75),
+            format(artist_size, 0.75 * reveal),
         );
         job.wrap.max_width = max_width;
         job.wrap.max_rows = 1;
@@ -4451,7 +4500,7 @@ fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying
                     artist.clone(),
                     ink,
                 );
-                shape.override_text_color = Some(contrast.gamma_multiply(0.85));
+                shape.override_text_color = Some(contrast.gamma_multiply(0.85 * reveal));
                 painter.add(egui::Shape::Text(shape));
             }
         }

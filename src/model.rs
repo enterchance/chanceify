@@ -1682,6 +1682,11 @@ pub enum Action {
     ToggleEqHideDefaults,
     ExportEq,
     ImportEq,
+    /// Copies a share code for one of your curves (`Some`), or for the curve
+    /// in use (`None`).
+    CopyEqCode(Option<usize>),
+    /// Adds the curves in pasted share codes, and uses the last one.
+    ImportEqCode(String),
     /// The balance, -1 all left to 1 all right.
     SetBalance(f32),
     ToggleMono,

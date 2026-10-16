@@ -181,24 +181,26 @@ pub(crate) fn clear_search(ctx: &egui::Context) {
 const PROXY_DIRTY_ID: &str = "proxy-settings-dirty";
 
 /// The tabs along the top of the page.
-const TABS: [&str; 6] = ["Accounts", "Playback", "Look", "Library", "Network", "About"];
+const TABS: [&str; 7] = ["Accounts", "Playback", "Look", "Visualizer", "Library", "Network", "About"];
 
 /// Which tab a section sits in. A section that is not listed always shows.
 fn tab_of(title: &str) -> Option<u8> {
     let title = title.to_lowercase();
     let has = |words: &[&str]| words.iter().any(|word| title.contains(word));
-    if has(&["account", "last.fm", "discord", "lights"]) {
+    if has(&["account", "last.fm", "discord"]) {
         Some(0)
     } else if has(&["playback", "equalizer"]) {
         Some(1)
-    } else if has(&["appearance", "song lists", "gradient", "lyrics", "app icon"]) {
+    } else if has(&["appearance", "song lists", "gradient", "app icon", "lights"]) {
         Some(2)
-    } else if has(&["storage", "unavailable"]) {
+    } else if has(&["visualizer", "lyrics"]) {
         Some(3)
-    } else if has(&["proxy"]) {
+    } else if has(&["storage", "unavailable"]) {
         Some(4)
-    } else if has(&["about", "tour"]) {
+    } else if has(&["proxy"]) {
         Some(5)
+    } else if has(&["about", "tour"]) {
+        Some(6)
     } else {
         None
     }
@@ -1726,6 +1728,14 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
         });
     }
 
+    if needle.is_empty() || "visualizer bars flow swirl colours quick panel".contains(needle.as_str()) {
+        any_visible = true;
+        section(ui, &palette, "Visualizer", |ui| {
+            note(ui, &palette, "The bars, flow, swirl, colours, bass jump and full-screen lyrics are set in the visualizer's quick panel: press V.");
+            ui.add_space(8.0);
+        });
+    }
+
     if needle.is_empty() || "lyrics timestamps line size".contains(needle.as_str()) {
         any_visible = true;
         section(ui, &palette, "Lyrics", |ui| {
@@ -2216,6 +2226,58 @@ fn hertz(hz: f32) -> String {
 /// longer opens it): the switch, the presets, the curve, the preamp and the
 /// ten bands.
 pub(super) fn eq_panel(app: &mut App, ui: &mut egui::Ui) {
+    // Right-click anywhere on the equalizer: share codes to copy and paste.
+    let response = ui
+        .scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| eq_panel_body(app, ui))
+        .response;
+    let palette = app.palette;
+    egui::Popup::context_menu(&response)
+        .frame(widgets::menu_frame(&palette))
+        .show(|ui| {
+            widgets::fit_menu(ui, 320.0);
+            if widgets::menu_item(ui, &palette, Some(Icon::Copy), "Copy code for this curve") {
+                app.actions.push(Action::CopyEqCode(None));
+            }
+            let own: Vec<String> = app.settings.custom_eqs.iter().map(|(name, _)| name.clone()).collect();
+            for (index, name) in own.iter().enumerate() {
+                if widgets::menu_item(ui, &palette, Some(Icon::Copy), &format!("Copy code: {name}")) {
+                    app.actions.push(Action::CopyEqCode(Some(index)));
+                }
+            }
+            widgets::menu_separator(ui, &palette);
+            if widgets::menu_item(ui, &palette, Some(Icon::Download), "Paste a code…") {
+                ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("eq-code-open"), true));
+            }
+        });
+    // The paste box, under the equalizer while it is open.
+    let open_id = egui::Id::new("eq-code-open");
+    if ui.ctx().data(|data| data.get_temp::<bool>(open_id)).unwrap_or(false) {
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let id = egui::Id::new("eq-code-text");
+            let mut text = ui.data(|data| data.get_temp::<String>(id)).unwrap_or_default();
+            let field = egui::TextEdit::singleline(&mut text)
+                .hint_text("Paste a CEQ: code")
+                .desired_width(260.0)
+                .show(ui)
+                .response;
+            let enter = field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            if theme::soft_button(ui, &palette, None, "Add", false).clicked() || enter {
+                app.actions.push(Action::ImportEqCode(text.clone()));
+                text.clear();
+                ui.ctx().data_mut(|data| data.insert_temp(open_id, false));
+            }
+            if theme::soft_button(ui, &palette, None, "Cancel", false).clicked() {
+                text.clear();
+                ui.ctx().data_mut(|data| data.insert_temp(open_id, false));
+            }
+            ui.data_mut(|data| data.insert_temp(id, text));
+        });
+    }
+}
+
+fn eq_panel_body(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let locale = app.locale;
     ui.set_width(470.0);

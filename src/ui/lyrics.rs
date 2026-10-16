@@ -81,7 +81,7 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
         .show_separator_line(false)
         .frame(
             Frame::new()
-                .fill(palette.panel)
+                .fill(if super::player_bar::swirl_behind_panels(app) { palette.panel.gamma_multiply(0.45) } else { palette.panel })
                 .inner_margin(Margin::symmetric(12, 12)),
         );
     let response = panel.show(ui, |ui| {

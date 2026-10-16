@@ -734,6 +734,18 @@ fn fit_width(ui: &Ui, need: f32) -> f32 {
     now.max(before).min(room)
 }
 
+/// Holds a popup menu to the width its rows asked for on the last frame, so
+/// the menu has no empty space beside its rows (menus lay out justified, so
+/// without this they stretch to their widest allowed width).
+pub fn fit_menu(ui: &mut Ui, cap: f32) {
+    let key = ui.id().with("menu-fit");
+    let fit = ui
+        .ctx()
+        .data(|data| data.get_temp::<(u64, f32, f32)>(key))
+        .map_or(0.0, |(_, now, before)| now.max(before));
+    ui.set_max_width(if fit > 0.0 { fit.min(cap) } else { cap });
+}
+
 /// One entry in a popup menu. Closes the menu when chosen.
 pub fn menu_item(ui: &mut Ui, palette: &Palette, icon: Option<Icon>, label: &str) -> bool {
     menu_item_enabled(ui, palette, icon, label, true)
@@ -1082,8 +1094,7 @@ pub fn picked_menu(
 ) {
     let palette = app.palette;
     let locale = app.locale;
-    ui.set_min_width(150.0);
-    ui.set_max_width(300.0);
+    fit_menu(ui, 300.0);
     let count = songs.len();
     let uris: Vec<String> = songs.iter().map(|item| item.uri().to_string()).collect();
     ui.add_space(4.0);
@@ -1660,8 +1671,7 @@ pub fn context_menu_items(
 ) {
     let palette = app.palette;
     let locale = app.locale;
-    ui.set_min_width(200.0);
-    ui.set_max_width(300.0);
+    fit_menu(ui, 300.0);
     let kind = util::uri_kind(uri).unwrap_or("");
     if menu_item(ui, &palette, Some(Icon::Play), &gettext(locale, "Play")) {
         app.actions.push(Action::PlayContext {

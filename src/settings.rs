@@ -973,6 +973,11 @@ pub struct Settings {
     /// cover's colours.
     #[serde(default)]
     pub swirl_colours_fixed: bool,
+    /// Default view: the swirl also fills the window behind the library,
+    /// the queue, the side lyrics and the top bar.
+    pub swirl_behind_panels: bool,
+    /// The local songs table's columns, in order: (column id, share of the width).
+    pub local_columns: Vec<(u8, f32)>,
     /// How many ripples run across the swirl; 0 (never set) means the default.
     #[serde(default)]
     pub swirl_waves: u8,
@@ -1530,6 +1535,8 @@ impl Default for Settings {
             seek_time_mode: 0,
             swirl_warp: 0.0,
             swirl_colours_fixed: false,
+            swirl_behind_panels: false,
+            local_columns: vec![(0, 0.05), (1, 0.32), (2, 0.22), (3, 0.20), (4, 0.09), (5, 0.05), (7, 0.07)],
             swirl_waves: 0,
             swirl_tune: Vec::new(),
             swirl_art_scroll: false,
@@ -1788,6 +1795,52 @@ impl Settings {
 
     /// Every one of the reader's own equalizers and scenes as plain text, one
     /// per line: `EQ|name|ten gains` and `SCENE|name|speed|ten gains`.
+    /// One equalizer curve as a line of text to share: `CEQ:name:g1,...,g10`
+    /// (gains in dB). Anyone can paste it back in with [`Self::import_eq_codes`].
+    pub fn eq_code(name: &str, bands: &[f32; 10]) -> String {
+        let gains = bands
+            .iter()
+            .map(|gain| {
+                let text = format!("{gain:.1}");
+                text.strip_suffix(".0").map(str::to_string).unwrap_or(text)
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("CEQ:{}:{gains}", name.replace(':', " ").trim())
+    }
+
+    /// Adds every curve in `text` that is a share code (or an exported line),
+    /// replacing any of the same name. Returns the names added.
+    pub fn import_eq_codes(&mut self, text: &str) -> Vec<String> {
+        let mut added = Vec::new();
+        for code in text.split("CEQ:").skip(1) {
+            let code = code.trim();
+            let Some((name, gains)) = code.rsplit_once(':') else {
+                continue;
+            };
+            let gains = gains.split_whitespace().next().unwrap_or("");
+            let values: Vec<f32> = gains
+                .split(',')
+                .filter_map(|part| part.trim().parse::<f32>().ok())
+                .filter(|gain| gain.is_finite())
+                .collect();
+            let Ok(array) = <[f32; 10]>::try_from(values) else {
+                continue;
+            };
+            let array = array.map(|gain| gain.clamp(-crate::eq::RANGE_DB, crate::eq::RANGE_DB));
+            let name = name.trim();
+            let name = if name.is_empty() { "Shared curve" } else { name };
+            let name: String = name.chars().take(40).collect();
+            self.custom_eqs.retain(|(other, _)| *other != name);
+            self.custom_eqs.push((name.clone(), array));
+            added.push(name);
+        }
+        if added.is_empty() && self.import_presets(text) > 0 {
+            added.push("curves".to_string());
+        }
+        added
+    }
+
     pub fn export_presets(&self) -> String {
         let gains = |bands: &[f32; 10]| {
             bands
@@ -2056,7 +2109,7 @@ impl Settings {
         "queue_show_cover", "queue_show_icons", "queue_show_length", "queue_show_numbers", "queue_show_time",
         "queue_width", "float_hide_bar", "calm_blur", "recents_show_artist", "recents_show_cover", "recents_show_icons", "recents_show_numbers", "vis_title_layout", "jump_shake", "mini_queue", "mini_volume", "mini_vis", "queue_click", "vis_reverse", "missing_mark_big", "row_order", "seek_anchor", "seek_custom_width", "seek_time_joined", "seek_time_mode",
         "seek_width", "show_shortcut_hints", "sidebar_compact", "sidebar_grid", "sidebar_order",
-        "sidebar_width", "swirl_art_scroll", "swirl_art_single", "swirl_art_edge", "swirl_colours_fixed", "swirl_drift", "swirl_peaks",
+        "sidebar_width", "swirl_art_scroll", "swirl_art_single", "swirl_art_edge", "swirl_colours_fixed", "swirl_behind_panels", "swirl_drift", "swirl_peaks",
         "swirl_scale", "swirl_tune", "swirl_warp", "swirl_waves", "theme", "theme_from_cover", "custom_bg", "custom_accent",
         "track_columns", "tracklist_compact", "vis", "vis_bar_sides", "vis_flow_sides", "vis_shapes",
         "vis_shapes_last", "vis_shapes_set", "volume_presets", "zoom",

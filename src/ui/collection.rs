@@ -518,8 +518,7 @@ pub fn actions_row(
                 .show(|ui| {
                     if let Some(seed) = &actions.save_radio {
                         // As narrow as every other item menu.
-                        ui.set_min_width(200.0);
-                        ui.set_max_width(300.0);
+                        widgets::fit_menu(ui, 300.0);
                         if widgets::menu_item(
                             ui,
                             &palette,
