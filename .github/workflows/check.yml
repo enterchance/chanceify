@@ -40,12 +40,14 @@ jobs:
       # The errors go into an annotation too, so they can be read without
       # downloading the log.
       - name: Check
-        shell: bash
+        shell: pwsh
         run: |
-          set -o pipefail
-          if ! cargo check --profile fast --features lights-feed 2>&1 | tee check.log; then
-            { grep -E -A12 '^(error|warning: unused)' check.log || tail -60 check.log; } | head -150 > err.txt
-            msg=$(tr -d '\r' < err.txt | sed -e 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print}')
-            echo "::error title=build failed::$msg"
+          cargo check --profile fast --features lights-feed 2>&1 | Tee-Object -FilePath check.log
+          if ($LASTEXITCODE -ne 0) {
+            $lines = Get-Content check.log
+            $hits = $lines | Select-String -Pattern '^(error|warning: unused)' -Context 0,12 | ForEach-Object { $_.Context.PreContext + $_.Line + $_.Context.PostContext }
+            if (-not $hits) { $hits = $lines | Select-Object -Last 60 }
+            $msg = (($hits | Select-Object -First 150) -join "`n").Replace('%','%25').Replace("`r",'').Replace("`n",'%0A')
+            Write-Output "::error title=build failed::$msg"
             exit 1
-          fi
+          }
