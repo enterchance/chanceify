@@ -2411,7 +2411,7 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
                         "Auto",
-                        theme::bold(10.5),
+                        theme::bold(theme::TINY_TEXT),
                         Color32::WHITE,
                     );
                     if !fixed {
@@ -2704,7 +2704,7 @@ fn glyph_button(
     tip: &str,
     on: bool,
 ) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(44.0, 30.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(44.0, theme::CONTROL_HEIGHT), Sense::click());
     let fill = if on {
         palette.accent.gamma_multiply(0.35)
     } else if response.hovered() {
@@ -2712,7 +2712,7 @@ fn glyph_button(
     } else {
         palette.surface
     };
-    ui.painter().rect_filled(rect, egui::CornerRadius::same(7), fill);
+    ui.painter().rect_filled(rect, egui::CornerRadius::same(theme::CONTROL_RADIUS), fill);
     let ink = if on { palette.text } else { palette.secondary };
     let c = rect.center();
     let painter = ui.painter();
@@ -3172,7 +3172,7 @@ fn shape_button(
     } else {
         palette.surface
     };
-    ui.painter().rect_filled(rect, egui::CornerRadius::same(7), fill);
+    ui.painter().rect_filled(rect, egui::CornerRadius::same(theme::CONTROL_RADIUS), fill);
     let ink = if on { palette.text } else { palette.secondary };
     let icon = Rect::from_center_size(pos2(rect.left() + 20.0, rect.center().y), vec2(18.0, 16.0));
     let painter = ui.painter();
@@ -3224,7 +3224,7 @@ fn shape_button(
     let galley = crate::bidi::layout(
         painter,
         label,
-        theme::regular(13.0),
+        theme::regular(theme::BODY_TEXT),
         ink,
         (width - 40.0).max(10.0),
         1,
@@ -3249,7 +3249,7 @@ fn sway_preview(ui: &mut egui::Ui, palette: &crate::theme::Palette, preset: crat
     }
     let time = ui.input(|input| input.time) as f32;
     let painter = ui.painter().with_clip_rect(rect);
-    let font = theme::bold(18.0);
+    let font = theme::bold(theme::SECTION_TEXT);
     let word = "sway";
     let glyphs: Vec<_> = word
         .chars()
@@ -3412,7 +3412,7 @@ fn chip_i(
     let Some(icon) = icon_for(label) else {
         return chip(ui, palette, label, active, width);
     };
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 24.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(width, theme::CONTROL_HEIGHT), Sense::click());
     let fill = if active {
         palette.accent.gamma_multiply(0.35)
     } else if response.hovered() {
@@ -3420,14 +3420,14 @@ fn chip_i(
     } else {
         palette.surface
     };
-    ui.painter().rect_filled(rect, egui::CornerRadius::same(6), fill);
+    ui.painter().rect_filled(rect, egui::CornerRadius::same(theme::CONTROL_RADIUS), fill);
     let ink = if active { palette.text } else { palette.secondary };
-    let slot = Rect::from_min_size(pos2(rect.left() + 4.0, rect.top()), vec2(22.0, 24.0));
+    let slot = Rect::from_min_size(pos2(rect.left() + 4.0, rect.top()), vec2(22.0, theme::CONTROL_HEIGHT));
     theme::paint_icon(ui, icon, slot, 14.0, ink);
     let galley = crate::bidi::layout(
         ui.painter(),
         label,
-        theme::regular(12.5),
+        theme::regular(theme::SMALL_TEXT),
         ink,
         (width - 34.0).max(10.0),
         1,
@@ -3449,7 +3449,7 @@ fn chip_sensing(
     width: f32,
     sense: Sense,
 ) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 24.0), sense);
+    let (rect, response) = ui.allocate_exact_size(vec2(width, theme::CONTROL_HEIGHT), sense);
     let fill = if active {
         palette.accent.gamma_multiply(0.35)
     } else if response.hovered() {
@@ -3457,11 +3457,11 @@ fn chip_sensing(
     } else {
         palette.surface
     };
-    ui.painter().rect_filled(rect, egui::CornerRadius::same(6), fill);
+    ui.painter().rect_filled(rect, egui::CornerRadius::same(theme::CONTROL_RADIUS), fill);
     let galley = crate::bidi::layout(
         ui.painter(),
         label,
-        theme::regular(12.5),
+        theme::regular(theme::SMALL_TEXT),
         if active { palette.text } else { palette.secondary },
         (width - 8.0).max(10.0),
         1,
@@ -3506,11 +3506,11 @@ pub(super) fn slider_row(
         // The label gets what the row can spare, never more than the usual
         // column, so a narrow menu keeps a track to drag.
         let label_col = (width * 0.58).clamp(84.0, LABEL_COLUMN);
-        let (rect, _) = ui.allocate_exact_size(vec2(width, 24.0), Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(vec2(width, theme::CONTROL_HEIGHT), Sense::hover());
         let galley = crate::bidi::layout(
             ui.painter(),
             label,
-            theme::regular(13.5),
+            theme::regular(theme::BODY_TEXT),
             palette.text,
             label_col - 14.0,
             1,
@@ -4954,13 +4954,13 @@ pub(super) fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, 
         theme::text(
             &mut text_ui,
             gettext(app.locale, "Nothing playing"),
-            theme::medium(14.0),
+            theme::medium(theme::BODY_TEXT),
             palette.secondary,
         );
         theme::text(
             &mut text_ui,
             gettext(app.locale, "Pick a song, album, or playlist"),
-            theme::regular(12.0),
+            theme::regular(theme::SMALL_TEXT),
             palette.dim,
         );
         return;
@@ -5006,7 +5006,7 @@ pub(super) fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, 
             badge.center(),
             egui::Align2::CENTER_CENTER,
             "!",
-            theme::bold(10.0),
+            theme::bold(theme::TINY_TEXT),
             palette.window,
         );
         ui.interact(badge, egui::Id::new("lastfm-missing-badge"), Sense::hover()).on_hover_text(
@@ -5113,7 +5113,7 @@ pub(super) fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, 
             return;
         }
         if now.artists.is_empty() {
-            if theme::link(ui, &now.subtitle, theme::regular(13.0), palette.secondary).clicked()
+            if theme::link(ui, &now.subtitle, theme::regular(theme::BODY_TEXT), palette.secondary).clicked()
                 && let Some(id) = &now.show_id
             {
                 app.actions.push(Action::Open(Page::Show(id.clone())));
@@ -5123,7 +5123,7 @@ pub(super) fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, 
                 ui,
                 app,
                 &now.artists,
-                theme::regular(13.0),
+                theme::regular(theme::BODY_TEXT),
                 palette.secondary,
             );
         }
@@ -6032,7 +6032,7 @@ fn row_menus(app: &mut App, ui: &mut egui::Ui, row: Rect, zones: [Rect; 3], name
                         corner.center(),
                         egui::Align2::CENTER_CENTER,
                         "<>",
-                        theme::regular(11.0),
+                        theme::regular(theme::SMALL_TEXT),
                         palette.dim,
                     );
                 }
@@ -6198,7 +6198,7 @@ fn arrange_strip(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palet
             tile.center(),
             egui::Align2::CENTER_CENTER,
             gettext(app.locale, names[*item as usize]),
-            theme::semibold(13.0),
+            theme::semibold(theme::BODY_TEXT),
             palette.text,
         );
         if held && let Some(pointer) = ui.input(|input| input.pointer.interact_pos()) {
@@ -6688,7 +6688,7 @@ pub(super) fn big_art_missing_mark(app: &App, ui: &egui::Ui, art: Rect, id: &str
         badge.center(),
         egui::Align2::CENTER_CENTER,
         "!",
-        theme::bold(16.0),
+        theme::bold(theme::SECTION_TEXT),
         palette.window,
     );
     ui.interact(badge, egui::Id::new(("big-art-missing", id)), Sense::hover()).on_hover_text(

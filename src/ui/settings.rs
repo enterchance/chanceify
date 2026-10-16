@@ -140,7 +140,7 @@ fn slider_value_style(style: &mut egui::Style, palette: &Palette) {
     }
     style
         .text_styles
-        .insert(egui::TextStyle::Button, theme::medium(13.0));
+        .insert(egui::TextStyle::Button, theme::medium(theme::BODY_TEXT));
     style.spacing.button_padding = Vec2::new(12.0, 6.0);
 }
 
@@ -238,7 +238,7 @@ fn section(
                 16.0,
                 palette.secondary,
             );
-            theme::text(ui, crate::i18n::ui_text(title), theme::bold(18.0), palette.text);
+            theme::text(ui, crate::i18n::ui_text(title), theme::bold(theme::SECTION_TEXT), palette.text);
         })
         .response;
     let head_click = ui
@@ -295,7 +295,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
     theme::text(
         ui,
         gettext(locale, "Settings"),
-        theme::bold(28.0),
+        theme::bold(theme::TITLE_TEXT),
         palette.text,
     );
     ui.add_space(4.0);
@@ -413,7 +413,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                             .as_ref()
                             .map(|user| user.name().to_string())
                             .unwrap_or_default();
-                        theme::text(ui, name, theme::semibold(16.0), palette.text);
+                        theme::text(ui, name, theme::semibold(theme::SECTION_TEXT), palette.text);
                         let product = app
                             .user
                             .as_ref()
@@ -427,7 +427,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                                 other => other.to_string(),
                             })
                             .unwrap_or_default();
-                        theme::text(ui, product, theme::regular(13.0), palette.secondary);
+                        theme::text(ui, product, theme::regular(theme::BODY_TEXT), palette.secondary);
                         if let Some(username) =
                             app.local.connected.then(|| app.local.username.clone())
                             && !username.is_empty()
@@ -437,7 +437,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                                 // Translators: {username} is the Spotify account's user name.
                                 gettext(locale, "Connected as {username}")
                                     .replace("{username}", &username),
-                                theme::regular(12.0),
+                                theme::regular(theme::SMALL_TEXT),
                                 palette.dim,
                             );
                         }
@@ -466,7 +466,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                                     egui::RichText::new(gettext(locale, "Client ID"))
                                         .color(palette.dim),
                                 )
-                                .font(theme::regular(13.0))
+                                .font(theme::regular(theme::BODY_TEXT))
                                 .frame(egui::Frame::NONE)
                                 .desired_width(200.0),
                         )
@@ -520,7 +520,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
             }
             if needle.is_empty() && !in_use {
                 ui.add_space(8.0);
-                theme::text(ui, "How to connect your own Spotify app (Premium)", theme::semibold(13.0), palette.text);
+                theme::text(ui, "How to connect your own Spotify app (Premium)", theme::semibold(theme::BODY_TEXT), palette.text);
                 for line in [
                     "1. Open developer.spotify.com/dashboard and log in with your Spotify account.",
                     "2. Press Create app. Any name and description will do.",
@@ -674,7 +674,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                             ui,
                             locale,
                             egui::TextEdit::singleline(&mut app.settings.device_name)
-                                .font(theme::regular(14.0))
+                                .font(theme::regular(theme::BODY_TEXT))
                                 .frame(egui::Frame::NONE)
                                 .desired_width(200.0),
                         )
@@ -868,7 +868,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     theme::text(
                         ui,
                         "Crossfade between my own song files",
-                        theme::regular(13.5),
+                        theme::regular(theme::BODY_TEXT),
                         palette.text,
                     );
                     let current = app.settings.crossfade_secs;
@@ -1008,7 +1008,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                                     if ui.color_edit_button_srgb(colour).changed() {
                                         picked = true;
                                     }
-                                    theme::text(ui, label, theme::regular(13.0), palette.secondary);
+                                    theme::text(ui, label, theme::regular(theme::BODY_TEXT), palette.secondary);
                                 });
                             }
                             if picked {
@@ -1017,7 +1017,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                         }
                         let mut solid = app.settings.window_solidity() * 100.0;
                         ui.horizontal(|ui| {
-                            theme::text(ui, "See-through window (works with every theme: 100% solid, 50% like frosted glass)", theme::regular(13.0), palette.secondary);
+                            theme::text(ui, "See-through window (works with every theme: 100% solid, 50% like frosted glass)", theme::regular(theme::BODY_TEXT), palette.secondary);
                             if setting_slider(
                                 ui,
                                 &palette,
@@ -1308,7 +1308,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     egui::RichText::new(
                         "Songs in your playlists that Spotify has removed or that are not available where you are.\nFind them elsewhere before you remove them, so they are not lost.",
                     )
-                    .font(theme::regular(13.0))
+                    .font(theme::regular(theme::BODY_TEXT))
                     .color(palette.secondary),
                 )
                 .wrap(),
@@ -1332,7 +1332,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                         theme::text(
                             ui,
                             format!("Scanning your playlists… {done} of {total}"),
-                            theme::regular(13.0),
+                            theme::regular(theme::BODY_TEXT),
                             palette.secondary,
                         );
                     }
@@ -1351,7 +1351,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                             theme::text(
                                 ui,
                                 format!("Last scan: {}", when.get(..10).unwrap_or(when)),
-                                theme::regular(12.5),
+                                theme::regular(theme::SMALL_TEXT),
                                 palette.dim,
                             );
                         }
@@ -1369,7 +1369,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     theme::text(
                         ui,
                         format!("{} songs are in a playlist twice or more", doubled.len()),
-                        theme::semibold(14.0),
+                        theme::semibold(theme::BODY_TEXT),
                         palette.text,
                     );
                     egui::ScrollArea::vertical()
@@ -1382,7 +1382,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                                     theme::text(
                                         ui,
                                         format!("{} - {} (x{}) in {}", dup.artists, dup.title, dup.copies, dup.playlist_name),
-                                        theme::regular(12.5),
+                                        theme::regular(theme::SMALL_TEXT),
                                         palette.secondary,
                                     );
                                     if theme::soft_button(ui, &palette, None, "Open", false).clicked() {
@@ -1397,7 +1397,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     theme::text(
                         ui,
                         format!("{} pairs of playlists hold mostly the same songs", same.len()),
-                        theme::semibold(14.0),
+                        theme::semibold(theme::BODY_TEXT),
                         palette.text,
                     );
                     egui::ScrollArea::vertical()
@@ -1410,7 +1410,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                                     theme::text(
                                         ui,
                                         format!("{} and {}: {} songs shared ({}%)", pair.a_name, pair.b_name, pair.shared, pair.percent),
-                                        theme::regular(12.5),
+                                        theme::regular(theme::SMALL_TEXT),
                                         palette.secondary,
                                     );
                                     if theme::soft_button(ui, &palette, None, "Open first", false).clicked() {
@@ -1430,7 +1430,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     theme::text(
                         ui,
                         "None found. Every song in your playlists can be played.",
-                        theme::regular(13.0),
+                        theme::regular(theme::BODY_TEXT),
                         palette.secondary,
                     );
                 }
@@ -1440,7 +1440,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
             theme::text(
                 ui,
                 format!("{} unavailable songs", entries.len()),
-                theme::semibold(14.0),
+                theme::semibold(theme::BODY_TEXT),
                 palette.text,
             );
             ui.add_space(4.0);
@@ -1458,7 +1458,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                 theme::text(
                     ui,
                     "Confirm removal",
-                    theme::regular(13.0),
+                    theme::regular(theme::BODY_TEXT),
                     palette.secondary,
                 );
                 let mut ask = app.settings.unavailable_confirm_one;
@@ -1484,7 +1484,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                             ui.add(
                                 egui::Label::new(
                                     egui::RichText::new(line)
-                                        .font(theme::medium(13.5))
+                                        .font(theme::medium(theme::BODY_TEXT))
                                         .color(palette.text),
                                 )
                                 .wrap(),
@@ -1494,7 +1494,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                             theme::text(
                                 ui,
                                 format!("in {} (#{})", entry.playlist_name, entry.position),
-                                theme::regular(12.0),
+                                theme::regular(theme::SMALL_TEXT),
                                 palette.secondary,
                             );
                             if entry.has_title() {
@@ -1513,7 +1513,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                                     uri: entry.uri.clone(),
                                 };
                                 if asking {
-                                    theme::text(ui, "Remove it?", theme::regular(12.0), palette.warning);
+                                    theme::text(ui, "Remove it?", theme::regular(theme::SMALL_TEXT), palette.warning);
                                     if theme::soft_button(ui, &palette, Some(Icon::Trash), "Yes", true).clicked() {
                                         app.actions.push(remove);
                                         ui.data_mut(|data| data.insert_temp(ask_id, false));
@@ -1544,7 +1544,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                             egui::RichText::new(format!(
                                 "Last check: remove all {removable} songs now? This cannot be undone."
                             ))
-                            .font(theme::semibold(13.0))
+                            .font(theme::semibold(theme::BODY_TEXT))
                             .color(palette.warning),
                         )
                         .wrap(),
@@ -1566,7 +1566,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                             egui::RichText::new(format!(
                                 "This takes {removable} songs out of every playlist they are in. Make sure you have found them elsewhere first."
                             ))
-                            .font(theme::regular(13.0))
+                            .font(theme::regular(theme::BODY_TEXT))
                             .color(palette.warning),
                         )
                         .wrap(),
@@ -1616,14 +1616,14 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                             crate::build_info::DISPLAY_NAME,
                             crate::build_info::version()
                         ),
-                        theme::semibold(15.0),
+                        theme::semibold(theme::BODY_TEXT),
                         palette.text,
                     );
                     if let Some(mb) = crate::util::memory_used_mb() {
                         theme::text(
                             ui,
                             format!("memory used: {mb} MB"),
-                            theme::regular(12.0),
+                            theme::regular(theme::SMALL_TEXT),
                             palette.dim,
                         );
                         ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
@@ -1637,7 +1637,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     "Index folder: {}",
                     app.dirs.index_dir().display()
                 ))
-                .font(theme::regular(12.0))
+                .font(theme::regular(theme::SMALL_TEXT))
                 .color(palette.secondary),
             );
             ui.horizontal_wrapped(|ui| {
@@ -1758,7 +1758,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
             note(ui, &palette, "Writes the colours on screen (cover colours, Auto drift, your swatch pick, gradient) to one small file, many times a second, so a keyboard or microphone light app can match them. Nothing goes over the network. Off by default; the file is removed when this is off.");
             ui.horizontal_wrapped(|ui| {
                 theme::subtle(ui, &palette, "File:");
-                ui.label(egui::RichText::new(path.display().to_string()).font(theme::regular(12.0)).color(palette.secondary));
+                ui.label(egui::RichText::new(path.display().to_string()).font(theme::regular(theme::SMALL_TEXT)).color(palette.secondary));
             });
             ui.add_space(8.0);
         });
@@ -1785,10 +1785,10 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                                 palette.secondary,
                             ),
                         };
-                        theme::text(ui, text, theme::regular(12.5), colour);
+                        theme::text(ui, text, theme::regular(theme::SMALL_TEXT), colour);
                         let problem = crate::discord::last_error();
                         if !problem.is_empty() {
-                            theme::text(ui, &problem, theme::regular(12.0), palette.warning);
+                            theme::text(ui, &problem, theme::regular(theme::SMALL_TEXT), palette.warning);
                         }
                         ui.ctx().request_repaint_after(std::time::Duration::from_secs(2));
                     }
@@ -1852,7 +1852,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                 ui.add_space(4.0);
             }
             if crate::lastfm::DEFAULT_API_KEY.is_empty() {
-                theme::text(ui, "Set up Last.fm in 4 steps", theme::semibold(13.0), palette.text);
+                theme::text(ui, "Set up Last.fm in 4 steps", theme::semibold(theme::BODY_TEXT), palette.text);
                 for line in [
                     "1. Open the Last.fm page below and sign in.",
                     "2. Type any name (chanceify) and a short description. Leave the callback box empty.",
@@ -2025,7 +2025,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     egui::RichText::new(
                         "A short guided tour that lights up parts of the window. Change the steps below; they are saved in your index folder (tour.json).",
                     )
-                    .font(theme::regular(13.0))
+                    .font(theme::regular(theme::BODY_TEXT))
                     .color(palette.secondary),
                 )
                 .wrap(),
@@ -2038,7 +2038,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
             for index in 0..count {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    theme::text(ui, format!("Step {}", index + 1), theme::semibold(13.0), palette.text);
+                    theme::text(ui, format!("Step {}", index + 1), theme::semibold(theme::BODY_TEXT), palette.text);
                     if index > 0 && theme::pill_button(ui, &palette, "Up", false).clicked() {
                         swap = Some((index, index - 1));
                     }
@@ -2363,12 +2363,12 @@ fn eq_slider(ui: &mut egui::Ui, palette: &Palette, label: &str, value: &mut f32,
                     pos2(track.center().x, rect.top() + 2.0),
                     egui::Align2::CENTER_TOP,
                     format!("{value:+.1}"),
-                    theme::regular(11.0),
+                    theme::regular(theme::SMALL_TEXT),
                     palette.secondary,
                 );
             }
         }
-        theme::text(ui, label, theme::regular(11.5), palette.secondary);
+        theme::text(ui, label, theme::regular(theme::SMALL_TEXT), palette.secondary);
         changed
     })
     .inner
@@ -2537,7 +2537,7 @@ fn note(ui: &mut egui::Ui, palette: &Palette, text: &str) {
     ui.add(
         egui::Label::new(
             egui::RichText::new(text)
-                .font(theme::regular(13.0))
+                .font(theme::regular(theme::BODY_TEXT))
                 .color(palette.secondary),
         )
         .wrap(),
@@ -2603,7 +2603,7 @@ fn missing_lists(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
             format!("Missing album covers ({})", names.len())
         };
         let folder = root.join(if artists { "artists-missing" } else { "albums-missing" });
-        egui::CollapsingHeader::new(egui::RichText::new(title).font(theme::semibold(13.5)).color(palette.text))
+        egui::CollapsingHeader::new(egui::RichText::new(title).font(theme::semibold(theme::BODY_TEXT)).color(palette.text))
             .id_salt(("missing-fold", artists))
             .default_open(false)
             .show(ui, |ui| {
@@ -2661,7 +2661,7 @@ fn missing_lists(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
                             ui.add(
                                 egui::Label::new(
                                     egui::RichText::new(name.as_str())
-                                        .font(theme::regular(13.0))
+                                        .font(theme::regular(theme::BODY_TEXT))
                                         .color(palette.text),
                                 )
                                 .truncate(),
@@ -2792,7 +2792,7 @@ fn theme_grid(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette)
                 pos2(rect.left() + 2.0, rect.bottom() - 14.0),
                 egui::Align2::LEFT_CENTER,
                 name.replace(" (light)", "").replace(" (see-through)", ""),
-                theme::regular(12.0),
+                theme::regular(theme::SMALL_TEXT),
                 if current { palette.accent } else { palette.text },
             );
             if response.hovered() {

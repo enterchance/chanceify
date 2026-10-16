@@ -16,8 +16,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     ui.add_space(6.0);
     let greeting = crate::util::greeting(app.locale);
-    theme::text(ui, greeting.as_ref(), theme::bold(30.0), palette.text);
-    theme::text(ui, crate::util::welcome_line(), theme::regular(15.0), palette.secondary);
+    theme::text(ui, greeting.as_ref(), theme::bold(theme::TITLE_TEXT), palette.text);
+    theme::text(ui, crate::util::welcome_line(), theme::regular(theme::BODY_TEXT), palette.secondary);
     ui.add_space(10.0);
     let tab = app.settings.home.tab.min(1);
     ui.horizontal(|ui| {
@@ -165,7 +165,7 @@ fn new_releases(app: &mut App, ui: &mut egui::Ui) {
                     number.center(),
                     egui::Align2::CENTER_CENTER,
                     format!("{}", index + 1),
-                    theme::semibold(13.0),
+                    theme::semibold(theme::BODY_TEXT),
                     palette.dim,
                 );
                 let cover = Rect::from_min_size(pos2(rect.left() + 40.0, rect.top()), Vec2::splat(60.0));
@@ -189,7 +189,7 @@ fn new_releases(app: &mut App, ui: &mut egui::Ui) {
                     text.right(),
                     rect.center().y - 10.0,
                     &release.name,
-                    theme::bold(14.0),
+                    theme::bold(theme::BODY_TEXT),
                     palette.text,
                 );
                 crate::bidi::paint_line(
@@ -203,7 +203,7 @@ fn new_releases(app: &mut App, ui: &mut egui::Ui) {
                         if release.kind == "single" { "Single" } else { "Album" },
                         release.date
                     ),
-                    theme::regular(12.0),
+                    theme::regular(theme::SMALL_TEXT),
                     palette.secondary,
                 );
                 // Play and remove, at the right of the row. Asking first when the
@@ -219,7 +219,7 @@ fn new_releases(app: &mut App, ui: &mut egui::Ui) {
                         pos2(yes_rect.left() - 8.0, rect.center().y),
                         egui::Align2::RIGHT_CENTER,
                         "Remove it?",
-                        theme::regular(12.0),
+                        theme::regular(theme::SMALL_TEXT),
                         palette.warning,
                     );
                     for (area, label, yes) in [(yes_rect, "Yes", true), (no_rect, "No", false)] {
@@ -229,7 +229,7 @@ fn new_releases(app: &mut App, ui: &mut egui::Ui) {
                             CornerRadius::same(6),
                             if yes { palette.accent.gamma_multiply(0.45) } else { palette.surface_hover },
                         );
-                        ui.painter().text(area.center(), egui::Align2::CENTER_CENTER, label, theme::semibold(12.5), palette.text);
+                        ui.painter().text(area.center(), egui::Align2::CENTER_CENTER, label, theme::semibold(theme::SMALL_TEXT), palette.text);
                         if r.clicked() {
                             used_button = true;
                             if yes {
@@ -308,13 +308,13 @@ fn stats_section(app: &mut App, ui: &mut egui::Ui) {
         theme::text(
             ui,
             &format!("{}:", gettext(app.locale, "Last 30 days")),
-            theme::semibold(14.0),
+            theme::semibold(theme::BODY_TEXT),
             palette.text,
         );
         theme::text(
             ui,
             &format!("{} songs, {}", summary.month, hours(summary.minutes_month)),
-            theme::regular(14.0),
+            theme::regular(theme::BODY_TEXT),
             palette.secondary,
         );
     });
@@ -447,7 +447,7 @@ fn stat_tile(
         chip.center(),
         egui::Align2::CENTER_CENTER,
         format!("{}", index + 1),
-        theme::semibold(9.5),
+        theme::semibold(theme::TINY_TEXT),
         egui::Color32::WHITE,
     );
     let text = Rect::from_min_max(
@@ -461,7 +461,7 @@ fn stat_tile(
         text.right(),
         rect.center().y - 8.0,
         &row.name,
-        theme::bold(12.5),
+        theme::bold(theme::SMALL_TEXT),
         palette.text,
     );
     if song && !row.uri.is_empty() && response.hovered() {
@@ -476,7 +476,7 @@ fn stat_tile(
             text.right(),
             rect.center().y + 8.0,
             &row.sub,
-            theme::regular(11.0),
+            theme::regular(theme::SMALL_TEXT),
             if row.artist_id.is_empty() { palette.secondary } else { palette.text },
         );
         if !row.artist_id.is_empty() {
@@ -498,7 +498,7 @@ fn stat_tile(
             text.right(),
             rect.center().y + 8.0,
             &plays,
-            theme::regular(10.5),
+            theme::regular(theme::TINY_TEXT),
             palette.dim,
         );
     } else {
@@ -508,7 +508,7 @@ fn stat_tile(
             text.right(),
             rect.center().y + 8.0,
             &plays,
-            theme::regular(11.0),
+            theme::regular(theme::SMALL_TEXT),
             palette.secondary,
         );
     }
@@ -660,7 +660,7 @@ fn quick_access(app: &mut App, ui: &mut egui::Ui) {
                         text_rect.right(),
                         rect.center().y,
                         name,
-                        theme::bold(14.5),
+                        theme::bold(theme::BODY_TEXT),
                         palette.text,
                     );
                     if hovered && let Some(uri) = uri {
@@ -1150,7 +1150,7 @@ fn track_list(
         Loadable::Loaded(tracks) => tracks,
         Loadable::Loading | Loadable::NotLoaded => {
             if let Some(page) = title_page {
-                if theme::link(ui, title, theme::bold(17.0), palette.text).clicked() {
+                if theme::link(ui, title, theme::bold(theme::SECTION_TEXT), palette.text).clicked() {
                     app.actions.push(Action::Open(page));
                 }
             } else {
@@ -1171,7 +1171,7 @@ fn track_list(
         return;
     }
     if let Some(page) = title_page {
-        if theme::link(ui, title, theme::bold(17.0), palette.text).clicked() {
+        if theme::link(ui, title, theme::bold(theme::SECTION_TEXT), palette.text).clicked() {
             app.actions.push(Action::Open(page));
         }
     } else {
@@ -1211,7 +1211,7 @@ fn track_list(
     }
     if let Some(label) = more_label
         && tracks.len() > limit
-        && theme::link(ui, label, theme::semibold(14.0), palette.secondary).clicked()
+        && theme::link(ui, label, theme::semibold(theme::BODY_TEXT), palette.secondary).clicked()
     {
         app.actions.push(Action::Open(Page::TopSongs));
     }

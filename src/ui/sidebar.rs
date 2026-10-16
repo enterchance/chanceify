@@ -412,7 +412,7 @@ fn library_menu_body(app: &mut App, ui: &mut egui::Ui, shelf: Filter, selected: 
     let mut widest = 140.0_f32;
     let measure = |ui: &egui::Ui, label: &str| {
         ui.painter()
-            .layout_no_wrap(label.to_string(), theme::regular(13.5), app.palette.text)
+            .layout_no_wrap(label.to_string(), theme::regular(theme::BODY_TEXT), app.palette.text)
             .size()
             .x
     };
@@ -573,7 +573,7 @@ fn sort_chip(
             ui.painter().line_segment([c, c + vec2(3.5, 1.5)], stroke);
         }
         LibrarySort::Name => {
-            ui.painter().text(c, egui::Align2::CENTER_CENTER, "A-Z", theme::regular(10.0), ink);
+            ui.painter().text(c, egui::Align2::CENTER_CENTER, "A-Z", theme::regular(theme::TINY_TEXT), ink);
         }
         LibrarySort::Local => {
             // A key: a ring and a shaft with two teeth.
@@ -1177,7 +1177,7 @@ fn nav_row(
             pos2(rect.left() + 46.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
             label,
-            theme::bold(15.0),
+            theme::bold(theme::BODY_TEXT),
             color,
         );
     }
@@ -1739,7 +1739,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, grid_art: Option<Rect>) {
                             pos2(rect.left() + LIBRARY_ITEM_PADDING, rect.bottom() - 11.0),
                             egui::Align2::LEFT_CENTER,
                             entry.name.to_uppercase(),
-                            theme::medium(11.5),
+                            theme::medium(theme::SMALL_TEXT),
                             palette.dim,
                         );
                         ui.painter().hline(
@@ -1875,7 +1875,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, grid_art: Option<Rect>) {
                                 text_right,
                                 rect.center().y + 10.0,
                                 &entry.subtitle,
-                                theme::regular(12.5),
+                                theme::regular(theme::SMALL_TEXT),
                                 palette.secondary,
                             );
                         }
@@ -1981,7 +1981,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, grid_art: Option<Rect>) {
                                 text_right,
                                 rect.center().y + 10.0,
                                 &entry.subtitle,
-                                theme::regular(12.5),
+                                theme::regular(theme::SMALL_TEXT),
                                 palette.secondary,
                             );
                         }

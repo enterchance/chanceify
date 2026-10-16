@@ -19,7 +19,7 @@ pub fn page(app: &mut App, ui: &mut egui::Ui) {
     theme::text(
         ui,
         gettext(app.locale, "Queue"),
-        theme::bold(28.0),
+        theme::bold(theme::TITLE_TEXT),
         palette.text,
     );
     ui.add_space(12.0);
@@ -252,7 +252,7 @@ fn clear_question(app: &mut App, ui: &mut egui::Ui) {
     theme::text(
         ui,
         &*gettext(app.locale, "Are you sure you want to clear the queue?"),
-        theme::regular(13.0),
+        theme::regular(theme::BODY_TEXT),
         palette.text,
     );
     ui.horizontal(|ui| {
@@ -368,7 +368,7 @@ fn contents_inner(app: &mut App, ui: &mut egui::Ui, compact: bool) {
             theme::text(
                 ui,
                 gettext(app.locale, "Now playing"),
-                theme::semibold(14.0),
+                theme::semibold(theme::BODY_TEXT),
                 palette.text,
             );
             if let Some(from) = &from {
@@ -469,7 +469,7 @@ fn contents_inner(app: &mut App, ui: &mut egui::Ui, compact: bool) {
                     // Translators: Songs added manually, before the current playlist or album continues.
                     "Playing next",
                 ),
-                theme::semibold(14.0),
+                theme::semibold(theme::BODY_TEXT),
                 palette.text,
             );
             clear_button(app, ui);
@@ -575,7 +575,7 @@ fn contents_inner(app: &mut App, ui: &mut egui::Ui, compact: bool) {
                 // Translators: Upcoming songs from the current playlist or album, after manually queued songs.
                 "Next up",
             ),
-            theme::semibold(14.0),
+            theme::semibold(theme::BODY_TEXT),
             palette.text,
         );
         ui.add_space(4.0);
@@ -618,7 +618,7 @@ fn recents_contents_inner(app: &mut App, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
                 theme::icon(ui, Icon::CircleAlert, 16.0, palette.danger);
-                theme::text(ui, &err, theme::regular(13.0), palette.secondary);
+                theme::text(ui, &err, theme::regular(theme::BODY_TEXT), palette.secondary);
                 if theme::soft_button(
                     ui,
                     &palette,
@@ -651,7 +651,7 @@ fn recents_contents_inner(app: &mut App, ui: &mut egui::Ui) {
     if let Some(err) = error {
         ui.horizontal(|ui| {
             theme::icon(ui, Icon::CircleAlert, 14.0, palette.danger);
-            theme::text(ui, &err, theme::regular(12.0), palette.secondary);
+            theme::text(ui, &err, theme::regular(theme::SMALL_TEXT), palette.secondary);
             if theme::soft_button(
                 ui,
                 &palette,

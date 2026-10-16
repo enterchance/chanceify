@@ -756,7 +756,7 @@ fn track_heading(app: &App, ui: &mut egui::Ui) {
                     ui.add(
                         egui::Label::new(
                             egui::RichText::new(&now.subtitle)
-                                .font(theme::regular(13.0))
+                                .font(theme::regular(theme::BODY_TEXT))
                                 .color(Color32::from_gray(235)),
                         )
                         .truncate(),

@@ -378,7 +378,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     None => gettext(locale, "Playing on another device").into_owned(),
                 };
                 ui.painter()
-                    .layout_no_wrap(label, theme::medium(12.5), palette.accent)
+                    .layout_no_wrap(label, theme::medium(theme::SMALL_TEXT), palette.accent)
             });
             let update = app.update.clone();
             let update_galley = update.as_ref().map(|update| {
@@ -395,7 +395,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     }
                 };
                 ui.painter()
-                    .layout_no_wrap(label, theme::medium(12.5), palette.accent)
+                    .layout_no_wrap(label, theme::medium(theme::SMALL_TEXT), palette.accent)
             });
             // Ask once, so the bar reserves room for exactly the spinner it
             // then draws.
@@ -530,7 +530,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                                 inner.center(),
                                 egui::Align2::CENTER_CENTER,
                                 initial,
-                                theme::bold(13.0),
+                                theme::bold(theme::BODY_TEXT),
                                 palette.on_accent,
                             );
                         }
@@ -566,7 +566,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         let product = app.user.as_ref().and_then(|user| user.product.clone());
                         let wide = ui
                             .painter()
-                            .layout_no_wrap(name.clone(), theme::semibold(14.0), palette.text)
+                            .layout_no_wrap(name.clone(), theme::semibold(theme::BODY_TEXT), palette.text)
                             .size()
                             .x;
                         let size = if wide > 130.0 { (14.0 * 130.0 / wide).clamp(10.0, 14.0) } else { 14.0 };
@@ -583,7 +583,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         if let Some(product) = product {
                             // In the chanceify purple that melts into the theme accent.
                             let label = product.to_lowercase();
-                            let font = theme::semibold(12.0);
+                            let font = theme::semibold(theme::SMALL_TEXT);
                             let from = egui::Color32::from_rgb(150, 90, 255);
                             let to = palette.accent;
                             let count = label.chars().count().max(2) - 1;

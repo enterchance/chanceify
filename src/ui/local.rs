@@ -68,7 +68,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
 
     ui.add_space(8.0);
-    theme::text(ui, "Local songs", theme::bold(28.0), palette.text);
+    theme::text(ui, "Local songs", theme::bold(theme::TITLE_TEXT), palette.text);
     ui.add_space(4.0);
     theme::subtle(
         ui,
@@ -361,7 +361,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             pos2(cell.left(), cell.center().y),
             Align2::LEFT_CENTER,
             format!("{name}{arrow}"),
-            theme::regular(12.0),
+            theme::regular(theme::SMALL_TEXT),
             color,
         );
         if response.clicked() {
@@ -435,7 +435,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         pos2(clip.left(), rect.center().y),
                         Align2::LEFT_CENTER,
                         text,
-                        theme::regular(13.0),
+                        theme::regular(theme::BODY_TEXT),
                         color,
                     );
                     x += w;

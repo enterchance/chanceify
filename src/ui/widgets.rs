@@ -782,7 +782,7 @@ fn menu_row(
         let wanted = crate::bidi::layout(
             ui.painter(),
             label,
-            theme::regular(13.5),
+            theme::regular(theme::BODY_TEXT),
             palette.text,
             f32::INFINITY,
             1,
@@ -840,7 +840,7 @@ fn menu_row(
         let galley = crate::bidi::layout(
             ui.painter(),
             label,
-            theme::regular(13.5),
+            theme::regular(theme::BODY_TEXT),
             color,
             (rect.right() - 10.0 - x).max(0.0),
             1,
@@ -917,7 +917,7 @@ fn submenu<R>(
         let wanted = crate::bidi::layout(
             ui.painter(),
             label,
-            theme::regular(13.5),
+            theme::regular(theme::BODY_TEXT),
             palette.text,
             f32::INFINITY,
             1,
@@ -952,7 +952,7 @@ fn submenu<R>(
         let arrow_galley = crate::bidi::layout(
             ui.painter(),
             egui::menu::SubMenuButton::RIGHT_ARROW,
-            theme::regular(11.0),
+            theme::regular(theme::SMALL_TEXT),
             palette.secondary,
             16.0,
             1,
@@ -979,7 +979,7 @@ fn submenu<R>(
         let galley = crate::bidi::layout(
             ui.painter(),
             label,
-            theme::regular(13.5),
+            theme::regular(theme::BODY_TEXT),
             color,
             max_text_width,
             1,
@@ -1039,7 +1039,7 @@ pub fn menu_group(ui: &mut Ui, palette: &Palette, label: &str) {
     let galley = crate::bidi::layout(
         ui.painter(),
         label,
-        theme::semibold(11.0),
+        theme::semibold(theme::SMALL_TEXT),
         palette.dim,
         rect.width() - 12.0,
         1,
@@ -1100,7 +1100,7 @@ pub fn picked_menu(
                 )
                 .replace("{count}", &count.to_string()),
             )
-            .font(theme::medium(12.0))
+            .font(theme::medium(theme::SMALL_TEXT))
             .color(palette.secondary),
         );
     });
@@ -1394,7 +1394,7 @@ pub fn item_menu(
                 let galley = crate::bidi::layout(
                     ui.painter(),
                     text,
-                    theme::regular(13.5),
+                    theme::regular(theme::BODY_TEXT),
                     palette.text,
                     f32::INFINITY,
                     1,
@@ -2470,7 +2470,7 @@ fn track_row_contents(
                 cell.center(),
                 egui::Align2::CENTER_CENTER,
                 label,
-                theme::regular(14.0),
+                theme::regular(theme::BODY_TEXT),
                 color,
             );
         }
@@ -2581,7 +2581,7 @@ fn track_row_contents(
                     pos2(at + 10.0, rect.center().y),
                     egui::Align2::LEFT_CENTER,
                     util::format_duration_ms(row.item.duration_ms()),
-                    theme::regular(13.0),
+                    theme::regular(theme::BODY_TEXT),
                     palette.secondary,
                 );
             }
@@ -2604,7 +2604,7 @@ fn track_row_contents(
             pos2(text_right + 6.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
             label,
-            theme::regular(12.0),
+            theme::regular(theme::SMALL_TEXT),
             palette.secondary,
         );
         if label.ends_with(" ago") {
@@ -2684,7 +2684,7 @@ fn track_row_contents(
         song_name_cell(
             &mut child,
             row.item.name(),
-            theme::medium(14.0),
+            theme::medium(theme::BODY_TEXT),
             title_color,
             hovered,
             // The artists and, when there is no date column, the date as
@@ -2700,14 +2700,14 @@ fn track_row_contents(
                 theme::text(
                     &mut child,
                     "•",
-                    theme::regular(12.0),
+                    theme::regular(theme::SMALL_TEXT),
                     palette.secondary.gamma_multiply(0.6),
                 );
                 artist_links(
                     &mut child,
                     app,
                     &track.artists,
-                    theme::regular(13.0),
+                    theme::regular(theme::BODY_TEXT),
                     subtitle_color,
                 );
                 if let Some(added) = row.added_at.filter(|a| !a.starts_with("1970-01-01"))
@@ -2719,10 +2719,10 @@ fn track_row_contents(
                     theme::text(
                         &mut child,
                         "•",
-                        theme::regular(12.0),
+                        theme::regular(theme::SMALL_TEXT),
                         palette.secondary.gamma_multiply(0.6),
                     );
-                    theme::text(&mut child, &label, theme::regular(12.0), palette.secondary);
+                    theme::text(&mut child, &label, theme::regular(theme::SMALL_TEXT), palette.secondary);
                     if label.ends_with(" ago") {
                         ui.ctx()
                             .request_repaint_after(std::time::Duration::from_secs(1));
@@ -2739,12 +2739,12 @@ fn track_row_contents(
                     theme::text(
                         &mut child,
                         "•",
-                        theme::regular(12.0),
+                        theme::regular(theme::SMALL_TEXT),
                         palette.secondary.gamma_multiply(0.6),
                     );
                     let show_id = episode.show.as_ref().map(|show| show.id.clone());
                     let response =
-                        theme::link(&mut child, subtitle, theme::regular(13.0), subtitle_color);
+                        theme::link(&mut child, subtitle, theme::regular(theme::BODY_TEXT), subtitle_color);
                     if response.clicked()
                         && let Some(id) = show_id
                     {
@@ -2758,12 +2758,12 @@ fn track_row_contents(
                     theme::text(
                         &mut child,
                         "•",
-                        theme::regular(12.0),
+                        theme::regular(theme::SMALL_TEXT),
                         palette.secondary.gamma_multiply(0.6),
                     );
                     let label =
                         util::format_relative_date(app.locale, added, jiff::Timestamp::now());
-                    theme::text(&mut child, &label, theme::regular(12.0), palette.secondary);
+                    theme::text(&mut child, &label, theme::regular(theme::SMALL_TEXT), palette.secondary);
                     if label.ends_with(" ago") {
                         ui.ctx()
                             .request_repaint_after(std::time::Duration::from_secs(1));
@@ -2810,7 +2810,7 @@ fn track_row_contents(
                         ui,
                         app,
                         &track.artists,
-                        theme::regular(12.5),
+                        theme::regular(theme::SMALL_TEXT),
                         subtitle_color,
                     );
                     if let Some(added) = row.added_at.filter(|a| !a.starts_with("1970-01-01"))
@@ -2820,12 +2820,12 @@ fn track_row_contents(
                         theme::text(
                             ui,
                             "•",
-                            theme::regular(12.0),
+                            theme::regular(theme::SMALL_TEXT),
                             palette.secondary.gamma_multiply(0.6),
                         );
                         let label =
                             util::format_relative_date(app.locale, added, jiff::Timestamp::now());
-                        theme::text(ui, &label, theme::regular(12.0), palette.secondary);
+                        theme::text(ui, &label, theme::regular(theme::SMALL_TEXT), palette.secondary);
                         if label.ends_with(" ago") {
                             ui.ctx()
                                 .request_repaint_after(std::time::Duration::from_secs(1));
@@ -2839,7 +2839,7 @@ fn track_row_contents(
                         .map(|show| show.name.clone())
                         .unwrap_or_default();
                     let show_id = episode.show.as_ref().map(|show| show.id.clone());
-                    let response = theme::link(ui, subtitle, theme::regular(12.5), subtitle_color);
+                    let response = theme::link(ui, subtitle, theme::regular(theme::SMALL_TEXT), subtitle_color);
                     if response.clicked()
                         && let Some(id) = show_id
                     {
@@ -2852,12 +2852,12 @@ fn track_row_contents(
                         theme::text(
                             ui,
                             "•",
-                            theme::regular(12.0),
+                            theme::regular(theme::SMALL_TEXT),
                             palette.secondary.gamma_multiply(0.6),
                         );
                         let label =
                             util::format_relative_date(app.locale, added, jiff::Timestamp::now());
-                        theme::text(ui, &label, theme::regular(12.0), palette.secondary);
+                        theme::text(ui, &label, theme::regular(theme::SMALL_TEXT), palette.secondary);
                         if label.ends_with(" ago") {
                             ui.ctx()
                                 .request_repaint_after(std::time::Duration::from_secs(1));
@@ -2895,7 +2895,7 @@ fn track_row_contents(
             // The album name wraps onto a second line before it is cut off
             // with an ellipsis, so a narrow column still says something.
             let width = (cols.album - 12.0).max(10.0);
-            let galley = ellipsized(ui, &album.name, theme::regular(13.0), subtitle_color, width, 2);
+            let galley = ellipsized(ui, &album.name, theme::regular(theme::BODY_TEXT), subtitle_color, width, 2);
             let size = galley.size();
             let text_rect = Rect::from_min_size(
                 pos2(x, rect.center().y - size.y / 2.0),
@@ -2934,7 +2934,7 @@ fn track_row_contents(
                 cell.right(),
                 cell.center().y,
                 adder,
-                theme::regular(13.0),
+                theme::regular(theme::BODY_TEXT),
                 palette.secondary,
             );
         }
@@ -2986,7 +2986,7 @@ fn track_row_contents(
                 x + (cols.genre - 8.0).max(0.0),
                 rect.center().y,
                 &names.join(", "),
-                theme::regular(13.0),
+                theme::regular(theme::BODY_TEXT),
                 palette.secondary,
             );
         }
@@ -3010,7 +3010,7 @@ fn track_row_contents(
             // column read at a glance while scrolling. 104 is what the
             // record is.
             let label = format!("{}", tempo.round());
-            let galley = fitted_galley(&painter, &label, &theme::regular(13.0), 5.0, (cell.width() - 8.0).max(10.0), palette.secondary);
+            let galley = fitted_galley(&painter, &label, &theme::regular(theme::BODY_TEXT), 5.0, (cell.width() - 8.0).max(10.0), palette.secondary);
             let at = pos2(cell.left(), cell.center().y - galley.size().y / 2.0);
             painter.galley(at, galley, palette.secondary);
         }
@@ -3095,7 +3095,7 @@ fn track_row_contents(
             pos2(duration_rect.left() + 10.0, duration_rect.center().y),
             egui::Align2::LEFT_CENTER,
             util::format_duration_ms(row.item.duration_ms()),
-            theme::regular(13.0),
+            theme::regular(theme::BODY_TEXT),
             palette.secondary,
         );
         x += cols.duration;
@@ -3331,7 +3331,7 @@ pub fn drag_ghost(ctx: &egui::Context, palette: &Palette, locale: Locale) {
                         ui.add(
                             egui::Label::new(
                                 egui::RichText::new(&title)
-                                    .font(theme::medium(13.0))
+                                    .font(theme::medium(theme::BODY_TEXT))
                                     .color(palette.text),
                             )
                             .truncate()
@@ -3416,7 +3416,7 @@ fn explicit_badge_unused(ui: &mut Ui, palette: &Palette) {
         rect.center(),
         egui::Align2::CENTER_CENTER,
         "E",
-        theme::bold(9.5),
+        theme::bold(theme::TINY_TEXT),
         palette.window,
     );
 }
@@ -3527,7 +3527,7 @@ fn checkbox_row_ex(
             pos2(rect.left() + 34.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
             label,
-            theme::regular(13.5),
+            theme::regular(theme::BODY_TEXT),
             if enabled { palette.text } else { palette.secondary },
         );
         if !note.is_empty() {
@@ -3535,7 +3535,7 @@ fn checkbox_row_ex(
                 pos2(rect.right() - 10.0, rect.center().y),
                 egui::Align2::RIGHT_CENTER,
                 note,
-                theme::regular(11.5),
+                theme::regular(theme::SMALL_TEXT),
                 palette.secondary,
             );
         }
@@ -3578,7 +3578,7 @@ fn sort_menu_row(
                 pos2(x, rect.center().y),
                 egui::Align2::LEFT_CENTER,
                 place.to_string(),
-                theme::bold(12.0),
+                theme::bold(theme::SMALL_TEXT),
                 palette.accent,
             );
             x += 18.0;
@@ -3587,7 +3587,7 @@ fn sort_menu_row(
         let galley = crate::bidi::layout(
             ui.painter(),
             label,
-            theme::regular(13.5),
+            theme::regular(theme::BODY_TEXT),
             palette.text,
             (rect.right() - 10.0 - x - arrow_room).max(0.0),
             1,
@@ -3850,7 +3850,7 @@ pub fn table_header(
     let mut action = HeaderAction::default();
     let width = ui.available_width();
     let (rect, row) = ui.allocate_exact_size(vec2(width, 34.0), Sense::click());
-    let font = theme::regular(12.0);
+    let font = theme::regular(theme::SMALL_TEXT);
     let color = palette.secondary;
     let mut widths = *columns;
     let mut clicked = None;
@@ -4215,8 +4215,8 @@ pub fn card_row_height(ui: &mut Ui) -> f32 {
     const SUBTITLE_GAP: f32 = 2.0;
     const BOTTOM_PAD: f32 = 8.0;
     let image_size = CARD_WIDTH - 2.0 * PAD;
-    let title_font = theme::semibold(14.0);
-    let subtitle_font = theme::regular(12.5);
+    let title_font = theme::semibold(theme::BODY_TEXT);
+    let subtitle_font = theme::regular(theme::SMALL_TEXT);
     let (title_row, subtitle_row) = ui.fonts_mut(|fonts| {
         (
             fonts.row_height(&title_font),
@@ -4247,8 +4247,8 @@ pub fn card(
     const BOTTOM_PAD: f32 = 8.0;
     let image_size = CARD_WIDTH - 2.0 * PAD;
     let text_width = image_size;
-    let title_font = theme::semibold(14.0);
-    let subtitle_font = theme::regular(12.5);
+    let title_font = theme::semibold(theme::BODY_TEXT);
+    let subtitle_font = theme::regular(theme::SMALL_TEXT);
     // Every card reserves the title row and two subtitle rows, whatever its
     // own subtitle needs: a two-line subtitle then sits inside the hover
     // background, and a shelf that mixes one- and two-line subtitles keeps
@@ -4424,7 +4424,7 @@ pub fn error_row(ui: &mut Ui, app: &mut App, message: &str, retry: Option<Page>)
     ui.horizontal(|ui| {
         ui.add_space(8.0);
         theme::icon(ui, Icon::CircleAlert, 16.0, palette.danger);
-        theme::text(ui, message, theme::regular(13.0), palette.secondary);
+        theme::text(ui, message, theme::regular(theme::BODY_TEXT), palette.secondary);
         if let Some(page) = retry
             && theme::soft_button(
                 ui,
@@ -4445,9 +4445,9 @@ pub fn empty_state(ui: &mut Ui, palette: &Palette, icon: Icon, title: &str, body
     ui.vertical_centered(|ui| {
         theme::icon(ui, icon, 40.0, palette.dim);
         ui.add_space(8.0);
-        theme::text(ui, title, theme::semibold(16.0), palette.text);
+        theme::text(ui, title, theme::semibold(theme::SECTION_TEXT), palette.text);
         ui.add_space(2.0);
-        theme::text(ui, body, theme::regular(13.5), palette.secondary);
+        theme::text(ui, body, theme::regular(theme::BODY_TEXT), palette.secondary);
     });
 }
 
@@ -4803,7 +4803,7 @@ pub fn search_field(
             .painter()
             .layout_job(egui::text::LayoutJob::simple_singleline(
                 buffer.as_str().to_owned(),
-                theme::regular(14.0),
+                theme::regular(theme::BODY_TEXT),
                 text_color,
             ));
         crate::bidi::reorder(&mut galley);
@@ -4815,7 +4815,7 @@ pub fn search_field(
         egui::TextEdit::singleline(text)
             .id(id)
             .hint_text(egui::RichText::new(crate::i18n::ui_text(hint).into_owned()).color(palette.dim))
-            .font(theme::regular(14.0))
+            .font(theme::regular(theme::BODY_TEXT))
             .text_color(palette.text)
             .frame(egui::Frame::NONE)
             .desired_width(field_rect.width())
@@ -4885,7 +4885,7 @@ pub fn switch_labeled(ui: &mut Ui, palette: &Palette, label: &str, on: &mut bool
         let response = switch(ui, palette, label, on);
         ui.add(egui::Label::new(
             egui::RichText::new(label)
-                .font(theme::regular(13.0))
+                .font(theme::regular(theme::BODY_TEXT))
                 .color(palette.text),
         ).wrap());
         response
@@ -4905,13 +4905,13 @@ pub fn credit(ui: &mut Ui, palette: &Palette, locale: Locale) -> bool {
     let mut clicked = false;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
-        theme::text(ui, "\u{2665}  ", theme::regular(13.0), palette.danger);
-        theme::text(ui, before, theme::regular(13.0), palette.secondary);
+        theme::text(ui, "\u{2665}  ", theme::regular(theme::BODY_TEXT), palette.danger);
+        theme::text(ui, before, theme::regular(theme::BODY_TEXT), palette.secondary);
         let name = ui
             .add(
                 egui::Label::new(
                     egui::RichText::new("chance")
-                        .font(theme::medium(13.0))
+                        .font(theme::medium(theme::BODY_TEXT))
                         .color(palette.accent)
                         .underline(),
                 )
@@ -4920,7 +4920,7 @@ pub fn credit(ui: &mut Ui, palette: &Palette, locale: Locale) -> bool {
             .on_hover_cursor(egui::CursorIcon::PointingHand);
         clicked = name.clicked();
         if !after.is_empty() {
-            theme::text(ui, after, theme::regular(13.0), palette.secondary);
+            theme::text(ui, after, theme::regular(theme::BODY_TEXT), palette.secondary);
         }
         // One of chance's little pictures after the name, a different one
         // each time chanceify starts.
@@ -4933,7 +4933,7 @@ pub fn credit(ui: &mut Ui, palette: &Palette, locale: Locale) -> bool {
             .add(
                 egui::Label::new(
                     egui::RichText::new(gettext(locale, "source code"))
-                        .font(theme::regular(10.0))
+                        .font(theme::regular(theme::TINY_TEXT))
                         .color(palette.dim)
                         .underline(),
                 )
@@ -5033,12 +5033,12 @@ fn setting_row_full(
 ) {
     let reserved = (control_width + 16.0).max(SETTING_CONTROL_WIDTH);
     let text = |ui: &mut Ui| {
-        theme::text(ui, crate::i18n::ui_text(label), theme::medium(14.0), palette.text);
+        theme::text(ui, crate::i18n::ui_text(label), theme::medium(theme::BODY_TEXT), palette.text);
         if show_description && !description.is_empty() {
             ui.add(
                 egui::Label::new(
                     egui::RichText::new(crate::i18n::ui_text(description))
-                        .font(theme::regular(12.5))
+                        .font(theme::regular(theme::SMALL_TEXT))
                         .color(palette.secondary),
                 )
                 .wrap(),
@@ -5080,7 +5080,7 @@ pub fn labeled_field(
 ) -> egui::Response {
     let response = ui
         .vertical(|ui| {
-            theme::text(ui, label, theme::medium(13.0), palette.text);
+            theme::text(ui, label, theme::medium(theme::BODY_TEXT), palette.text);
             ui.add_space(6.0);
             Frame::new()
                 .fill(palette.surface)
@@ -5092,7 +5092,7 @@ pub fn labeled_field(
                         locale,
                         egui::TextEdit::singleline(value)
                             .hint_text(egui::RichText::new(hint).color(palette.dim))
-                            .font(theme::regular(14.0))
+                            .font(theme::regular(theme::BODY_TEXT))
                             .password(password)
                             .frame(egui::Frame::NONE)
                             .desired_width(ui.available_width()),
@@ -5202,7 +5202,7 @@ pub fn proxy_scope_note(
     ui.add(
         egui::Label::new(
             egui::RichText::new(note)
-                .font(theme::regular(13.0))
+                .font(theme::regular(theme::BODY_TEXT))
                 .color(palette.secondary),
         )
         .wrap(),

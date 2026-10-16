@@ -68,7 +68,7 @@ fn enable_playback_row(app: &mut App, ui: &mut egui::Ui) {
         egui::Align2::LEFT_CENTER,
         // Translators: {name} is the name this computer uses in Spotify Connect.
         gettext(app.locale, "{name} (this computer)").replace("{name}", &app.settings.device_name),
-        theme::medium(14.0),
+        theme::medium(theme::BODY_TEXT),
         palette.text,
     );
     painter.text(
@@ -79,7 +79,7 @@ fn enable_playback_row(app: &mut App, ui: &mut egui::Ui) {
         } else {
             gettext(app.locale, "Set up playback here")
         },
-        theme::regular(12.0),
+        theme::regular(theme::SMALL_TEXT),
         palette.accent,
     );
     if authorizing {
@@ -130,7 +130,7 @@ fn receiver_row(app: &mut App, ui: &mut egui::Ui, receiver: &crate::zeroconf::Re
         rect.right() - 12.0,
         rect.center().y - 9.0,
         &receiver.name,
-        theme::medium(14.0),
+        theme::medium(theme::BODY_TEXT),
         palette.text,
     );
     painter.text(
@@ -141,7 +141,7 @@ fn receiver_row(app: &mut App, ui: &mut egui::Ui, receiver: &crate::zeroconf::Re
         } else {
             gettext(app.locale, "On your network, click to connect")
         },
-        theme::regular(12.0),
+        theme::regular(theme::SMALL_TEXT),
         palette.secondary,
     );
     if activating {
@@ -189,7 +189,7 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                     theme::text(
                         ui,
                         gettext(locale, "Connect to a device").as_ref(),
-                        theme::bold(16.0),
+                        theme::bold(theme::SECTION_TEXT),
                         palette.text,
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -324,7 +324,7 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                                 rect.right() - 12.0,
                                 rect.center().y - 9.0,
                                 &name,
-                                theme::medium(14.0),
+                                theme::medium(theme::BODY_TEXT),
                                 color,
                             );
                             let status = if active {
@@ -340,7 +340,7 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                                 pos2(rect.left() + 48.0, rect.center().y + 10.0),
                                 egui::Align2::LEFT_CENTER,
                                 status,
-                                theme::regular(12.0),
+                                theme::regular(theme::SMALL_TEXT),
                                 if active {
                                     palette.accent
                                 } else {

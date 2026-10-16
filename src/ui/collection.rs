@@ -147,7 +147,7 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
             ui.set_width(width);
             ui.spacing_mut().item_spacing.y = 6.0;
             ui.add_space(cover_size * 0.08);
-            theme::text(ui, hero.kind.as_ref(), theme::medium(12.5), text_main);
+            theme::text(ui, hero.kind.as_ref(), theme::medium(theme::SMALL_TEXT), text_main);
             let mut size = if cover_size > 200.0 {
                 56.0
             } else if cover_size > 130.0 {
@@ -200,7 +200,7 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
                 theme::text(
                     ui,
                     description.as_str(),
-                    theme::regular(13.5),
+                    theme::regular(theme::BODY_TEXT),
                     text_soft,
                 );
             }
@@ -208,17 +208,17 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 for (index, (text, page)) in hero.byline.iter().enumerate() {
                     if index > 0 {
-                        theme::text(ui, "•", theme::regular(13.5), text_soft);
+                        theme::text(ui, "•", theme::regular(theme::BODY_TEXT), text_soft);
                     }
                     match page {
                         Some(page) => {
-                            if theme::link(ui, text, theme::semibold(13.5), text_main).clicked()
+                            if theme::link(ui, text, theme::semibold(theme::BODY_TEXT), text_main).clicked()
                             {
                                 app.actions.push(Action::Open(page.clone()));
                             }
                         }
                         None => {
-                            theme::text(ui, text, theme::regular(13.5), text_soft);
+                            theme::text(ui, text, theme::regular(theme::BODY_TEXT), text_soft);
                         }
                     }
                 }
@@ -1075,7 +1075,7 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
                     badge.center(),
                     egui::Align2::CENTER_CENTER,
                     label,
-                    theme::regular(11.5),
+                    theme::regular(theme::SMALL_TEXT),
                     egui::Color32::WHITE,
                 );
             }
@@ -1456,7 +1456,7 @@ fn placeholder_row(
     let text = crate::bidi::layout(
         ui.painter(),
         label,
-        theme::regular(13.0),
+        theme::regular(theme::BODY_TEXT),
         palette.secondary,
         width,
         1,
@@ -1864,7 +1864,7 @@ pub fn top_songs(app: &mut App, ui: &mut egui::Ui) {
     theme::text(
         ui,
         gettext(app.locale, "Your top songs"),
-        theme::bold(30.0),
+        theme::bold(theme::TITLE_TEXT),
         palette.text,
     );
     ui.add_space(4.0);
@@ -1874,7 +1874,7 @@ pub fn top_songs(app: &mut App, ui: &mut egui::Ui) {
             app.locale,
             "Your most-played tracks from the last four weeks.",
         ),
-        theme::regular(13.5),
+        theme::regular(theme::BODY_TEXT),
         palette.secondary,
     );
     ui.add_space(18.0);
@@ -2185,7 +2185,7 @@ pub fn album(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 theme::text(
                     ui,
                     util::format_date(app.locale, date),
-                    theme::regular(12.5),
+                    theme::regular(theme::SMALL_TEXT),
                     palette.secondary,
                 );
             }
@@ -2214,7 +2214,7 @@ pub fn album(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 theme::text(
                     ui,
                     format!("{} {core}", marks.join(" ")),
-                    theme::regular(11.5),
+                    theme::regular(theme::SMALL_TEXT),
                     palette.dim,
                 );
             }

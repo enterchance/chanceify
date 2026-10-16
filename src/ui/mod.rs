@@ -394,7 +394,7 @@ fn central(app: &mut App, ui: &mut egui::Ui) {
                 ui.vertical_centered(|ui| {
                     theme::spinner(ui, 22.0, palette.accent);
                     ui.add_space(10.0);
-                    theme::text(ui, "Connecting to Spotify…", theme::medium(15.0), palette.secondary);
+                    theme::text(ui, "Connecting to Spotify…", theme::medium(theme::BODY_TEXT), palette.secondary);
                 });
                 return;
             }
@@ -778,8 +778,8 @@ fn guest_banner(app: &mut App, ctx: &egui::Context) {
                 .inner_margin(Margin::symmetric(12, 6))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        theme::text(ui, "Not signed in to Spotify", theme::regular(12.5), palette.secondary);
-                        if theme::link(ui, "Sign in", theme::medium(12.5), palette.accent).clicked() {
+                        theme::text(ui, "Not signed in to Spotify", theme::regular(theme::SMALL_TEXT), palette.secondary);
+                        if theme::link(ui, "Sign in", theme::medium(theme::SMALL_TEXT), palette.accent).clicked() {
                             sign_in = true;
                         }
                     });
@@ -820,7 +820,7 @@ fn hint_banner(app: &mut App, ctx: &egui::Context) {
                 .corner_radius(CornerRadius::same(theme::RADIUS))
                 .inner_margin(Margin::symmetric(14, 8))
                 .show(ui, |ui| {
-                    theme::text(ui, &label, theme::medium(13.5), palette.text);
+                    theme::text(ui, &label, theme::medium(theme::BODY_TEXT), palette.text);
                 });
         });
 }
@@ -853,7 +853,7 @@ fn undo_bar(app: &mut App, ctx: &egui::Context, bottom_offset: f32) {
                         } else {
                             format!("Removed {count} songs")
                         };
-                        theme::text(ui, &text, theme::medium(13.5), palette.text);
+                        theme::text(ui, &text, theme::medium(theme::BODY_TEXT), palette.text);
                         if theme::pill_button(ui, &palette, "Undo", true).clicked() {
                             clicked = true;
                         }
@@ -911,7 +911,7 @@ fn toasts(app: &mut App, ctx: &egui::Context, bottom_offset: f32) {
                             // long messages on every word.
                             let galley = ui.painter().layout(
                                 toast.message.clone(),
-                                theme::medium(13.5),
+                                theme::medium(theme::BODY_TEXT),
                                 palette.text,
                                 280.0,
                             );

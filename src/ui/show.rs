@@ -37,7 +37,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 let galley = crate::bidi::layout(
                     ui.painter(),
                     &description,
-                    theme::regular(13.5),
+                    theme::regular(theme::BODY_TEXT),
                     palette.secondary,
                     ui.available_width(),
                     usize::MAX,
@@ -253,14 +253,14 @@ pub fn episode_row(
         text_rect.right(),
         text_rect.top() + 10.0,
         &episode.name,
-        theme::semibold(15.0),
+        theme::semibold(theme::BODY_TEXT),
         title_color,
     );
     let description = util::strip_html(&episode.description);
     let description_galley = crate::bidi::layout(
         ui.painter(),
         &description,
-        theme::regular(12.5),
+        theme::regular(theme::SMALL_TEXT),
         palette.secondary,
         text_rect.width(),
         2,
@@ -345,7 +345,7 @@ pub fn episode_row(
     let meta_text = meta.join(" • ");
     let meta_galley =
         ui.painter()
-            .layout_no_wrap(meta_text, theme::regular(12.5), palette.secondary);
+            .layout_no_wrap(meta_text, theme::regular(theme::SMALL_TEXT), palette.secondary);
     let meta_pos = pos2(button.right() + 12.0, footer_y - meta_galley.size().y / 2.0);
     ui.painter()
         .galley(meta_pos, meta_galley.clone(), palette.secondary);
@@ -360,7 +360,7 @@ pub fn episode_row(
                 pos2(x + 20.0, footer_y),
                 egui::Align2::LEFT_CENTER,
                 gettext(locale, "Played"),
-                theme::regular(12.0),
+                theme::regular(theme::SMALL_TEXT),
                 palette.secondary,
             );
         } else if resume.resume_position_ms > 0 && episode.duration_ms > 0 {

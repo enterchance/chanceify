@@ -34,7 +34,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, page: Page) {
             gettext(locale, "Saved episodes appear here."),
         ),
     };
-    theme::text(ui, title.as_ref(), theme::bold(28.0), palette.text);
+    theme::text(ui, title.as_ref(), theme::bold(theme::TITLE_TEXT), palette.text);
     ui.add_space(14.0);
     match page {
         Page::Albums => {
