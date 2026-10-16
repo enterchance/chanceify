@@ -28,7 +28,7 @@ use symphonia::core::codecs::{CODEC_TYPE_NULL, Decoder, DecoderOptions};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
 use symphonia::core::io::MediaSourceStream;
-use symphonia::core::meta::{MetadataOptions, MetadataRevision, StandardVisualKey};
+use symphonia::core::meta::{Metadata, MetadataOptions, MetadataRevision, StandardVisualKey};
 use symphonia::core::probe::Hint;
 use symphonia::core::units::{Time, TimeBase};
 
@@ -295,6 +295,39 @@ fn cover_of(revision: &MetadataRevision) -> Option<Arc<[u8]>> {
     Some(Arc::from(&chosen.data[..]))
 }
 
+/// The first picture in any revision of the tags, newest first.
+fn cover_in(mut metadata: Metadata<'_>) -> Option<Arc<[u8]>> {
+    loop {
+        if let Some(revision) = metadata.current()
+            && let Some(cover) = cover_of(revision)
+        {
+            return Some(cover);
+        }
+        metadata.pop()?;
+    }
+}
+
+/// A picture file beside the song, by the usual names.
+fn folder_cover(path: &Path) -> Option<Arc<[u8]>> {
+    let folder = path.parent()?;
+    let stem = path.file_stem()?.to_string_lossy().to_lowercase();
+    let mut names = vec![stem];
+    for name in ["cover", "folder", "front", "album", "albumart", "artwork", "thumb"] {
+        names.push(name.to_string());
+    }
+    let found = std::fs::read_dir(folder).ok()?.flatten().find_map(|entry| {
+        let file = entry.path();
+        let extension = file.extension()?.to_string_lossy().to_lowercase();
+        if !matches!(extension.as_str(), "jpg" | "jpeg" | "png") {
+            return None;
+        }
+        let name = file.file_stem()?.to_string_lossy().to_lowercase();
+        names.contains(&name).then_some(file)
+    })?;
+    let bytes = std::fs::read(found).ok()?;
+    (!bytes.is_empty() && bytes.len() < 20_000_000).then(|| Arc::from(&bytes[..]))
+}
+
 impl Reader {
     fn open(path: &Path) -> Result<Self, String> {
         let file = File::open(path).map_err(|error| error.to_string())?;
@@ -311,18 +344,17 @@ impl Reader {
                 &MetadataOptions::default(),
             )
             .map_err(|error| format!("not a song chanceify™ can read ({error})"))?;
-        let mut cover = None;
-        if let Some(metadata) = probed.metadata.get() {
-            if let Some(revision) = metadata.current() {
-                cover = cover_of(revision);
-            }
-        }
+        // Every block of tags in the file, not only the newest: a song with
+        // two tag blocks can keep its picture in the older one.
+        let mut cover = probed.metadata.get().and_then(cover_in);
         let mut format = probed.format;
         if cover.is_none() {
-            let metadata = format.metadata();
-            if let Some(revision) = metadata.current() {
-                cover = cover_of(revision);
-            }
+            cover = cover_in(format.metadata());
+        }
+        // No picture inside the file: the one lying beside it, as players
+        // usually take it (cover.jpg, folder.png and the like).
+        if cover.is_none() {
+            cover = folder_cover(path);
         }
         let (track_id, params) = {
             let track = format

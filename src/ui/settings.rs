@@ -1726,7 +1726,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
         });
     }
 
-    if needle.is_empty() || "lyrics timestamps phonetic romanize line size".contains(needle.as_str()) {
+    if needle.is_empty() || "lyrics timestamps line size".contains(needle.as_str()) {
         any_visible = true;
         section(ui, &palette, "Lyrics", |ui| {
             use crate::settings::Settings;
@@ -1734,12 +1734,6 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
             if widgets::switch_labeled(ui, &palette, "Timestamps beside the lyrics", &mut stamps).changed() {
                 app.actions.push(Action::ToggleSideLyricsFlag(Settings::LYRICS_HIDE_STAMPS));
             }
-            let mut phonetic = app.settings.lyrics_phonetic;
-            if widgets::switch_labeled(ui, &palette, "Phonetic lyrics (Latin letters under each line)", &mut phonetic).changed() {
-                app.settings.lyrics_phonetic = phonetic;
-                app.mark_settings_dirty();
-            }
-            note(ui, &palette, "Russian, Korean and Chinese are written out in Latin letters; German, Polish and Turkish are respelled the way an English reader would say them.");
             ui.horizontal(|ui| {
                 theme::subtle(ui, &palette, "Side lyrics size");
                 for (value, label) in [(1u8, "Smaller"), (0, "Normal"), (2, "Larger")] {

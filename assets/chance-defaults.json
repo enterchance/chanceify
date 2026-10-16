@@ -582,6 +582,5 @@
  "vis_reverse_swirl": false,
  "extra_show_title": true,
  "extra_show_artist": true,
- "extra_show_heart": true,
- "lyrics_phonetic": true
+ "extra_show_heart": true
 }
