@@ -17,6 +17,15 @@ pub fn cover_url(uri: &str) -> String {
 }
 
 impl App {
+    /// The Spotify song a playing file was matched to, once its details have
+    /// arrived.
+    pub fn deck_spotify_match(&self, uri: &str) -> Option<Track> {
+        let state = self.deck_state()?;
+        let track = state.track.as_ref().filter(|track| track.uri == uri)?;
+        let spotify = self.local_matches.uri_of(&track.path.to_string_lossy())?;
+        self.track_cache.get(util::uri_id(spotify)?).cloned()
+    }
+
     /// How strong the bass of what is playing is right now, 0 to 1 (0 when
     /// nothing is playing). Read from the same tap the visualizers use.
     pub fn music_bass_level(&self) -> f32 {
@@ -148,7 +157,10 @@ impl App {
         // The cover is offered once it has been handed to the art loader.
         let art = (track.cover.is_some() && self.deck_art.as_deref() == Some(track.uri.as_str()))
             .then(|| cover_url(&track.uri));
-        let artists = if track.artist.is_empty() {
+        let matched = self.deck_spotify_match(&track.uri);
+        let artists = if let Some(matched) = &matched {
+            matched.artists.clone()
+        } else if track.artist.is_empty() {
             Vec::new()
         } else {
             vec![ArtistRef {
@@ -165,7 +177,7 @@ impl App {
             artists,
             subtitle: track.artist.clone(),
             album_name: track.album.clone(),
-            album_id: None,
+            album_id: matched.as_ref().and_then(|m| m.album.as_ref()).map(|album| album.id.clone()).filter(|id| !id.is_empty()),
             show_id: None,
             art_url: art.clone(),
             art_small: art,
@@ -292,6 +304,13 @@ impl App {
                 .map(str::to_string);
             self.deck_art = Some(track.uri.clone());
             if let Some(uri) = matched {
+                // Its details too, for the links and the album page.
+                if let Some(id) = util::uri_id(&uri)
+                    && !self.track_cache.contains_key(id)
+                    && self.track_requests.insert(id.to_string())
+                {
+                    self.backend.api(ApiRequest::Track { id: id.to_string() });
+                }
                 self.request_contains(vec![uri]);
             }
             // A song from a file changes without the Spotify bookkeeping

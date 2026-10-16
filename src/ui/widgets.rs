@@ -1408,6 +1408,14 @@ pub fn item_menu(
         ui.set_max_width(widest);
     }
     let uri = item.uri().to_string();
+    // A song from a file that is also on Spotify: its links and pages are
+    // the Spotify song's.
+    let matched = if crate::file_deck::is_file_uri(item.uri()) {
+        app.deck_spotify_match(item.uri()).map(PlayableItem::Track)
+    } else {
+        None
+    };
+    let shown = matched.as_ref().unwrap_or(item);
     let label = item.name().to_string();
     if menu_item(
         ui,
@@ -1517,7 +1525,7 @@ pub fn item_menu(
         }
     }
     menu_separator(ui, &palette);
-    match item {
+    match shown {
         PlayableItem::Track(track) => {
             if menu_item(
                 ui,
@@ -1600,10 +1608,10 @@ pub fn item_menu(
         Some(Icon::ExternalLink),
         &gettext(locale, "Open in Spotify"),
     ) {
-        app.actions.push(Action::OpenInSpotify(uri));
+        app.actions.push(Action::OpenInSpotify(shown.uri().to_string()));
     }
     // The very bottom: the same song on Last.fm.
-    if let PlayableItem::Track(track) = item {
+    if let PlayableItem::Track(track) = shown {
         let artist = track.artists.first().map(|artist| artist.name.clone()).unwrap_or_default();
         if !artist.is_empty()
             && menu_item(
@@ -1622,7 +1630,7 @@ pub fn item_menu(
         // The very bottom: chanceify's own page for the song, and the same
         // link as a named one for pasting in Discord.
         let artist = track.artists.first().map(|artist| artist.name.clone()).unwrap_or_default();
-        if let Some(url) = crate::discord::song_link(item.uri(), &track.name, &artist) {
+        if let Some(url) = crate::discord::song_link(shown.uri(), &track.name, &artist) {
             if menu_item(
                 ui,
                 &palette,
@@ -1633,7 +1641,7 @@ pub fn item_menu(
             }
             if menu_item(ui, &palette, Some(Icon::Copy), "copy for Discord") {
                 app.actions.push(Action::CopyForDiscord {
-                    uri: item.uri().to_string(),
+                    uri: shown.uri().to_string(),
                     title: track.name.clone(),
                     artist,
                 });
