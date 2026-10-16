@@ -2245,7 +2245,7 @@ pub(super) fn eq_panel(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
             widgets::menu_separator(ui, &palette);
-            if widgets::menu_item(ui, &palette, Some(Icon::Download), "Paste a code…") {
+            if widgets::menu_item(ui, &palette, Some(Icon::ListPlus), "Paste a code…") {
                 ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("eq-code-open"), true));
             }
         });

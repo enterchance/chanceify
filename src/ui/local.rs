@@ -479,7 +479,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 if super::widgets::menu_item(
                     ui,
                     &palette,
-                    active.then_some(if descending { Icon::ArrowDown } else { Icon::ArrowUp }),
+                    active.then_some(if descending { Icon::ChevronDown } else { Icon::ChevronUp }),
                     &title_case(COLUMNS[*id as usize].0),
                 ) {
                     clicked_sort = Some(*id);
