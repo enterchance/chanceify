@@ -1564,7 +1564,7 @@ impl Default for Settings {
             vis_font_random: false,
             vis_text_font: 0,
             vis_text_no_artist: false,
-            vis_art_border: true,
+            vis_art_border: false,
             extra_show_title: true,
             extra_show_artist: true,
             extra_show_heart: true,

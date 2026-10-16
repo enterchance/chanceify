@@ -1201,7 +1201,7 @@ pub(crate) fn vis_gradient_ctx(
             app.settings.player_bar_vis_color,
             crate::settings::VisColor::AlbumArt
         ) {
-        swirl_wash(app, ctx.input(|input| input.time)).map_or(base, |(first, _)| first)
+        swirl_wash_raw(app, ctx.input(|input| input.time)).map_or(base, |(first, _)| first)
     } else {
         base
     };
@@ -1218,7 +1218,7 @@ pub(crate) fn vis_gradient_ctx(
         let second = if matches!(mode, PlayerBarVis::Flow | PlayerBarVis::Spectrum)
             && !app.settings.swirl_colours_fixed
         {
-            swirl_wash(app, time).map(|(_, second)| second)
+            swirl_wash_raw(app, time).map(|(_, second)| second)
         } else {
             None
         }
@@ -1859,10 +1859,10 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             ui.spacing_mut().item_spacing.y = 3.0;
             // Three independent switches: any mix, or none (which closes
             // the visualizer down to the song-length bar).
-            // Side by side (two columns) or stacked (one column, up and down).
+            // Two columns, or everything in one row that scrolls sideways.
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                for (label, stacked) in [("Side by side", false), ("Stacked", true)] {
+                for (label, stacked) in [("2 columns", false), ("In a row", true)] {
                     if chip(ui, &palette, &gettext(app.locale, label), app.settings.vis_panel_stacked == stacked, 110.0).clicked() {
                         app.settings.vis_panel_stacked = stacked;
                         app.mark_settings_dirty();
@@ -1884,7 +1884,11 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             // title and the lyrics, and the equalizer at the very end.
             // `tab` is the part being drawn right now.
             let view = app.vis_view_now.unwrap_or(0);
-            let last_tab: u8 = if matches!(view, 0 | 3) { 1 } else { 3 };
+            let last_tab: u8 = match view {
+                3 => 1,
+                0 => 2,
+                _ => 3,
+            };
             let tab = std::cell::Cell::new(0u8);
             let mut columns = |app: &mut App, ui: &mut egui::Ui, which: u8| {
             ui.spacing_mut().item_spacing.x = 18.0;
@@ -2225,8 +2229,6 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             // beside the bass jump, so the panel is a third narrower.
             if columns_fit {
                 ui.horizontal_top(|ui| columns(&mut *app, ui, 0));
-            } else {
-                ui.vertical(|ui| columns(&mut *app, ui, 0));
             }
             // The settings every shape shares, then the title, then the lyrics.
             let mut shared = |app: &mut App, ui: &mut egui::Ui| {
@@ -2528,36 +2530,6 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                     |value| app.actions.push(Action::SetVisSwayAmount(value / 100.0)),
                 );
             }
-            if chip_i(
-                ui,
-                &palette,
-                "Title outline",
-                !app.settings.vis_text_no_outline,
-                ui.available_width().min(290.0),
-            )
-            .clicked()
-            {
-                app.actions.push(Action::ToggleVisTextOutline);
-            }
-            if chip_i(
-                ui,
-                &palette,
-                "Panel behind the title",
-                app.settings.vis_text_back,
-                ui.available_width().min(290.0),
-            )
-            .clicked()
-            {
-                app.actions.push(Action::ToggleVisTextBack);
-            }
-            if app.settings.vis_text_back {
-                slider_row(ui, &palette, "Panel solidity", 10.0..=100.0, app.settings.vis_back_alpha * 100.0,
-                    |value| app.actions.push(Action::SetVisBack(0, value / 100.0)));
-                slider_row(ui, &palette, "Panel roundness", 0.0..=30.0, app.settings.vis_back_round,
-                    |value| app.actions.push(Action::SetVisBack(1, value)));
-                slider_row(ui, &palette, "Room round the words", 0.0..=40.0, app.settings.vis_back_pad,
-                    |value| app.actions.push(Action::SetVisBack(2, value)));
-            }
             }); ui.vertical(|ui| {
             ui.set_width(VIS_SINGLE_W);
             if chip_i(
@@ -2669,22 +2641,36 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             }
             }); }); }
             };
-            for part in 1..=last_tab {
-                super::widgets::menu_separator(ui, &palette);
-                tab.set(part);
-                if part == 1 && columns_fit {
-                    ui.horizontal_top(|ui| {
-                        columns(&mut *app, ui, 1);
-                        shared(&mut *app, ui);
-                    });
-                } else if part == 1 {
-                    ui.vertical(|ui| {
-                        columns(&mut *app, ui, 1);
-                        shared(&mut *app, ui);
-                    });
-                } else {
-                    ui.horizontal_top(|ui| shared(&mut *app, ui));
+            if columns_fit {
+                for part in 1..=last_tab {
+                    super::widgets::menu_separator(ui, &palette);
+                    tab.set(part);
+                    if part == 1 {
+                        ui.horizontal_top(|ui| {
+                            columns(&mut *app, ui, 1);
+                            shared(&mut *app, ui);
+                        });
+                    } else {
+                        ui.horizontal_top(|ui| shared(&mut *app, ui));
+                    }
                 }
+            } else {
+                // Every part in one row, with a bar to scroll sideways.
+                egui::ScrollArea::horizontal()
+                    .id_salt("vis-panel-row")
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.horizontal_top(|ui| {
+                            columns(&mut *app, ui, 0);
+                            for part in 1..=last_tab {
+                                tab.set(part);
+                                if part == 1 {
+                                    columns(&mut *app, ui, 1);
+                                }
+                                shared(&mut *app, ui);
+                            }
+                        });
+                    });
             }
             super::widgets::menu_separator(ui, &palette);
             theme::subtle(ui, &palette, &gettext(app.locale, "EQUALIZER"));
