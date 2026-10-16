@@ -42,7 +42,8 @@ jobs:
       - name: Check
         shell: pwsh
         run: |
-          cargo check --profile fast --features lights-feed 2>&1 | Tee-Object -FilePath check.log
+          $ErrorActionPreference = "Continue"
+          cargo check --profile fast --features lights-feed 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath check.log
           if ($LASTEXITCODE -ne 0) {
             $lines = Get-Content check.log
             $hits = $lines | Select-String -Pattern '^(error|warning: unused)' -Context 0,12 | ForEach-Object { $_.Context.PreContext + $_.Line + $_.Context.PostContext }
