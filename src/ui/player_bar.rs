@@ -1864,7 +1864,22 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui, in_panel: bool) {
         return;
     }
     let palette = app.palette;
-    theme::subtle(ui, &palette, &gettext(app.locale, "SETTINGS"));
+    // The heading, with the layout as two small pictures beside it: two
+    // columns, or everything in one row that scrolls sideways.
+    ui.horizontal(|ui| {
+        theme::subtle(ui, &palette, &gettext(app.locale, "SETTINGS"));
+        ui.add_space(6.0);
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for (icon, stacked, tip) in [
+            (Icon::LayoutGrid, false, "Two columns"),
+            (Icon::Spread, true, "In a row (scroll sideways)"),
+        ] {
+            if super::widgets::icon_toggle(ui, &palette, icon, app.settings.vis_panel_stacked == stacked, tip) {
+                app.settings.vis_panel_stacked = stacked;
+                app.mark_settings_dirty();
+            }
+        }
+    });
     let fit = ui
         .ctx()
         .data(|data| data.get_temp::<f32>(egui::Id::new("vis-panel-fit")))
@@ -1900,16 +1915,6 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             ui.spacing_mut().item_spacing.y = 3.0;
             // Three independent switches: any mix, or none (which closes
             // the visualizer down to the song-length bar).
-            // Two columns, or everything in one row that scrolls sideways.
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                for (label, stacked) in [("2 columns", false), ("In a row", true)] {
-                    if chip(ui, &palette, &gettext(app.locale, label), app.settings.vis_panel_stacked == stacked, 110.0).clicked() {
-                        app.settings.vis_panel_stacked = stacked;
-                        app.mark_settings_dirty();
-                    }
-                }
-            });
             ui.add_space(4.0);
             let shapes = app.settings.vis_shapes_value();
             // Three columns side by side when the window is wide enough for
@@ -2693,8 +2698,20 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                     }
                 }
             } else {
-                // Every part in one row, with a bar to scroll sideways.
-                egui::ScrollArea::horizontal()
+                // Every part in one row, with a bar to scroll sideways. The
+                // mouse wheel scrolls it sideways too while over it.
+                let row_rect_id = egui::Id::new("vis-panel-row-rect");
+                if let Some(rect) = ui.ctx().data(|data| data.get_temp::<Rect>(row_rect_id))
+                    && ui.rect_contains_pointer(rect)
+                {
+                    ui.ctx().input_mut(|input| {
+                        let delta = input.smooth_scroll_delta;
+                        if delta.y != 0.0 && delta.x == 0.0 {
+                            input.smooth_scroll_delta = vec2(delta.y, 0.0);
+                        }
+                    });
+                }
+                let row = egui::ScrollArea::horizontal()
                     .id_salt("vis-panel-row")
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
@@ -2709,6 +2726,7 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                             }
                         });
                     });
+                ui.ctx().data_mut(|data| data.insert_temp(row_rect_id, row.inner_rect));
             }
             // The side lyrics panel's own options (also on its right-click).
             super::widgets::menu_separator(ui, &palette);

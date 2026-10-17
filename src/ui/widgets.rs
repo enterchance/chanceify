@@ -3494,7 +3494,7 @@ fn column_label(locale: Locale, entry: &'static str) -> String {
 }
 
 /// A small square switch drawn as an icon alone: lit when on.
-fn icon_toggle(ui: &mut Ui, palette: &Palette, icon: Icon, on: bool, tooltip: &str) -> bool {
+pub(crate) fn icon_toggle(ui: &mut Ui, palette: &Palette, icon: Icon, on: bool, tooltip: &str) -> bool {
     let (rect, response) = ui.allocate_exact_size(vec2(36.0, 30.0), Sense::click());
     if ui.is_rect_visible(rect) {
         let fill = if on {
