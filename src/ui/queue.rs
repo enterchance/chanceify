@@ -629,9 +629,9 @@ fn friends_contents(app: &mut App, ui: &mut egui::Ui) {
         if (theme::soft_button(ui, &palette, Some(Icon::Plus), "", false).on_hover_text("Add").clicked() || enter)
             && !name.trim().is_empty()
         {
-            let name = name.trim().to_string();
-            if !app.settings.lastfm_friends.iter().any(|have| have.eq_ignore_ascii_case(&name)) {
-                app.settings.lastfm_friends.push(name);
+            let added = name.trim().to_string();
+            if !app.settings.lastfm_friends.iter().any(|have| have.eq_ignore_ascii_case(&added)) {
+                app.settings.lastfm_friends.push(added);
                 app.mark_settings_dirty();
                 let extra = app.settings.lastfm_friends.clone();
                 app.lastfm.friends(extra);
