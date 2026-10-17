@@ -566,7 +566,7 @@ impl Worker {
         {
             for friend in list_of(body.get("friends").and_then(|f| f.get("user"))) {
                 if let Some(name) = friend.get("name").and_then(serde_json::Value::as_str) {
-                    names.push((name.to_string(), image_of(friend)));
+                    names.push((name.to_string(), image_of(&friend)));
                 }
             }
         }

@@ -956,7 +956,8 @@ fn apply_event(state: &mut LocalState, event: PlayerEvent) -> bool {
         | PlayerEvent::EndOfTrack { .. }
         | PlayerEvent::PlayRequestIdChanged { .. }
         | PlayerEvent::AutoPlayChanged { .. }
-        | PlayerEvent::FilterExplicitContentChanged { .. } => false,
+        | PlayerEvent::FilterExplicitContentChanged { .. }
+        | PlayerEvent::SetQueue { .. } => false,
     }
 }
 
