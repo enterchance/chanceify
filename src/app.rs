@@ -6278,6 +6278,15 @@ impl App {
     }
 
     fn run_search(&mut self, query: String) {
+        // A pasted Spotify link (a song, an album, an upcoming album's
+        // prerelease link…) opens its page instead of being searched for.
+        if query.contains("spotify")
+            && let Some(uri) = crate::link::parse(&query)
+            && !uri.starts_with("spotify:search:")
+        {
+            self.actions.push(Action::OpenLink(uri));
+            return;
+        }
         if !query.is_empty()
             && query == self.search.committed
             && !self.search.results.needs_load()
