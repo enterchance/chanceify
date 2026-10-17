@@ -13053,6 +13053,23 @@ impl App {
                 self.settings.eq_hide_defaults = !self.settings.eq_hide_defaults;
                 self.mark_settings_dirty();
             }
+            Action::ToggleEqGroup(name) => {
+                let closed = &mut self.settings.eq_closed_groups;
+                if let Some(index) = closed.iter().position(|other| other == name) {
+                    closed.remove(index);
+                } else {
+                    closed.push(name.to_string());
+                }
+                self.mark_settings_dirty();
+            }
+            Action::MoveCustomEq(from, to) => {
+                let curves = &mut self.settings.custom_eqs;
+                if from < curves.len() && to < curves.len() && from != to {
+                    let curve = curves.remove(from);
+                    curves.insert(to, curve);
+                    self.mark_settings_dirty();
+                }
+            }
             Action::ExportEq => {
                 let text = self.settings.export_presets();
                 let dir = self.dirs.index_settings_dir();

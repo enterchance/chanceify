@@ -1219,29 +1219,8 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     app.actions.push(Action::ApplyEqPreset(picked));
                 }
                 ui.add_space(10.0);
-                eq_curve(ui, &palette, &crate::app::eq_settings(&app.settings));
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 14.0;
-                    let on = app.settings.eq_on;
-                    let mut preamp = app.settings.eq_preamp_db;
-                    if eq_slider(
-                        ui,
-                        &palette,
-                        // Translators: short label under the equalizer's preamplifier slider.
-                        &pgettext(locale, "equalizer", "Pre"),
-                        &mut preamp,
-                        on,
-                    ) {
-                        app.actions.push(Action::SetEqPreamp(preamp));
-                    }
-                    for (band, hz) in crate::eq::BANDS.iter().enumerate() {
-                        let mut gain = app.settings.eq_bands_db[band];
-                        if eq_slider(ui, &palette, &hertz(*hz), &mut gain, on) {
-                            app.actions.push(Action::SetEqBand(band, gain));
-                        }
-                    }
-                });
+                let width = ui.available_width().min(470.0);
+                eq_graph_and_sliders(app, ui, width);
             }
         });
     }
@@ -2189,9 +2168,6 @@ fn hertz(hz: f32) -> String {
     }
 }
 
-/// One vertical slider in the app's own style: the track filled from
-/// 0 dB, the handle in the middle when flat, a double-click to put it
-/// back there. Returns whether it moved.
 /// The equalizer, as a tab of the visualizer's settings (the volume bar no
 /// longer opens it): the switch, the presets, the curve, the preamp and the
 /// ten bands.
@@ -2248,15 +2224,34 @@ pub(super) fn eq_panel(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn eq_panel_body(app: &mut App, ui: &mut egui::Ui) {
+    ui.set_width(470.0);
+    let width = ui.available_width().min(470.0);
+    ui.spacing_mut().item_spacing.y = 6.0;
+    eq_controls(app, ui);
+    if !app.settings.eq_hide_defaults {
+        eq_presets(app, ui);
+    }
+    eq_custom_curves(app, ui);
+    eq_save_field(app, ui);
+    ui.add_space(2.0);
+    eq_graph_and_sliders(app, ui, width);
+}
+
+/// The top row: the switch, the curves file, and whether the built-in
+/// presets are listed.
+fn eq_controls(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let locale = app.locale;
-    ui.set_width(470.0);
-    let mut on = app.settings.eq_on;
-    ui.horizontal_wrapped(|ui| {
+    ui.horizontal(|ui| {
+        ui.set_min_height(theme::CONTROL_HEIGHT);
         ui.spacing_mut().item_spacing.x = 8.0;
-        if widgets::switch(ui, &palette, &gettext(locale, "On"), &mut on).changed() {
+        let label = gettext(locale, "On");
+        let mut on = app.settings.eq_on;
+        if widgets::switch(ui, &palette, &label, &mut on).changed() {
             app.actions.push(Action::ToggleEq);
         }
+        theme::text(ui, label, theme::regular(theme::BODY_TEXT), palette.text);
+        ui.add_space(8.0);
         if theme::soft_button(ui, &palette, None, "Export", false)
             .on_hover_text("Save your own curves to eq-presets.txt in the index settings folder, and copy them")
             .clicked()
@@ -2269,189 +2264,375 @@ fn eq_panel_body(app: &mut App, ui: &mut egui::Ui) {
         {
             app.actions.push(Action::ImportEq);
         }
-        let mut hide = app.settings.eq_hide_defaults;
-        if widgets::switch(ui, &palette, "Hide defaults", &mut hide).changed() {
-            app.actions.push(Action::ToggleEqHideDefaults);
-        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            theme::text(ui, "Hide defaults", theme::regular(theme::BODY_TEXT), palette.text);
+            let mut hide = app.settings.eq_hide_defaults;
+            if widgets::switch(ui, &palette, "Hide defaults", &mut hide)
+                .on_hover_text("Leave the built-in presets out and list only your own curves")
+                .changed()
+            {
+                app.actions.push(Action::ToggleEqHideDefaults);
+            }
+        });
     });
-    ui.add_space(6.0);
-    if !app.settings.eq_hide_defaults {
-        let names: Vec<(usize, &str)> = crate::eq::PRESETS
+}
+
+/// The built-in presets under their headings, each heading folding shut.
+fn eq_presets(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    let current = crate::eq::PRESETS
+        .iter()
+        .position(|preset| preset.bands_db == app.settings.eq_bands_db);
+    for group in crate::eq::PRESET_GROUPS {
+        let open = !app
+            .settings
+            .eq_closed_groups
             .iter()
-            .enumerate()
-            .map(|(index, preset)| (index, preset.name))
-            .collect();
-        let current = crate::eq::PRESETS
-            .iter()
-            .position(|preset| preset.bands_db == app.settings.eq_bands_db)
-            .unwrap_or(usize::MAX);
-        if let Some(picked) = widgets::chips(ui, &palette, &names, current) {
-            app.actions.push(Action::ApplyEqPreset(picked));
+            .any(|name| name == group.name);
+        // A folded heading still says which of its presets is in use.
+        let in_use = current
+            .map(|index| crate::eq::PRESETS[index].name)
+            .filter(|name| group.presets.contains(name));
+        if eq_group_heading(ui, &palette, group.name, open, in_use) {
+            app.actions.push(Action::ToggleEqGroup(group.name));
+        }
+        if open {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                for name in group.presets {
+                    let Some(index) = crate::eq::preset_index(name) else {
+                        continue;
+                    };
+                    if theme::soft_button(ui, &palette, None, name, current == Some(index)).clicked() {
+                        app.actions.push(Action::ApplyEqPreset(index));
+                    }
+                }
+            });
         }
     }
-    // The reader's own curves: click to use, x to remove.
-    if !app.settings.custom_eqs.is_empty() {
-        ui.add_space(4.0);
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            let mut apply = None;
-            let mut remove = None;
-            for (index, (name, bands)) in app.settings.custom_eqs.iter().enumerate() {
-                let active = *bands == app.settings.eq_bands_db;
+}
+
+/// A small heading over a group of presets, with the chevron that says
+/// whether it is open. Returns whether it was clicked.
+fn eq_group_heading(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    label: &str,
+    open: bool,
+    in_use: Option<&str>,
+) -> bool {
+    let row = ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let chevron = if open { Icon::ChevronDown } else { Icon::ChevronRight };
+        theme::icon(ui, chevron, 14.0, palette.secondary);
+        theme::subtle(ui, palette, label);
+        if !open && let Some(name) = in_use {
+            ui.add_space(4.0);
+            theme::text(ui, name, theme::regular(theme::SMALL_TEXT), palette.accent);
+        }
+    });
+    // Over the words, so the whole heading is the button.
+    ui.interact(
+        row.response.rect,
+        egui::Id::new(("eq-group", label)),
+        egui::Sense::click(),
+    )
+    .on_hover_cursor(egui::CursorIcon::PointingHand)
+    .clicked()
+}
+
+/// The reader's own curves, always listed: click one to use it. The pencil
+/// shows the arrows that move a curve and the cross that removes it.
+fn eq_custom_curves(app: &mut App, ui: &mut egui::Ui) {
+    if app.settings.custom_eqs.is_empty() {
+        return;
+    }
+    let palette = app.palette;
+    let edit_id = egui::Id::new("eq-edit-curves");
+    let mut editing = ui.data(|data| data.get_temp::<bool>(edit_id)).unwrap_or(false);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        theme::subtle(ui, &palette, "Your curves");
+        let label = if editing { "Done" } else { "Edit" };
+        if theme::soft_button(ui, &palette, Some(Icon::Pencil), label, editing)
+            .on_hover_text("Reorder or remove your curves")
+            .clicked()
+        {
+            editing = !editing;
+        }
+    });
+    ui.data_mut(|data| data.insert_temp(edit_id, editing));
+    let count = app.settings.custom_eqs.len();
+    let mut apply = None;
+    let mut remove = None;
+    let mut shift = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+        for (index, (name, bands)) in app.settings.custom_eqs.iter().enumerate() {
+            let active = *bands == app.settings.eq_bands_db;
+            if !editing {
                 if theme::soft_button(ui, &palette, None, name, active).clicked() {
                     apply = Some(index);
                 }
-                if theme::soft_button(ui, &palette, None, "\u{d7}", false)
-                    .on_hover_text("Remove this curve")
-                    .clicked()
-                {
+                continue;
+            }
+            // One block per curve, sized up front, so a wrap never parts a
+            // curve from its arrows.
+            let arrow = 14.0 + 12.0;
+            let size = egui::vec2(
+                theme::soft_button_width(ui, name) + 3.0 * arrow + 3.0 * 2.0,
+                theme::CONTROL_HEIGHT + 4.0,
+            );
+            ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                let left = ui
+                    .add_enabled_ui(index > 0, |ui| {
+                        theme::icon_button(ui, Icon::ChevronLeft, 14.0, palette.secondary, palette.text, "Move left")
+                    })
+                    .inner;
+                if left.clicked() {
+                    shift = Some((index, index.saturating_sub(1)));
+                }
+                if theme::soft_button(ui, &palette, None, name, active).clicked() {
+                    apply = Some(index);
+                }
+                let right = ui
+                    .add_enabled_ui(index + 1 < count, |ui| {
+                        theme::icon_button(ui, Icon::ChevronRight, 14.0, palette.secondary, palette.text, "Move right")
+                    })
+                    .inner;
+                if right.clicked() {
+                    shift = Some((index, index + 1));
+                }
+                if theme::icon_button(ui, Icon::X, 14.0, palette.secondary, palette.warning, "Remove this curve").clicked() {
                     remove = Some(index);
                 }
-                ui.add_space(6.0);
-            }
-            if let Some(index) = apply {
-                app.actions.push(Action::ApplyCustomEq(index));
-            }
-            if let Some(index) = remove {
-                app.actions.push(Action::RemoveCustomEq(index));
-            }
-        });
+            });
+        }
+    });
+    if let Some(index) = apply {
+        app.actions.push(Action::ApplyCustomEq(index));
     }
-    ui.add_space(6.0);
+    if let Some((from, to)) = shift {
+        app.actions.push(Action::MoveCustomEq(from, to));
+    }
+    if let Some(index) = remove {
+        app.actions.push(Action::RemoveCustomEq(index));
+    }
+}
+
+/// The field that keeps the curve in use under a name.
+fn eq_save_field(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         let id = egui::Id::new("eq-save-name");
         let mut name = ui.data(|data| data.get_temp::<String>(id)).unwrap_or_default();
-        egui::TextEdit::singleline(&mut name)
+        let field = egui::TextEdit::singleline(&mut name)
             .hint_text("Name this curve")
             .desired_width(180.0)
-            .show(ui);
-        if theme::soft_button(ui, &palette, None, "Save curve", false).clicked() {
+            .show(ui)
+            .response;
+        let enter = field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+        if (theme::soft_button(ui, &palette, None, "Save curve", false).clicked() || enter)
+            && !name.trim().is_empty()
+        {
             app.actions.push(Action::SaveCustomEq(name.clone()));
             name.clear();
         }
         ui.data_mut(|data| data.insert_temp(id, name));
     });
-    ui.add_space(8.0);
-    eq_curve(ui, &palette, &crate::app::eq_settings(&app.settings));
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
-        let on = app.settings.eq_on;
-        let mut preamp = app.settings.eq_preamp_db;
-        if eq_slider(ui, &palette, &pgettext(locale, "equalizer", "Pre"), &mut preamp, on) {
-            app.actions.push(Action::SetEqPreamp(preamp));
-        }
-        for (band, hz) in crate::eq::BANDS.iter().enumerate() {
-            let mut gain = app.settings.eq_bands_db[band];
-            if eq_slider(ui, &palette, &hertz(*hz), &mut gain, on) {
-                app.actions.push(Action::SetEqBand(band, gain));
-            }
-        }
-    });
 }
 
-fn eq_slider(ui: &mut egui::Ui, palette: &Palette, label: &str, value: &mut f32, on: bool) -> bool {
-    use egui::{Rect, Stroke, pos2, vec2};
+/// The gap between the equalizer's columns.
+const EQ_GAP: f32 = 6.0;
+
+/// Column `index` of the equalizer's row, `width` wide from `row`'s left:
+/// 0 is the preamp, 1 to 10 the bands. The curve and the sliders share
+/// these, so each band's point on the curve sits over its slider.
+fn eq_column(row: egui::Rect, index: usize) -> egui::Rect {
+    let pitch = (row.width() + EQ_GAP) / 11.0;
+    let left = row.left() + index as f32 * pitch;
+    egui::Rect::from_x_y_ranges(left..=left + pitch - EQ_GAP, row.y_range())
+}
+
+/// The curve over the preamp and the ten bands, both exactly `width` wide.
+fn eq_graph_and_sliders(app: &mut App, ui: &mut egui::Ui, width: f32) {
+    let palette = app.palette;
+    let locale = app.locale;
+    let on = app.settings.eq_on;
+    eq_curve(ui, &palette, &crate::app::eq_settings(&app.settings), width);
+    let (row, _) = ui.allocate_exact_size(egui::vec2(width, 104.0), egui::Sense::hover());
+    // Translators: short label under the equalizer's preamplifier slider.
+    let pre = pgettext(locale, "equalizer", "Pre");
+    let mut preamp = app.settings.eq_preamp_db;
+    if eq_slider(ui, &palette, eq_column(row, 0), egui::Id::new("eq-slider-pre"), &pre, &mut preamp, on) {
+        app.actions.push(Action::SetEqPreamp(preamp));
+    }
+    for (band, hz) in crate::eq::BANDS.iter().enumerate() {
+        let mut gain = app.settings.eq_bands_db[band];
+        let id = egui::Id::new(("eq-slider", band));
+        if eq_slider(ui, &palette, eq_column(row, band + 1), id, &hertz(*hz), &mut gain, on) {
+            app.actions.push(Action::SetEqBand(band, gain));
+        }
+    }
+}
+
+/// One vertical slider in the app's own style, in `rect` with its label
+/// along the bottom: the track filled from 0 dB, the handle in the middle
+/// when flat, a double-click to put it back there. Returns whether it moved.
+fn eq_slider(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    rect: egui::Rect,
+    id: egui::Id,
+    label: &str,
+    value: &mut f32,
+    on: bool,
+) -> bool {
+    use egui::{Rect, Stroke, pos2};
     let range = crate::eq::RANGE_DB;
-    ui.vertical(|ui| {
-        let (rect, response) =
-            ui.allocate_exact_size(vec2(30.0, 118.0), egui::Sense::click_and_drag());
-        let track = Rect::from_center_size(rect.center(), vec2(4.0, rect.height() - 20.0));
-        let y_of = |db: f32| track.bottom() - (db + range) / (2.0 * range) * track.height();
-        let mut changed = false;
-        if response.double_clicked() {
-            *value = 0.0;
+    let response = ui.interact(rect, id, egui::Sense::click_and_drag());
+    let label_height = 16.0;
+    let track = Rect::from_min_max(
+        pos2(rect.center().x - 2.0, rect.top() + 10.0),
+        pos2(rect.center().x + 2.0, rect.bottom() - label_height - 8.0),
+    );
+    let y_of = |db: f32| track.bottom() - (db + range) / (2.0 * range) * track.height();
+    let mut changed = false;
+    if response.double_clicked() {
+        *value = 0.0;
+        changed = true;
+    } else if (response.dragged() || response.clicked())
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        let db = (track.bottom() - pos.y) / track.height() * 2.0 * range - range;
+        let db = (db.clamp(-range, range) * 10.0).round() / 10.0;
+        if db != *value {
+            *value = db;
             changed = true;
-        } else if (response.dragged() || response.clicked())
-            && let Some(pos) = response.interact_pointer_pos()
-        {
-            let db = (track.bottom() - pos.y) / track.height() * 2.0 * range - range;
-            let db = (db.clamp(-range, range) * 10.0).round() / 10.0;
-            if db != *value {
-                *value = db;
-                changed = true;
-            }
         }
-        if ui.is_rect_visible(rect) {
-            let painter = ui.painter();
-            painter.rect_filled(track, 2.0, palette.surface_active);
-            let fill = if on { palette.accent } else { palette.dim };
-            let (top, bottom) = (y_of(value.max(0.0)), y_of(value.min(0.0)));
-            painter.rect_filled(
-                Rect::from_min_max(pos2(track.left(), top), pos2(track.right(), bottom)),
-                2.0,
-                fill,
+    }
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        painter.rect_filled(track, 2.0, palette.surface_active);
+        let fill = if on { palette.accent } else { palette.dim };
+        let (top, bottom) = (y_of(value.max(0.0)), y_of(value.min(0.0)));
+        painter.rect_filled(
+            Rect::from_min_max(pos2(track.left(), top), pos2(track.right(), bottom)),
+            2.0,
+            fill,
+        );
+        painter.hline(
+            (track.left() - 3.0)..=(track.right() + 3.0),
+            y_of(0.0),
+            Stroke::new(1.0, palette.dim),
+        );
+        let handle = pos2(track.center().x, y_of(*value));
+        painter.circle_filled(handle, 7.0, palette.text);
+        if response.hovered() || response.dragged() {
+            painter.text(
+                pos2(track.center().x, rect.top() - 2.0),
+                egui::Align2::CENTER_TOP,
+                format!("{value:+.1}"),
+                theme::regular(theme::SMALL_TEXT),
+                palette.secondary,
             );
-            painter.hline(
-                (track.left() - 3.0)..=(track.right() + 3.0),
-                y_of(0.0),
-                Stroke::new(1.0, palette.dim),
-            );
-            let handle = pos2(track.center().x, y_of(*value));
-            painter.circle_filled(handle, 7.0, palette.text);
-            if response.hovered() || response.dragged() {
-                painter.text(
-                    pos2(track.center().x, rect.top() + 2.0),
-                    egui::Align2::CENTER_TOP,
-                    format!("{value:+.1}"),
-                    theme::regular(theme::SMALL_TEXT),
-                    palette.secondary,
-                );
-            }
         }
-        theme::text(ui, label, theme::regular(theme::SMALL_TEXT), palette.secondary);
-        changed
-    })
-    .inner
+        painter.text(
+            pos2(rect.center().x, rect.bottom()),
+            egui::Align2::CENTER_BOTTOM,
+            label,
+            theme::regular(theme::SMALL_TEXT),
+            palette.secondary,
+        );
+    }
+    changed
 }
 
-/// The equalizer's response over the audible range, the bands marked on
-/// it: the shape says what a row of numbers cannot.
-fn eq_curve(ui: &mut egui::Ui, palette: &Palette, settings: &crate::eq::EqSettings) {
+/// The equalizer's response over the audible range, `width` wide, the
+/// bands marked on it over their sliders (see [`eq_column`]); the first
+/// column holds the preamp's level. The shape says what a row of numbers
+/// cannot.
+fn eq_curve(ui: &mut egui::Ui, palette: &Palette, settings: &crate::eq::EqSettings, width: f32) {
     use egui::{Shape, Stroke, pos2, vec2};
-    // The width of the panel's own column, never what the page around it
-    // happens to offer (that ran past the window's right edge).
-    let width = ui.available_width().min(470.0);
-    let (rect, _) = ui.allocate_exact_size(vec2(width, 120.0), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(width, 96.0), egui::Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
     let painter = ui.painter();
     painter.rect_filled(rect, theme::RADIUS as f32, palette.surface);
-    let plot = rect.shrink2(vec2(10.0, 12.0));
-    let (low, high) = (20f32.log10(), 20_000f32.log10());
-    let x_of = |hz: f32| plot.left() + (hz.log10() - low) / (high - low) * plot.width();
+    let (top, bottom) = (rect.top() + 10.0, rect.bottom() - 10.0);
     let y_of = |db: f32| {
-        plot.center().y
+        (top + bottom) / 2.0
             - db.clamp(-crate::eq::RANGE_DB, crate::eq::RANGE_DB) / crate::eq::RANGE_DB
-                * plot.height()
+                * (bottom - top)
                 / 2.0
     };
-    for db in [-12.0, -6.0, 0.0, 6.0, 12.0] {
-        let color = if db == 0.0 {
-            palette.dim
-        } else {
-            palette.outline
-        };
-        painter.hline(plot.x_range(), y_of(db), Stroke::new(1.0, color));
-    }
-    for hz in crate::eq::BANDS {
-        painter.vline(x_of(hz), plot.y_range(), Stroke::new(1.0, palette.outline));
-    }
-    let curve = settings.curve();
-    let points: Vec<egui::Pos2> = (0..=240)
-        .map(|step| {
-            let t = step as f32 / 240.0;
-            let hz = 10f32.powf(low + t * (high - low));
-            pos2(plot.left() + t * plot.width(), y_of(curve.db_at(hz)))
-        })
-        .collect();
+    let pre = eq_column(rect, 0);
+    let first = eq_column(rect, 1);
+    let last = eq_column(rect, 10);
     let color = if settings.on {
         palette.accent
     } else {
         palette.dim
     };
+    // The grid, over the bands' columns.
+    for db in [-12.0, -6.0, 0.0, 6.0, 12.0] {
+        let line = if db == 0.0 {
+            palette.dim
+        } else {
+            palette.outline
+        };
+        painter.hline(first.left()..=last.right(), y_of(db), Stroke::new(1.0, line));
+    }
+    for band in 1..=10 {
+        painter.vline(
+            eq_column(rect, band).center().x,
+            top..=bottom,
+            Stroke::new(1.0, palette.outline),
+        );
+    }
+    // The preamp's column: its level as a short bar over its 0 dB mark.
+    let divider = (pre.right() + first.left()) / 2.0;
+    painter.vline(divider, top..=bottom, Stroke::new(1.0, palette.outline));
+    let half = (pre.width() / 2.0 - 4.0).max(4.0);
+    painter.hline(
+        (pre.center().x - half)..=(pre.center().x + half),
+        y_of(0.0),
+        Stroke::new(1.0, palette.dim),
+    );
+    painter.hline(
+        (pre.center().x - half)..=(pre.center().x + half),
+        y_of(settings.preamp_db),
+        Stroke::new(2.0, color),
+    );
+    // The response, in pieces between the band centres: the space between
+    // two columns is the octaves between their bands, so the curve meets
+    // each band over its slider. It runs on to 20 Hz and 20 kHz at the ends.
+    let mut knots: Vec<(f32, f32)> = vec![(20.0, first.left())];
+    for (band, hz) in crate::eq::BANDS.iter().enumerate() {
+        knots.push((*hz, eq_column(rect, band + 1).center().x));
+    }
+    knots.push((20_000.0, last.right()));
+    let curve = settings.curve();
+    let steps = 16;
+    let mut points = Vec::with_capacity(knots.len() * steps);
+    for pair in knots.windows(2) {
+        let ((from_hz, from_x), (to_hz, to_x)) = (pair[0], pair[1]);
+        let (from_log, to_log) = (from_hz.log2(), to_hz.log2());
+        for step in 0..steps {
+            let t = step as f32 / steps as f32;
+            let hz = (from_log + t * (to_log - from_log)).exp2();
+            points.push(pos2(from_x + t * (to_x - from_x), y_of(curve.db_at(hz))));
+        }
+    }
+    points.push(pos2(last.right(), y_of(curve.db_at(20_000.0))));
     painter.add(Shape::line(points, Stroke::new(2.0, color)));
-    for (hz, db) in crate::eq::BANDS.iter().zip(settings.bands_db) {
-        painter.circle_filled(pos2(x_of(*hz), y_of(db + settings.preamp_db)), 3.0, color);
+    for (band, db) in settings.bands_db.iter().enumerate() {
+        let x = eq_column(rect, band + 1).center().x;
+        painter.circle_filled(pos2(x, y_of(db + settings.preamp_db)), 3.0, color);
     }
 }
 

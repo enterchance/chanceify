@@ -1711,6 +1711,11 @@ pub enum Action {
     ApplyCustomEq(usize),
     RemoveCustomEq(usize),
     ToggleEqHideDefaults,
+    /// Folds one of the equalizer's preset headings shut, or opens it, by
+    /// its name in `crate::eq::PRESET_GROUPS`.
+    ToggleEqGroup(&'static str),
+    /// Moves one of your curves from one place in the list to another.
+    MoveCustomEq(usize, usize),
     ExportEq,
     ImportEq,
     /// Copies a share code for one of your curves (`Some`), or for the curve
