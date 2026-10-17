@@ -127,11 +127,23 @@
     if (!m) return;
     const artist = decodeURIComponent(m[1].replace(/\+/g, ' '));
     const track = decodeURIComponent(m[2].replace(/\+/g, ' '));
-    const host = document.querySelector('.header-new-actions, .header-new-content, .header-new-title');
-    if (!host) return;
     const b = makeButton('play', artist, track, true);
+    const web = makeWebButton(artist, track, true);
+    // Under Last.fm's own buttons (love, bookmark, more), in their style: a
+    // row of its own that wraps below the buttons and the listener counts.
+    const actions = document.querySelector('.header-new-actions');
+    if (actions && actions.parentElement) {
+      const row = document.createElement('div');
+      row.className = 'cfy-hero-row';
+      row.append(b, web);
+      actions.parentElement.style.flexWrap = 'wrap';
+      actions.parentElement.appendChild(row);
+      return;
+    }
+    const host = document.querySelector('.header-new-content, .header-new-title');
+    if (!host) return;
     host.parentNode.insertBefore(b, host.nextSibling);
-    b.after(makeWebButton(artist, track, true));
+    b.after(web);
   }
 
   // YouTube: an "open in chanceify" button under the video. The title is
