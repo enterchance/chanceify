@@ -6,7 +6,7 @@ tagline: music reimagined
 
 a spotify player for windows.  
 needs spotify premium to stream.  
-local library works with no premium.
+local library works without it.
 
 ## get it
 
@@ -43,7 +43,7 @@ local library works with no premium.
 
 ## questions
 
-**do i need premium?** yes. blame spotify. your local library works without it.
+**do i need premium?** only to stream, blame spotify.
 
 **where is everything saved?** in the folder beside `chanceify.exe`.
 
