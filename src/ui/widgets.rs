@@ -444,11 +444,12 @@ pub fn paint_sticky_cover(
     let id = egui::Id::new(("sticky-cover", key));
     let corner = CornerRadius::same(radius.min(127.0) as u8);
     if let Some(url) = url {
-        art.touch(url);
-        let image = egui::Image::new(url).show_loading_spinner(false);
-        if let Ok(egui::load::TexturePoll::Ready { texture }) = image.load_for_size(ui.ctx(), rect.size()) {
-            art.release_bytes(url);
-            art.note_decoded(url, texture.size.x.round() as usize, texture.size.y.round() as usize);
+        let cover = CoverAt { url, rect, corner };
+        // The copy at this size, or while it is made, the nearest copy of
+        // the same artwork already on the GPU.
+        if let Some(texture) = cover_url_texture(ui, cover, Some(art))
+            .or_else(|| nearest_copy_texture(ui, cover, Some(art)))
+        {
             ui.ctx().data_mut(|data| data.insert_temp(id, (texture.id, texture.size)));
             paint_cover_texture(ui, texture, rect, corner, false);
             return;
@@ -478,12 +479,14 @@ pub(super) fn paint_cover_with_thumbnail(
         return;
     }
     let corner = CornerRadius::same(radius.min(127.0) as u8);
-    let loaded = sources
-        .requested
-        .is_some_and(|url| paint_cover_url(ui, url, rect, corner, art, false))
-        || sources
-            .previous
-            .is_some_and(|url| paint_ready_cover_url(ui, url, rect, corner, art))
+    let at = |url| CoverAt { url, rect, corner };
+    // A copy at this size, or while it is made, the nearest copy of the
+    // same artwork already on the GPU.
+    let loaded = sources.requested.is_some_and(|url| {
+        paint_cover_url(ui, at(url), art, false) || paint_nearest_copy(ui, at(url), art)
+    }) || sources
+        .previous
+        .is_some_and(|url| paint_ready_cover_url(ui, at(url), art))
         || sources.softened.is_some_and(|texture| {
             paint_cover_texture(
                 ui,
@@ -494,9 +497,9 @@ pub(super) fn paint_cover_with_thumbnail(
             );
             true
         })
-        || sources.thumbnail.is_some_and(|url| {
-            paint_cover_url(ui, url, rect, corner, art, sources.align_thumbnail)
-        });
+        || sources
+            .thumbnail
+            .is_some_and(|url| paint_cover_url(ui, at(url), art, sources.align_thumbnail));
     if !loaded {
         let painter = ui.painter();
         let fill = if palette.dark {
@@ -531,41 +534,120 @@ pub(super) fn ready_cover_texture(
     }
 }
 
-fn paint_ready_cover_url(
-    ui: &Ui,
-    url: &str,
+/// A cover to paint: its artwork, where it goes, and its corners.
+#[derive(Clone, Copy)]
+struct CoverAt<'a> {
+    url: &'a str,
     rect: Rect,
     corner: CornerRadius,
+}
+
+/// Paints `cover`'s artwork only if it needs no wait on the network: a
+/// copy made from bytes already loaded, or one already on the GPU.
+fn paint_ready_cover_url(
+    ui: &Ui,
+    cover: CoverAt<'_>,
     art: Option<&crate::images::ArtLoader>,
 ) -> bool {
-    art.is_some_and(|art| art.is_ready(url)) && paint_cover_url(ui, url, rect, corner, art, false)
+    art.is_some_and(|art| art.is_ready(cover.url)) && paint_cover_url(ui, cover, art, false)
+        || paint_nearest_copy(ui, cover, art)
+}
+
+/// The size of the copy of a cover drawn at `rect`.
+fn cover_copy_pixels(ui: &Ui, rect: Rect) -> u32 {
+    crate::images::cover_pixels(rect.width().max(rect.height()) * ui.ctx().pixels_per_point())
+}
+
+/// The texture of the copy of `cover`'s artwork already on the GPU that is
+/// nearest the size it is drawn at, without asking for one to be made. The
+/// artwork loader's bytes may be on their way back from the disk for
+/// another size meanwhile; the copy is the texture egui already holds.
+fn nearest_copy_texture(
+    ui: &Ui,
+    cover: CoverAt<'_>,
+    art: Option<&crate::images::ArtLoader>,
+) -> Option<egui::load::SizedTexture> {
+    let art = art?;
+    let uri = art.nearest_copy(cover.url, cover_copy_pixels(ui, cover.rect))?;
+    let image = egui::Image::new(uri.as_str())
+        .texture_options(crate::images::COVER_TEXTURE)
+        .show_loading_spinner(false);
+    let Ok(egui::load::TexturePoll::Ready { texture }) =
+        image.load_for_size(ui.ctx(), cover.rect.size())
+    else {
+        return None;
+    };
+    art.touch(cover.url);
+    let [width, height] = [texture.size.x, texture.size.y].map(|side| side.round() as usize);
+    art.note_texture(cover.url, &uri, width, height);
+    Some(texture)
+}
+
+/// Paints the nearest copy of `cover`'s artwork already on the GPU; see
+/// [`nearest_copy_texture`].
+fn paint_nearest_copy(ui: &Ui, cover: CoverAt<'_>, art: Option<&crate::images::ArtLoader>) -> bool {
+    let Some(texture) = nearest_copy_texture(ui, cover, art) else {
+        return false;
+    };
+    paint_cover_texture(ui, texture, cover.rect, cover.corner, false);
+    true
+}
+
+/// The texture of `cover`'s artwork from a copy scaled on the CPU to the
+/// pixels it covers, with a Lanczos filter, so the GPU holds no more than
+/// the screen shows and fine detail survives instead of the GPU skipping
+/// texels of a much larger picture. Artwork that is not fetched over the
+/// network is drawn as it is. `None` until the copy is made.
+fn cover_url_texture(
+    ui: &Ui,
+    cover: CoverAt<'_>,
+    art: Option<&crate::images::ArtLoader>,
+) -> Option<egui::load::SizedTexture> {
+    let CoverAt { url, rect, .. } = cover;
+    if let Some(art) = art {
+        art.touch(url);
+    }
+    let scaled = (url.starts_with("https://") || url.starts_with("http://"))
+        .then(|| crate::images::scaled_uri(url, cover_copy_pixels(ui, rect)));
+    let uri = scaled.as_deref().unwrap_or(url);
+    let image = egui::Image::new(uri)
+        .texture_options(crate::images::COVER_TEXTURE)
+        .show_loading_spinner(false);
+    let Ok(egui::load::TexturePoll::Ready { texture }) = image.load_for_size(ui.ctx(), rect.size())
+    else {
+        return None;
+    };
+    match art {
+        Some(art) => {
+            let [width, height] =
+                [texture.size.x, texture.size.y].map(|side| side.round() as usize);
+            // Only on the frame this copy's texture first appears: the same
+            // artwork can be wanted at another size, a row's and a page
+            // header's, and releasing the bytes on every frame of the one
+            // already made would snatch them from the other each time they
+            // came back from the disk, so it never got made.
+            if art.note_texture(url, uri, width, height) {
+                art.release_bytes(url);
+                crate::images::forget_decoded(ui.ctx(), uri);
+            }
+        }
+        // Nothing tracks this cover's copies, so let go of the decoded one
+        // as soon as egui holds the texture.
+        None => crate::images::forget_decoded(ui.ctx(), uri),
+    }
+    Some(texture)
 }
 
 fn paint_cover_url(
     ui: &Ui,
-    url: &str,
-    rect: Rect,
-    corner: CornerRadius,
+    cover: CoverAt<'_>,
     art: Option<&crate::images::ArtLoader>,
     shift_thumbnail: bool,
 ) -> bool {
-    if let Some(art) = art {
-        art.touch(url);
-    }
-    let image = egui::Image::new(url).show_loading_spinner(false);
-    let Ok(egui::load::TexturePoll::Ready { texture }) = image.load_for_size(ui.ctx(), rect.size())
-    else {
+    let Some(texture) = cover_url_texture(ui, cover, art) else {
         return false;
     };
-    if let Some(art) = art {
-        art.release_bytes(url);
-        art.note_decoded(
-            url,
-            texture.size.x.round() as usize,
-            texture.size.y.round() as usize,
-        );
-    }
-    paint_cover_texture(ui, texture, rect, corner, shift_thumbnail);
+    paint_cover_texture(ui, texture, cover.rect, cover.corner, shift_thumbnail);
     true
 }
 
@@ -6205,5 +6287,47 @@ mod tests {
             text.x1 <= control.x0,
             "the control moved: description {text:?}, control {control:?}"
         );
+    }
+
+    /// Covers are painted well below their pixel size, so they are sampled
+    /// through mipmaps: without them a 640 pixel cover on a 148 point card
+    /// shows stair-stepped edges and grain.
+    #[test]
+    fn covers_are_uploaded_with_mipmaps() {
+        let ctx = egui::Context::default();
+        egui_extras::install_image_loaders(&ctx);
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image::RgbImage::from_pixel(64, 64, image::Rgb([20, 30, 40]))
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        let uri = "bytes://mipmapped-cover.png";
+        ctx.include_bytes(uri, encoded.into_inner());
+        let palette = theme::Palette::dark();
+        let started = std::time::Instant::now();
+        while !ctx
+            .tex_manager()
+            .read()
+            .allocated()
+            .any(|(_, meta)| meta.name == uri)
+        {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(10),
+                "the cover never loaded"
+            );
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(148.0, 148.0));
+                paint_cover(ui, &palette, Some(uri), rect, 6.0, Icon::Disc, None);
+            });
+            output.textures_delta.clear();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let manager = ctx.tex_manager();
+        let manager = manager.read();
+        let (_, meta) = manager
+            .allocated()
+            .find(|(_, meta)| meta.name == uri)
+            .unwrap();
+        assert_eq!(meta.options, crate::images::COVER_TEXTURE);
+        assert_eq!(meta.options.mipmap_mode, Some(egui::TextureFilter::Linear));
     }
 }
