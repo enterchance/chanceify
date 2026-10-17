@@ -4,19 +4,26 @@
 //! browsed with no internet.
 
 use std::collections::HashMap;
+use std::path::Path;
 
-use egui::{Align2, CornerRadius, Rect, Sense, Stroke, Vec2, pos2, vec2};
+use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, Vec2, pos2, vec2};
 
 use crate::app::App;
-use crate::local_library::LocalSong;
+use crate::local_library::{LocalSong, ScanView};
 use crate::model::Action;
 use crate::theme::{self, Icon, Palette};
 
-const ROW: f32 = 34.0;
+const ROW: f32 = 40.0;
+/// The picture at the start of each row.
+const COVER: f32 = 30.0;
 /// The heading row, as tall as the playlist table's.
 const HEADER: f32 = 34.0;
+/// Space between a cell's edge and its text, on each side.
+const PAD: f32 = 6.0;
 /// The playlists column, by id (see [`COLUMNS`]).
 const PLAYLISTS_COLUMN: usize = 9;
+/// The menu button's label, measured before it is drawn.
+const FOLDERS: &str = "Folders";
 
 /// One line of whichever table is open, already turned into text, one
 /// cell per column id (see [`COLUMNS`]).
@@ -29,8 +36,14 @@ struct Line {
     have_file: Option<bool>,
     /// The file to play for this line, if there is one.
     path: Option<String>,
+    /// The file's size and date, which name its picture (see
+    /// [`crate::local_library::Covers`]).
+    stamp: (u64, u64),
     /// The Spotify song this file is, once it has been matched.
     spotify: Option<String>,
+    /// The Spotify album picture for this line, when the file has none of
+    /// its own.
+    image: Option<String>,
     /// The file as a local playlist knows it: the path, kept even when the
     /// file is no longer in the library, so it can still be taken out.
     entry: Option<String>,
@@ -39,19 +52,28 @@ struct Line {
 }
 
 /// Every column the table can show, by id: its heading, its name in the
-/// columns menu, and its share of the width when first shown.
+/// columns menu, and its width when first shown. The title, artist, album
+/// and genre share the room left over (the number is their share); the
+/// others are as wide as their content (0) or as wide as they were dragged,
+/// in points.
 const COLUMNS: [(&str, &str, f32); 10] = [
-    ("#", "number", 0.05),
-    ("title", "title", 0.30),
-    ("artist", "artist", 0.20),
-    ("album", "album", 0.18),
-    ("date added", "date added", 0.09),
-    ("bpm", "bpm", 0.06),
-    ("key", "key", 0.06),
-    ("length", "length", 0.07),
-    ("genre", "genre", 0.10),
-    ("playlists", "playlists", 0.08),
+    ("#", "number", 0.0),
+    ("title", "title", 0.36),
+    ("artist", "artist", 0.24),
+    ("album", "album", 0.22),
+    ("date added", "date added", 0.0),
+    ("bpm", "bpm", 0.0),
+    ("key", "key", 0.0),
+    ("length", "length", 0.0),
+    ("genre", "genre", 0.12),
+    ("playlists", "playlists", 0.0),
 ];
+
+/// Whether the column shares the room left over and gives it up first when
+/// the table is narrow; the others keep the width their content needs.
+fn flexible(id: usize) -> bool {
+    matches!(id, 1 | 2 | 3 | 8)
+}
 
 /// Which table the page shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -91,8 +113,8 @@ fn keep_view(ui: &egui::Ui, view: &View) {
     ui.ctx().data_mut(|data| data.insert_temp(view_id(), view));
 }
 
-/// The columns shown, in order, with their shares; a saved list with
-/// nothing usable in it falls back to the usual set.
+/// The columns shown, in order, with their widths (see [`COLUMNS`]); a
+/// saved list with nothing usable in it falls back to the usual set.
 fn shown_columns(app: &App) -> Vec<(u8, f32)> {
     let mut seen = [false; COLUMNS.len()];
     let cols: Vec<(u8, f32)> = app
@@ -103,13 +125,138 @@ fn shown_columns(app: &App) -> Vec<(u8, f32)> {
             let id = *id as usize;
             id < COLUMNS.len() && !std::mem::replace(&mut seen[id], true)
         })
-        .map(|(id, share)| (*id, share.clamp(0.02, 0.8)))
+        .map(|(id, value)| {
+            let value = if value.is_finite() { *value } else { 0.0 };
+            let value = if flexible(*id as usize) {
+                value.clamp(0.02, 0.8)
+            } else {
+                value.clamp(0.0, 1000.0)
+            };
+            (*id, value)
+        })
         .collect();
     if cols.iter().any(|(id, _)| *id == 1) {
         cols
     } else {
         crate::settings::Settings::default().local_columns
     }
+}
+
+/// The narrowest a column may be: wide enough for its heading and for its
+/// widest usual content, so a number or a date is never cut to a stub.
+fn min_width(ui: &egui::Ui, id: usize) -> f32 {
+    let measure = |text: &str, font: egui::FontId| {
+        ui.painter()
+            .layout_no_wrap(text.to_string(), font, Color32::WHITE)
+            .size()
+            .x
+    };
+    let body = theme::regular(theme::BODY_TEXT);
+    // The heading, with room for the sort arrow beside it.
+    let heading = measure(COLUMNS[id].0, theme::regular(theme::SMALL_TEXT)) + 16.0;
+    let content = match id {
+        0 => measure("0000", body),
+        1 => COVER + 10.0 + 80.0,
+        2 | 3 => 64.0,
+        4 => measure("0000-00-00", body),
+        5 => measure("000", body),
+        6 => measure("12A", body),
+        7 => measure("00:00", body),
+        8 => 56.0,
+        // Two playlist tiles.
+        _ => 18.0 * 2.0 + 3.0,
+    };
+    content.max(heading) + PAD * 2.0
+}
+
+/// The width of each shown column, in points, for a table `inner` wide.
+/// Fixed columns take the width they were dragged to, or their minimum;
+/// the flexible ones share what is left. When that is too little, the
+/// flexible columns give way first, then the others, and no column ever
+/// goes below its minimum (the table is cut at the edge instead).
+fn fit_widths(values: &[f32], mins: &[f32], flexible: &[bool], inner: f32) -> Vec<f32> {
+    let fixed_total: f32 = values
+        .iter()
+        .zip(mins)
+        .zip(flexible)
+        .filter(|(_, flexible)| !**flexible)
+        .map(|((value, min), _)| fixed_width(*value, *min))
+        .sum();
+    let shares: f32 = values
+        .iter()
+        .zip(flexible)
+        .filter(|(_, flexible)| **flexible)
+        .map(|(value, _)| value.max(0.0))
+        .sum::<f32>()
+        .max(0.0001);
+    let left_over = (inner - fixed_total).max(0.0);
+    let mut widths: Vec<f32> = values
+        .iter()
+        .zip(mins)
+        .zip(flexible)
+        .map(|((value, min), flexible)| {
+            if *flexible {
+                (left_over * value.max(0.0) / shares).max(*min)
+            } else {
+                fixed_width(*value, *min)
+            }
+        })
+        .collect();
+    let mut excess = widths.iter().sum::<f32>() - inner;
+    for giving in [true, false] {
+        if excess <= 0.0 {
+            break;
+        }
+        let room: f32 = widths
+            .iter()
+            .zip(mins)
+            .zip(flexible)
+            .filter(|(_, flexible)| **flexible == giving)
+            .map(|((width, min), _)| width - min)
+            .sum();
+        if room <= 0.0 {
+            continue;
+        }
+        let take = excess.min(room);
+        for ((width, min), _) in widths
+            .iter_mut()
+            .zip(mins)
+            .zip(flexible)
+            .filter(|(_, flexible)| **flexible == giving)
+        {
+            *width -= (*width - min) / room * take;
+        }
+        excess -= take;
+    }
+    widths
+}
+
+/// A fixed column's width: as dragged (a saved value over one point), or
+/// else just wide enough for its content.
+fn fixed_width(value: f32, min: f32) -> f32 {
+    if value > 1.0 { value.max(min) } else { min }
+}
+
+/// The saved form of a table laid out at `widths`: shares for the flexible
+/// columns, points for the others.
+fn store_widths(cols: &[(u8, f32)], widths: &[f32]) -> Vec<(u8, f32)> {
+    let flexible_total: f32 = cols
+        .iter()
+        .zip(widths)
+        .filter(|((id, _), _)| flexible(*id as usize))
+        .map(|(_, width)| *width)
+        .sum::<f32>()
+        .max(1.0);
+    cols.iter()
+        .zip(widths)
+        .map(|((id, _), width)| {
+            if flexible(*id as usize) {
+                (*id, (width / flexible_total).clamp(0.02, 0.8))
+            } else {
+                (*id, width.max(2.0))
+            }
+        })
+        .collect()
 }
 
 /// A day count since 1970 as `YYYY-MM-DD` (no time zone: the day the file
@@ -130,6 +277,7 @@ fn day_text(seconds: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
+/// "3:05", "10:00": minutes unpadded, seconds always two digits.
 fn length(ms: u64) -> String {
     let s = ms / 1000;
     if s == 0 { String::new() } else { format!("{}:{:02}", s / 60, s % 60) }
@@ -150,11 +298,68 @@ fn playlist_names(places: &[usize], names: &[String]) -> String {
         .join(", ")
 }
 
+/// The album picture of a Spotify song already fetched, by its URI.
+fn spotify_image(app: &App, uri: &str) -> Option<String> {
+    let id = crate::util::uri_id(uri)?;
+    app.track_cache
+        .get(id)
+        .and_then(|track| track.image(64))
+        .map(str::to_string)
+}
+
+/// The picture to show for a file: the one inside it, or when it has none,
+/// the Spotify album picture `fallback`. Nothing while the file is still
+/// being looked at, so a row does not show one picture and then another.
+fn cover_for(
+    ui: &egui::Ui,
+    art: &crate::images::ArtLoader,
+    covers: &crate::local_library::Covers,
+    index: &Path,
+    file: Option<(&str, (u64, u64))>,
+    fallback: Option<&str>,
+) -> Option<String> {
+    let Some((path, (size, modified))) = file else {
+        return fallback.map(str::to_string);
+    };
+    match covers.lookup(ui.ctx(), art, index, path, size, modified) {
+        Some(Some(url)) => Some(url),
+        Some(None) => fallback.map(str::to_string),
+        None => None,
+    }
+}
+
+/// One line of text, cut with an ellipsis to fit `cell`'s width, placed in
+/// `cell` as `anchor` says.
+fn paint_fitted(
+    painter: &egui::Painter,
+    cell: Rect,
+    anchor: Align2,
+    text: &str,
+    font: egui::FontId,
+    color: Color32,
+) {
+    if text.is_empty() || cell.width() < 4.0 {
+        return;
+    }
+    let galley = crate::bidi::layout(
+        painter,
+        text,
+        font,
+        color,
+        cell.width(),
+        1,
+        Some(crate::bidi::ELLIPSIS),
+    );
+    let rect = anchor.align_size_within_rect(vec2(cell.width(), galley.size().y), cell);
+    painter.galley(crate::bidi::galley_pos(rect, &galley), galley, color);
+}
+
 /// A line for one song file.
 fn song_line(
     number: usize,
     song: &LocalSong,
     spotify: Option<String>,
+    image: Option<String>,
     playlists: Vec<usize>,
     names: &[String],
 ) -> Line {
@@ -179,14 +384,15 @@ fn song_line(
         length_ms: song.duration_ms,
         have_file: None,
         path: Some(song.path.clone()),
+        stamp: (song.size, song.modified),
         spotify,
+        image,
         entry: Some(song.path.clone()),
         playlists,
     }
 }
 
-/// A playlist's picture: a music note on a tile (song files carry no
-/// picture chanceify reads yet).
+/// A playlist's picture: a music note on a tile.
 fn paint_playlist_tile(ui: &egui::Ui, palette: &Palette, rect: Rect) {
     super::widgets::paint_cover(ui, palette, None, rect, 4.0, Icon::Music, None);
 }
@@ -230,114 +436,21 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 
     ui.add_space(8.0);
     theme::text(ui, "Local songs", theme::bold(theme::TITLE_TEXT), palette.text);
-    ui.add_space(4.0);
-    theme::subtle(
-        ui,
-        &palette,
-        &format!(
-            "Put song files (mp3, flac, ogg, wav, m4a) in {} or add a folder of your own, then press Scan. Double-click a song to play it. Each file is measured once and remembered.",
-            crate::local_library::songs_dir(&index).display()
-        ),
-    );
-    ui.add_space(10.0);
-
-    // Buttons.
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
-        let label = if scan.running { "Scanning…" } else { "Scan songs folder" };
-        if theme::soft_button(ui, &palette, Some(Icon::Refresh), label, scan.running).clicked()
-            && !scan.running
-        {
-            app.actions.push(Action::ScanMusic);
-        }
-        if theme::soft_button(ui, &palette, Some(Icon::Plus), "Add a music folder", false)
-            .clicked()
-        {
-            app.actions.push(Action::AddMusicFolder);
-        }
-        if theme::soft_button(ui, &palette, Some(Icon::Plus), "Add song files", false).clicked() {
-            app.actions.push(Action::AddMusicFiles);
-        }
-        let matching = app.local_sync.progress();
-        let match_label = match matching {
-            Some((done, total)) => format!("Matching with Spotify… {done}/{total}"),
-            None => match app.local_matches.matched() {
-                0 => "Match with Spotify".to_string(),
-                found => format!("Match with Spotify ({found} found)"),
-            },
-        };
-        if theme::soft_button(ui, &palette, Some(Icon::Search), &match_label, matching.is_some())
-            .clicked()
-            && matching.is_none()
-        {
-            app.actions.push(Action::MatchSpotify);
-        }
-        if theme::soft_button(ui, &palette, Some(Icon::ExternalLink), "Open songs folder", false)
-            .clicked()
-        {
-            let folder = crate::local_library::songs_dir(&index);
-            std::fs::create_dir_all(&folder).ok();
-            if let Err(error) = crate::opener::open(&folder) {
-                app.toast_error(format!("Could not open the folder: {error}"));
-            }
-        }
-    });
-    // The folders being read, each with a way to stop reading it.
-    if !app.settings.music_folders.is_empty() {
-        ui.add_space(6.0);
-        let folders = app.settings.music_folders.clone();
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
-            for (at, folder) in folders.iter().enumerate() {
-                let (_, remove) = theme::soft_button_dismiss(ui, &palette, Icon::Music, folder);
-                if remove {
-                    app.actions.push(Action::RemoveMusicFolder(at));
-                }
-            }
-        });
-    }
+    ui.add_space(8.0);
+    toolbar(app, ui, &palette, &mut view, &scan, &index);
+    // One dim line, only while there is something to say.
     if scan.running {
-        ui.add_space(6.0);
-        theme::subtle(
+        ui.add_space(2.0);
+        theme::hint(
             ui,
             &palette,
             &format!("Measuring {} of {}: {}", scan.done, scan.total, scan.current),
         );
     } else if !app.local_ui.message.is_empty() {
-        ui.add_space(6.0);
-        theme::subtle(ui, &palette, &app.local_ui.message.clone());
+        ui.add_space(2.0);
+        theme::hint(ui, &palette, &app.local_ui.message.clone());
     }
     ui.add_space(10.0);
-
-    // Which table: every song, or the playlists (made here or imported).
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
-        let total = app.local_songs.songs.len();
-        if theme::soft_button(
-            ui,
-            &palette,
-            Some(Icon::Music),
-            &format!("All songs ({total})"),
-            view.open == Open::All,
-        )
-        .clicked()
-        {
-            view.open = Open::All;
-        }
-        let playlists = app.settings.local_playlists.len() + app.offline_playlists.len();
-        if theme::soft_button(
-            ui,
-            &palette,
-            Some(Icon::ListMusic),
-            &format!("Playlists ({playlists})"),
-            view.open != Open::All,
-        )
-        .clicked()
-        {
-            view.open = Open::Playlists;
-        }
-    });
-    ui.add_space(8.0);
     app.local_ui.open_playlist = match view.open {
         Open::Imported(at) => Some(at),
         _ => None,
@@ -383,13 +496,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
 
-    ui.add(
-        egui::TextEdit::singleline(&mut app.local_ui.filter)
-            .hint_text("Search these songs")
-            .desired_width(280.0),
-    );
-    ui.add_space(8.0);
-
     // Build the lines of the open table.
     let local_names: Vec<String> = app
         .settings
@@ -410,8 +516,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
         }
+        // Read only, here: the closures below share it.
+        let shared: &App = app;
         let member_of = |path: &str| membership.get(path).cloned().unwrap_or_default();
         let spotify_of = |path: &str| app.local_matches.uri_of(path).map(str::to_string);
+        let image_of =
+            |spotify: Option<&String>| spotify.and_then(|uri| spotify_image(shared, uri));
         match view.open {
             Open::Local(at) => {
                 let by_path: HashMap<&str, &LocalSong> = app
@@ -429,13 +539,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 for (number, path) in paths.iter().enumerate() {
                     let places = member_of(path.as_str());
                     match by_path.get(path.as_str()) {
-                        Some(song) => lines.push(song_line(
-                            number + 1,
-                            song,
-                            spotify_of(path.as_str()),
-                            places,
-                            &local_names,
-                        )),
+                        Some(song) => {
+                            let spotify = spotify_of(path.as_str());
+                            let image = image_of(spotify.as_ref());
+                            lines.push(song_line(
+                                number + 1,
+                                song,
+                                spotify,
+                                image,
+                                places,
+                                &local_names,
+                            ));
+                        }
                         None => {
                             // The file has moved or gone: still listed, so it
                             // can be taken out, but there is nothing to play.
@@ -461,7 +576,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                                 length_ms: 0,
                                 have_file: None,
                                 path: None,
+                                stamp: (0, 0),
                                 spotify: None,
+                                image: None,
                                 entry: Some(path.clone()),
                                 playlists: places,
                             });
@@ -474,6 +591,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     for (number, track) in playlist.tracks.iter().enumerate() {
                         let found = app.local_songs.find_match(&track.name, &track.artists);
                         let have = found.is_some();
+                        let stamp = found.map_or((0, 0), |song| (song.size, song.modified));
                         let path = found.map(|song| song.path.clone());
                         let places = path.as_deref().map(&member_of).unwrap_or_default();
                         lines.push(Line {
@@ -492,7 +610,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                             bpm: track.tempo,
                             length_ms: track.duration_ms,
                             have_file: Some(have),
+                            stamp,
                             spotify: None,
+                            image: spotify_image(shared, &track.uri),
                             entry: path.clone(),
                             path,
                             playlists: places,
@@ -502,10 +622,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             }
             _ => {
                 for (number, song) in app.local_songs.songs.iter().enumerate() {
+                    let spotify = spotify_of(song.path.as_str());
+                    let image = image_of(spotify.as_ref());
                     lines.push(song_line(
                         number + 1,
                         song,
-                        spotify_of(song.path.as_str()),
+                        spotify,
+                        image,
                         member_of(song.path.as_str()),
                         &local_names,
                     ));
@@ -535,33 +658,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         if descending { order.reverse() } else { order }
     });
 
-    if lines.is_empty() {
-        let (title, body) = if !needle.is_empty() {
-            ("Nothing here", "No songs match your search.")
-        } else {
-            match view.open {
-                Open::Local(_) => (
-                    "This playlist is empty",
-                    "Press Add songs to pick songs from your files, or right-click a song in All songs.",
-                ),
-                Open::Imported(_) => ("Nothing here", "This playlist has no songs."),
-                _ => (
-                    "No local songs yet",
-                    "Copy song files into the songs folder, then press Scan songs folder.",
-                ),
-            }
-        };
-        super::widgets::empty_state(ui, &palette, Icon::Music, title, body);
-        keep_view(ui, &view);
-        return;
-    }
-
-    // Play the whole list, in order or shuffled, or stop what is playing.
+    // Play the whole list, in order or shuffled, or stop what is playing,
+    // with the search at the end of the same row.
     let playable: Vec<String> = lines.iter().filter_map(|line| line.path.clone()).collect();
     let playing_path = app
         .deck_current_path()
         .map(|path| path.to_string_lossy().to_string());
-    ui.horizontal_wrapped(|ui| {
+    ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
         if !playable.is_empty() {
             if theme::soft_button(ui, &palette, Some(Icon::Play), "Play all", false).clicked() {
@@ -585,18 +688,51 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         {
             app.actions.push(Action::StopLocalFiles);
         }
+        let field = 240.0f32.min(ui.available_width());
+        ui.add_space((ui.available_width() - field - 12.0).max(0.0));
+        ui.add(
+            egui::TextEdit::singleline(&mut app.local_ui.filter)
+                .hint_text("Search these songs")
+                .desired_width(field)
+                .min_size(vec2(0.0, theme::CONTROL_HEIGHT)),
+        );
     });
     ui.add_space(6.0);
+
+    if lines.is_empty() {
+        let (title, body) = if !needle.is_empty() {
+            ("Nothing here", "No songs match your search.")
+        } else {
+            match view.open {
+                Open::Local(_) => (
+                    "This playlist is empty",
+                    "Press Add songs to pick songs from your files, or right-click a song in All songs.",
+                ),
+                Open::Imported(_) => ("Nothing here", "This playlist has no songs."),
+                _ => (
+                    "No local songs yet",
+                    "Copy song files into the songs folder, or add a folder of your own from Folders, then scan.",
+                ),
+            }
+        };
+        super::widgets::empty_state(ui, &palette, Icon::Music, title, body);
+        keep_view(ui, &view);
+        return;
+    }
 
     // Header: click to sort, drag a heading to move the column, drag the
     // line between two headings to resize, right-click for the columns.
     let cols = shown_columns(app);
     let width = ui.available_width();
-    let inner = width - 16.0;
-    let total: f32 = cols.iter().map(|(_, share)| share).sum::<f32>().max(0.01);
-    let widths: Vec<f32> = cols.iter().map(|(_, share)| inner * share / total).collect();
+    // The table's left edge, and its width inside the row.
+    let origin = 4.0;
+    let inner = (width - origin * 2.0).max(1.0);
+    let mins: Vec<f32> = cols.iter().map(|(id, _)| min_width(ui, *id as usize)).collect();
+    let flex: Vec<bool> = cols.iter().map(|(id, _)| flexible(*id as usize)).collect();
+    let values: Vec<f32> = cols.iter().map(|(_, value)| *value).collect();
+    let widths = fit_widths(&values, &mins, &flex, inner);
     let (header, header_response) = ui.allocate_exact_size(vec2(width, HEADER), Sense::click());
-    let mut x = header.left() + 8.0;
+    let mut x = header.left() + origin;
     let mut clicked_sort: Option<u8> = None;
     let mut new_cols: Option<Vec<(u8, f32)>> = None;
     let drag_id = ui.id().with("local-head-drag");
@@ -604,6 +740,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     // Right-clicking a heading opens the header's menu too.
     let mut menu_anchor = header_response.clone();
     let font = theme::regular(theme::SMALL_TEXT);
+    // Where the pointer would drop a dragged heading: before the first
+    // column whose middle is past it.
+    let drop_at = |pointer_x: f32| {
+        let mut left = header.left() + origin;
+        for (at, w) in widths.iter().enumerate() {
+            if pointer_x < left + w / 2.0 {
+                return (at, left);
+            }
+            left += w;
+        }
+        (widths.len(), left)
+    };
     for (at, (id, _)) in cols.iter().enumerate() {
         let w = widths[at];
         let cell = Rect::from_min_size(pos2(x, header.top()), vec2(w, header.height()));
@@ -622,13 +770,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         // Lowercase and small, centred in the row, as the playlist table's
         // headings are; the sorting one is lit with a small drawn arrow.
         let clip = Rect::from_min_max(
-            pos2(cell.left() - 1.0, header.top()),
-            pos2((cell.right() - 6.0).max(cell.left()), header.bottom()),
+            pos2(cell.left() + PAD - 1.0, header.top()),
+            pos2((cell.right() - PAD).max(cell.left() + PAD), header.bottom()),
         );
         let painter = ui.painter().with_clip_rect(clip);
         let galley = painter.layout_no_wrap(COLUMNS[*id as usize].0.to_string(), font.clone(), color);
         let size = galley.size();
-        let top_left = pos2(cell.left(), header.center().y - size.y / 2.0);
+        let top_left = pos2(cell.left() + PAD, header.center().y - size.y / 2.0);
         painter.galley(top_left, galley, color);
         if active {
             let ascending = !descending;
@@ -655,17 +803,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             && let Some(from) = dragging
             && let Some(pointer) = ui.ctx().pointer_interact_pos()
         {
-            // Drop where the pointer is: before the first column whose middle
-            // is past it.
-            let mut left = header.left() + 8.0;
-            let mut to = cols.len();
-            for (i, w) in widths.iter().enumerate() {
-                if pointer.x < left + w / 2.0 {
-                    to = i;
-                    break;
-                }
-                left += w;
-            }
+            let (to, _) = drop_at(pointer.x);
             let mut moved = cols.clone();
             let column = moved.remove(from);
             let to = if to > from { to - 1 } else { to };
@@ -673,23 +811,29 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             new_cols = Some(moved);
             ui.data_mut(|data| data.remove::<usize>(drag_id));
         }
-        // The resize handle on the right edge of every heading but the last.
+        // A thin line between two headings, which is also the handle that
+        // resizes the column on its left. Neither column goes below its
+        // minimum.
         if at + 1 < cols.len() {
             let handle = Rect::from_center_size(pos2(cell.right(), cell.center().y), vec2(8.0, header.height()));
             let grip = ui
                 .interact(handle, ui.id().with(("local-head-size", *id)), Sense::drag())
                 .on_hover_cursor(egui::CursorIcon::ResizeColumn);
-            if grip.hovered() || grip.dragged() {
-                ui.painter().vline(cell.right(), header.y_range().shrink(6.0), Stroke::new(1.0, palette.outline));
-            }
+            let line = if grip.hovered() || grip.dragged() {
+                Stroke::new(1.0, palette.secondary)
+            } else {
+                Stroke::new(1.0, palette.outline)
+            };
+            ui.painter().vline(cell.right(), header.y_range().shrink(9.0), line);
             if grip.dragged() {
-                let delta = grip.drag_delta().x / inner * total;
-                let mut sized = cols.clone();
-                let room = sized[at].1 + sized[at + 1].1;
-                let left = (sized[at].1 + delta).clamp(0.02, room - 0.02);
-                sized[at].1 = left;
-                sized[at + 1].1 = room - left;
-                new_cols = Some(sized);
+                let pair = widths[at] + widths[at + 1];
+                let left = (widths[at] + grip.drag_delta().x)
+                    .min(pair - mins[at + 1])
+                    .max(mins[at]);
+                let mut sized = widths.clone();
+                sized[at] = left;
+                sized[at + 1] = (pair - left).max(mins[at + 1]);
+                new_cols = Some(store_widths(&cols, &sized));
             }
             menu_anchor = menu_anchor.union(grip);
         }
@@ -700,19 +844,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         && let Some(pointer) = ui.ctx().pointer_hover_pos()
         && header.expand(20.0).contains(pointer)
     {
-        let mut left = header.left() + 8.0;
-        let mut mark = left + inner;
-        for w in &widths {
-            if pointer.x < left + w / 2.0 {
-                mark = left;
-                break;
-            }
-            left += w;
-        }
+        let (_, mark) = drop_at(pointer.x);
         ui.painter().vline(mark, header.y_range().shrink(3.0), Stroke::new(2.0, palette.accent));
     }
     ui.painter()
-        .hline(header.x_range().shrink(8.0), header.bottom() - 0.5, Stroke::new(1.0, palette.outline));
+        .hline(header.x_range().shrink(origin), header.bottom() - 0.5, Stroke::new(1.0, palette.outline));
     // Right-click the header: which columns show, as in the playlist
     // table's columns menu. Sorting is done by clicking a heading.
     egui::Popup::context_menu(&menu_anchor)
@@ -749,7 +885,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 );
             }
         });
-    ui.add_space(6.0);
+    ui.add_space(4.0);
     if let Some(changed) = new_cols {
         app.settings.local_columns = changed;
         app.mark_settings_dirty();
@@ -764,14 +900,16 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
 
     // Rows.
+    let art = app.backend.art().clone();
+    let covers = app.local_covers.clone();
     let mut pending: Vec<Action> = Vec::new();
     let mut open_playlist: Option<usize> = None;
     egui::ScrollArea::vertical()
         .id_salt("local-songs-scroll")
         .auto_shrink([false, false])
         .show_rows(ui, ROW, lines.len(), |ui, range| {
-            for index in range {
-                let line = &lines[index];
+            for index_in_list in range {
+                let line = &lines[index_in_list];
                 let (rect, response) = ui.allocate_exact_size(vec2(width, ROW), Sense::click());
                 let is_playing = line.path.is_some() && line.path == playing_path;
                 let pointer_in_row = ui.rect_contains_pointer(rect);
@@ -785,22 +923,26 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 let painter = ui.painter().with_clip_rect(rect);
                 // A small green dot: this file is also on Spotify.
                 if line.spotify.is_some() {
-                    let centre = pos2(rect.left() + 4.0, rect.center().y);
-                    painter.circle_filled(centre, 2.5, palette.accent);
+                    let centre = pos2(rect.left() + 3.0, rect.center().y);
+                    painter.circle_filled(centre, 2.0, palette.accent);
                 }
-                let mut x = rect.left() + 8.0;
+                let mut x = rect.left() + origin;
                 for (at, (id, _)) in cols.iter().enumerate() {
                     let w = widths[at];
                     let id = *id as usize;
-                    let clip = Rect::from_min_size(pos2(x, rect.top()), vec2((w - 8.0).max(1.0), ROW));
+                    // The cell's text area, inside its padding.
+                    let content = Rect::from_min_max(
+                        pos2(x + PAD, rect.top()),
+                        pos2((x + w - PAD).max(x + PAD + 1.0), rect.bottom()),
+                    );
                     if id == PLAYLISTS_COLUMN {
                         // Small playlist tiles, as the playlist table's
                         // playlists column shows; click one to open it.
                         let size = 18.0;
                         let gap = 3.0;
-                        let mut left = clip.left();
+                        let mut left = content.left();
                         for place in &line.playlists {
-                            if left + size > clip.right() {
+                            if left + size > content.right() {
                                 break;
                             }
                             let tile = Rect::from_min_size(
@@ -814,9 +956,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                                 .or_else(|| name.chars().next())
                                 .map_or(' ', |c| c.to_uppercase().next().unwrap_or(c));
                             let hit = ui
-                                .interact(tile, ui.id().with(("local-member", index, *place)), Sense::click())
+                                .interact(tile, ui.id().with(("local-member", index_in_list, *place)), Sense::click())
                                 .on_hover_text(&name);
-                            let tile_painter = painter.with_clip_rect(clip);
+                            let tile_painter = painter.with_clip_rect(content);
                             tile_painter.rect_filled(
                                 tile,
                                 CornerRadius::same(4),
@@ -837,6 +979,32 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         x += w;
                         continue;
                     }
+                    let mut text_cell = content;
+                    if id == 1 {
+                        // The song's picture, then its title.
+                        let tile = Rect::from_min_size(
+                            pos2(content.left(), rect.center().y - COVER / 2.0),
+                            Vec2::splat(COVER),
+                        );
+                        let url = cover_for(
+                            ui,
+                            &art,
+                            &covers,
+                            &index,
+                            line.path.as_deref().map(|path| (path, line.stamp)),
+                            line.image.as_deref(),
+                        );
+                        super::widgets::paint_cover(
+                            ui,
+                            &palette,
+                            url.as_deref(),
+                            tile,
+                            4.0,
+                            Icon::Music,
+                            Some(&art),
+                        );
+                        text_cell.min.x = tile.right() + 10.0;
+                    }
                     let mut text = line.cells[id].clone();
                     if id == 1 {
                         match line.have_file {
@@ -852,10 +1020,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     } else {
                         palette.secondary
                     };
-                    painter.with_clip_rect(clip).text(
-                        pos2(clip.left(), rect.center().y),
+                    paint_fitted(
+                        &painter,
+                        text_cell,
                         Align2::LEFT_CENTER,
-                        text,
+                        &text,
                         theme::regular(theme::BODY_TEXT),
                         color,
                     );
@@ -902,7 +1071,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     );
                     if line.path.is_some() {
                         let button = ui
-                            .interact(play_rect, ui.id().with(("local-play", index)), Sense::click())
+                            .interact(play_rect, ui.id().with(("local-play", index_in_list)), Sense::click())
                             .on_hover_text("Play");
                         let tint = if button.hovered() { palette.text } else { palette.secondary };
                         theme::paint_icon(ui, Icon::Play, play_rect, 14.0, tint);
@@ -912,7 +1081,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         }
                     }
                     let button = ui
-                        .interact(search_rect, ui.id().with(("local-find", index)), Sense::click())
+                        .interact(search_rect, ui.id().with(("local-find", index_in_list)), Sense::click())
                         .on_hover_text("Search this song on Spotify");
                     let tint = if button.hovered() { palette.text } else { palette.secondary };
                     theme::paint_icon(ui, Icon::Search, search_rect, 14.0, tint);
@@ -1015,6 +1184,126 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         view.open = Open::Local(place);
     }
     keep_view(ui, &view);
+}
+
+/// The row under the title: which table (every song, or the playlists) on
+/// the left, and on the right the Spotify match and the Folders menu, which
+/// holds everything about where the songs come from.
+fn toolbar(
+    app: &mut App,
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    view: &mut View,
+    scan: &ScanView,
+    index: &Path,
+) {
+    let matching = app.local_sync.progress();
+    let match_label = match matching {
+        Some((done, total)) => format!("Matching with Spotify… {done}/{total}"),
+        None => match app.local_matches.matched() {
+            0 => "Match with Spotify".to_string(),
+            found => format!("Match with Spotify ({found} found)"),
+        },
+    };
+    let total = app.local_songs.songs.len();
+    let playlists = app.settings.local_playlists.len() + app.offline_playlists.len();
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
+        if theme::soft_button(
+            ui,
+            palette,
+            Some(Icon::Music),
+            &format!("All songs ({total})"),
+            view.open == Open::All,
+        )
+        .clicked()
+        {
+            view.open = Open::All;
+        }
+        if theme::soft_button(
+            ui,
+            palette,
+            Some(Icon::ListMusic),
+            &format!("Playlists ({playlists})"),
+            view.open != Open::All,
+        )
+        .clicked()
+        {
+            view.open = Open::Playlists;
+        }
+        // The two actions sit at the right end when the row has room (a
+        // button with an icon is its label's width plus the icon's 21).
+        let actions = theme::soft_button_width(ui, &match_label)
+            + theme::soft_button_width(ui, FOLDERS)
+            + 21.0 * 2.0
+            + 8.0;
+        let room = ui.available_width() - actions - 1.0;
+        if room > 8.0 {
+            ui.add_space(room);
+        }
+        if theme::soft_button(ui, palette, Some(Icon::Search), &match_label, matching.is_some())
+            .on_hover_text("Find each song file on Spotify, to show its album picture and open it there")
+            .clicked()
+            && matching.is_none()
+        {
+            app.actions.push(Action::MatchSpotify);
+        }
+        let folders = theme::soft_button(ui, palette, Some(Icon::Settings), FOLDERS, false)
+            .on_hover_text(format!(
+                "Songs come from {} and the folders you add (mp3, flac, ogg, wav, m4a). Each file is measured once and remembered.",
+                crate::local_library::songs_dir(index).display()
+            ));
+        egui::Popup::menu(&folders)
+            .frame(super::widgets::menu_frame(palette))
+            .show(|ui| folders_menu(app, ui, palette, scan, index));
+    });
+}
+
+/// The Folders menu: scan, the folders songs are read from (each can be
+/// opened or taken away), and adding more.
+fn folders_menu(app: &mut App, ui: &mut egui::Ui, palette: &Palette, scan: &ScanView, index: &Path) {
+    super::widgets::fit_menu(ui, 320.0);
+    let label = if scan.running { "Scanning…" } else { "Scan for new songs" };
+    if super::widgets::menu_item_enabled(ui, palette, Some(Icon::Refresh), label, !scan.running) {
+        app.actions.push(Action::ScanMusic);
+    }
+    super::widgets::menu_separator(ui, palette);
+    super::widgets::menu_group(ui, palette, "Folders");
+    if super::widgets::menu_item(ui, palette, Some(Icon::ExternalLink), "Open songs folder") {
+        let folder = crate::local_library::songs_dir(index);
+        std::fs::create_dir_all(&folder).ok();
+        if let Err(error) = crate::opener::open(&folder) {
+            app.toast_error(format!("Could not open the folder: {error}"));
+        }
+    }
+    let folders = app.settings.music_folders.clone();
+    for (at, folder) in folders.iter().enumerate() {
+        let name = Path::new(folder)
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| folder.clone());
+        super::widgets::menu_submenu(ui, palette, Some(Icon::Music), &name, |ui| {
+            super::widgets::fit_menu(ui, 360.0);
+            // The whole path, dim, over what can be done with it.
+            super::widgets::menu_group(ui, palette, folder);
+            if super::widgets::menu_item(ui, palette, Some(Icon::ExternalLink), "Open folder")
+                && let Err(error) = crate::opener::open(Path::new(folder))
+            {
+                app.toast_error(format!("Could not open the folder: {error}"));
+            }
+            if super::widgets::menu_item(ui, palette, Some(Icon::X), "Stop reading this folder") {
+                app.actions.push(Action::RemoveMusicFolder(at));
+            }
+        });
+    }
+    super::widgets::menu_separator(ui, palette);
+    if super::widgets::menu_item(ui, palette, Some(Icon::Plus), "Add a music folder…") {
+        app.actions.push(Action::AddMusicFolder);
+    }
+    if super::widgets::menu_item(ui, palette, Some(Icon::Plus), "Add song files…") {
+        app.actions.push(Action::AddMusicFiles);
+    }
 }
 
 /// The list of playlists: a field to make a new one, the ones made here,
@@ -1181,7 +1470,7 @@ fn playlist_header(app: &mut App, ui: &mut egui::Ui, palette: &Palette, view: &m
     else {
         return;
     };
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
         if theme::soft_button(ui, palette, Some(Icon::ChevronLeft), "Playlists", false).clicked() {
             view.open = Open::Playlists;
@@ -1190,6 +1479,7 @@ fn playlist_header(app: &mut App, ui: &mut egui::Ui, palette: &Palette, view: &m
         let (tile, _) = ui.allocate_exact_size(Vec2::splat(theme::CONTROL_HEIGHT), Sense::hover());
         paint_playlist_tile(ui, palette, tile);
         let focus = std::mem::take(&mut view.focus_rename);
+        let renaming = matches!(&view.renaming, Some((renaming, _)) if *renaming == at);
         match &mut view.renaming {
             Some((renaming, text)) if *renaming == at => {
                 let field = ui.add(
@@ -1218,15 +1508,15 @@ fn playlist_header(app: &mut App, ui: &mut egui::Ui, palette: &Palette, view: &m
                 theme::subtle(ui, palette, &song_count(count));
             }
         }
-    });
-    ui.add_space(6.0);
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
+        // What can be done with the playlist, on the same row.
+        ui.add_space(8.0);
         if theme::soft_button(ui, palette, Some(Icon::Plus), "Add songs", view.adding).clicked() {
             view.adding = !view.adding;
             view.add_filter.clear();
         }
-        if theme::soft_button(ui, palette, Some(Icon::Pencil), "Rename", false).clicked() {
+        if !renaming
+            && theme::soft_button(ui, palette, Some(Icon::Pencil), "Rename", false).clicked()
+        {
             view.renaming = Some((at, name.clone()));
             view.focus_rename = true;
         }
@@ -1244,7 +1534,10 @@ fn playlist_header(app: &mut App, ui: &mut egui::Ui, palette: &Palette, view: &m
 }
 
 /// The song picker inside a local playlist: every song file not already in
-/// it, filtered by what is typed, each added with a click.
+/// it, filtered by what is typed, each with its picture, artist and length,
+/// a button to hear it and a button to add it (a click on the row adds it
+/// too). It takes most of the page, so a long library is easy to go
+/// through.
 fn add_songs_panel(app: &mut App, ui: &mut egui::Ui, palette: &Palette, view: &mut View, at: usize) {
     let Some(playlist) = app.settings.local_playlists.get(at) else {
         return;
@@ -1252,8 +1545,7 @@ fn add_songs_panel(app: &mut App, ui: &mut egui::Ui, palette: &Palette, view: &m
     let inside: std::collections::HashSet<&str> =
         playlist.paths.iter().map(String::as_str).collect();
     let needle = view.add_filter.trim().to_lowercase();
-    // (path, title, artist)
-    let candidates: Vec<(String, String, String)> = app
+    let candidates: Vec<&LocalSong> = app
         .local_songs
         .songs
         .iter()
@@ -1264,8 +1556,17 @@ fn add_songs_panel(app: &mut App, ui: &mut egui::Ui, palette: &Palette, view: &m
                 || song.artist.to_lowercase().contains(&needle)
                 || song.album.to_lowercase().contains(&needle)
         })
-        .map(|song| (song.path.clone(), song.title.clone(), song.artist.clone()))
         .collect();
+    let art = app.backend.art().clone();
+    let covers = app.local_covers.clone();
+    let index = app.dirs.index_dir();
+    // Read only, inside the list: the picture of a matched song.
+    let shared: &App = app;
+    let playing = app
+        .deck_current_path()
+        .map(|path| path.to_string_lossy().to_string());
+    // Leave room below for a few of the playlist's own rows.
+    let list_height = (ui.available_height() - 200.0).max(220.0);
     let mut pending: Vec<Action> = Vec::new();
     egui::Frame::new()
         .fill(palette.surface)
@@ -1293,7 +1594,7 @@ fn add_songs_panel(app: &mut App, ui: &mut egui::Ui, palette: &Palette, view: &m
                 {
                     pending.push(Action::AddToLocalPlaylist {
                         playlist: at,
-                        paths: candidates.iter().map(|(path, _, _)| path.clone()).collect(),
+                        paths: candidates.iter().map(|song| song.path.clone()).collect(),
                     });
                 }
                 if theme::soft_button(ui, palette, Some(Icon::Check), "Done", false).clicked() {
@@ -1306,7 +1607,7 @@ fn add_songs_panel(app: &mut App, ui: &mut egui::Ui, palette: &Palette, view: &m
                     ui,
                     palette,
                     if app.local_songs.songs.is_empty() {
-                        "No song files yet. Scan the songs folder first."
+                        "No song files yet. Add a folder from Folders, then scan."
                     } else if needle.is_empty() {
                         "Every song file is already in this playlist."
                     } else {
@@ -1315,60 +1616,203 @@ fn add_songs_panel(app: &mut App, ui: &mut egui::Ui, palette: &Palette, view: &m
                 );
                 return;
             }
-            let row = 30.0;
+            let row = ROW;
+            let length_width = ui
+                .painter()
+                .layout_no_wrap("00:00".to_string(), theme::regular(theme::SMALL_TEXT), palette.secondary)
+                .size()
+                .x;
             egui::ScrollArea::vertical()
                 .id_salt(("local-add-songs", at))
-                .max_height(240.0)
+                .max_height(list_height)
                 .auto_shrink([false, true])
                 .show_rows(ui, row, candidates.len(), |ui, range| {
-                    for index in range {
-                        let (path, title, artist) = &candidates[index];
+                    for line in range {
+                        let song = candidates[line];
                         let (rect, response) =
                             ui.allocate_exact_size(vec2(ui.available_width(), row), Sense::click());
-                        let response = response.on_hover_text("Add to this playlist");
-                        if response.hovered() {
+                        let hovered = ui.rect_contains_pointer(rect);
+                        let is_playing = playing.as_deref() == Some(song.path.as_str());
+                        if is_playing {
+                            ui.painter()
+                                .rect_filled(rect, CornerRadius::same(6), palette.accent.gamma_multiply(0.18));
+                        } else if hovered {
                             ui.painter().rect_filled(rect, CornerRadius::same(6), palette.surface_hover);
                         }
-                        let plus = Rect::from_center_size(
-                            pos2(rect.right() - 16.0, rect.center().y),
-                            Vec2::splat(20.0),
+                        let center = rect.center().y;
+                        // The picture.
+                        let tile = Rect::from_min_size(
+                            pos2(rect.left() + 6.0, center - COVER / 2.0),
+                            Vec2::splat(COVER),
                         );
+                        let fallback = shared
+                            .local_matches
+                            .uri_of(&song.path)
+                            .and_then(|uri| spotify_image(shared, uri));
+                        let url = cover_for(
+                            ui,
+                            &art,
+                            &covers,
+                            &index,
+                            Some((song.path.as_str(), (song.size, song.modified))),
+                            fallback.as_deref(),
+                        );
+                        super::widgets::paint_cover(ui, palette, url.as_deref(), tile, 4.0, Icon::Music, Some(&art));
+                        // From the right: add, hear it, its length.
+                        let plus = Rect::from_center_size(pos2(rect.right() - 18.0, center), Vec2::splat(24.0));
+                        let play = Rect::from_center_size(pos2(plus.center().x - 30.0, center), Vec2::splat(24.0));
+                        let length_right = play.left() - 10.0;
+                        let painter = ui.painter().with_clip_rect(rect);
+                        painter.text(
+                            pos2(length_right, center),
+                            Align2::RIGHT_CENTER,
+                            length(song.duration_ms),
+                            theme::regular(theme::SMALL_TEXT),
+                            palette.secondary,
+                        );
+                        // The title over the artist.
+                        let text_left = tile.right() + 10.0;
+                        let text_right = (length_right - length_width - 12.0).max(text_left + 1.0);
+                        paint_fitted(
+                            &painter,
+                            Rect::from_min_max(pos2(text_left, rect.top()), pos2(text_right, center + 1.0)),
+                            Align2::LEFT_BOTTOM,
+                            &song.title,
+                            theme::regular(theme::BODY_TEXT),
+                            if is_playing { palette.accent } else { palette.text },
+                        );
+                        paint_fitted(
+                            &painter,
+                            Rect::from_min_max(pos2(text_left, center + 2.0), pos2(text_right, rect.bottom())),
+                            Align2::LEFT_TOP,
+                            &song.artist,
+                            theme::regular(theme::SMALL_TEXT),
+                            palette.secondary,
+                        );
+                        // Hear it: shown on the row under the pointer, and on
+                        // the one playing, where it stops it.
+                        let mut used_button = false;
+                        if hovered || is_playing {
+                            let button = ui
+                                .interact(play, ui.id().with(("local-add-play", at, line)), Sense::click())
+                                .on_hover_text(if is_playing { "Stop" } else { "Play" });
+                            let tint = if button.hovered() {
+                                palette.text
+                            } else if is_playing {
+                                palette.accent
+                            } else {
+                                palette.secondary
+                            };
+                            theme::paint_icon(
+                                ui,
+                                if is_playing { Icon::Square } else { Icon::Play },
+                                play,
+                                14.0,
+                                tint,
+                            );
+                            if button.clicked() {
+                                used_button = true;
+                                pending.push(if is_playing {
+                                    Action::StopLocalFiles
+                                } else {
+                                    Action::PlayLocalFiles {
+                                        paths: vec![song.path.clone()],
+                                        index: 0,
+                                        shuffle: None,
+                                    }
+                                });
+                            }
+                        }
+                        let add = ui
+                            .interact(plus, ui.id().with(("local-add-plus", at, line)), Sense::click())
+                            .on_hover_text("Add to this playlist");
                         theme::paint_icon(
                             ui,
                             Icon::Plus,
                             plus,
-                            14.0,
-                            if response.hovered() { palette.accent } else { palette.secondary },
+                            16.0,
+                            if add.hovered() {
+                                palette.accent
+                            } else if hovered {
+                                palette.text
+                            } else {
+                                palette.secondary
+                            },
                         );
-                        let painter = ui.painter().with_clip_rect(Rect::from_min_max(
-                            rect.min,
-                            pos2(plus.left() - 8.0, rect.bottom()),
-                        ));
-                        let title_galley = painter.layout_no_wrap(
-                            title.clone(),
-                            theme::regular(theme::BODY_TEXT),
-                            palette.text,
-                        );
-                        let title_width = title_galley.size().x;
-                        let title_top = rect.center().y - title_galley.size().y / 2.0;
-                        painter.galley(pos2(rect.left() + 8.0, title_top), title_galley, palette.text);
-                        if !artist.is_empty() {
-                            painter.text(
-                                pos2(rect.left() + 8.0 + title_width + 8.0, rect.center().y),
-                                Align2::LEFT_CENTER,
-                                artist,
-                                theme::regular(theme::SMALL_TEXT),
-                                palette.secondary,
-                            );
-                        }
-                        if response.clicked() {
+                        if !used_button && (add.clicked() || response.clicked()) {
                             pending.push(Action::AddToLocalPlaylist {
                                 playlist: at,
-                                paths: vec![path.clone()],
+                                paths: vec![song.path.clone()],
                             });
                         }
                     }
                 });
         });
     app.actions.extend(pending);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lengths_are_compact() {
+        assert_eq!(length(0), "");
+        assert_eq!(length(185_000), "3:05");
+        assert_eq!(length(600_000), "10:00");
+    }
+
+    #[test]
+    fn days_read_as_dates() {
+        assert_eq!(day_text(0), "");
+        // 2026-10-15 00:00 UTC.
+        assert_eq!(day_text(1_792_022_400), "2026-10-15");
+    }
+
+    #[test]
+    fn fixed_columns_hug_their_content_and_the_rest_share_the_room() {
+        // number (fixed, never dragged), title, artist, bpm (dragged to 50).
+        let values = [0.0, 0.6, 0.4, 50.0];
+        let mins = [40.0, 120.0, 70.0, 36.0];
+        let flexible = [false, true, true, false];
+        let widths = fit_widths(&values, &mins, &flexible, 1000.0);
+        assert_eq!(widths[0], 40.0);
+        assert_eq!(widths[3], 50.0);
+        assert!((widths[1] - 546.0).abs() < 0.01);
+        assert!((widths[2] - 364.0).abs() < 0.01);
+        assert!((widths.iter().sum::<f32>() - 1000.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_narrow_table_squeezes_only_down_to_the_minimums() {
+        let values = [0.0, 0.6, 0.4, 50.0];
+        let mins = [40.0, 120.0, 70.0, 36.0];
+        let flexible = [false, true, true, false];
+        // The flexible columns give way first.
+        let widths = fit_widths(&values, &mins, &flexible, 300.0);
+        assert_eq!(widths[0], 40.0);
+        assert_eq!(widths[3], 50.0);
+        assert!((widths.iter().sum::<f32>() - 300.0).abs() < 0.01);
+        assert!(widths[1] >= 120.0 && widths[2] >= 70.0);
+        // Then the dragged fixed one, and never below any minimum.
+        let widths = fit_widths(&values, &mins, &flexible, 100.0);
+        for (width, min) in widths.iter().zip(mins) {
+            assert!(*width >= min - 0.01, "{width} under {min}");
+        }
+        assert_eq!(widths[3], 36.0);
+    }
+
+    #[test]
+    fn stored_widths_lay_out_the_same_again() {
+        let cols = vec![(0u8, 0.0), (1, 0.6), (2, 0.4), (5, 50.0)];
+        let mins = [40.0, 120.0, 70.0, 36.0];
+        let flexible = [false, true, true, false];
+        let dragged = [40.0, 500.0, 400.0, 60.0];
+        let stored = store_widths(&cols, &dragged);
+        let values: Vec<f32> = stored.iter().map(|(_, value)| *value).collect();
+        let widths = fit_widths(&values, &mins, &flexible, 1000.0);
+        for (width, wanted) in widths.iter().zip(dragged) {
+            assert!((width - wanted).abs() < 0.01, "{width} != {wanted}");
+        }
+    }
 }

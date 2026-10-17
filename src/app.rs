@@ -585,6 +585,9 @@ pub struct App {
     /// measured tempo, key and waveform.
     pub local_songs: crate::local_library::Library,
     pub local_scan: crate::local_library::Scan,
+    /// The pictures inside the song files, read in the background as rows
+    /// of the Local songs page ask for them.
+    pub local_covers: crate::local_library::Covers,
     /// Playlists read from Exportify files, for browsing with no internet.
     pub offline_playlists: Vec<crate::exportify::OfflinePlaylist>,
     /// What the Local songs page is showing right now.
@@ -1253,6 +1256,7 @@ impl App {
                 &index_dir,
             )),
             local_scan: crate::local_library::Scan::default(),
+            local_covers: crate::local_library::Covers::default(),
             offline_playlists: crate::exportify::load_offline(&index_dir),
             local_ui: LocalUi::default(),
             bpm_pending: HashSet::new(),
