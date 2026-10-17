@@ -1371,6 +1371,11 @@ pub fn item_menu(
             (gettext(locale, "Copy link").into_owned(), 0.0),
             (gettext(locale, "Open in Spotify").into_owned(), 0.0),
         ];
+        if let (Some(RowContext::Queue), Some(index)) = (context, index)
+            && app.can_remove_from_queue(index)
+        {
+            labels.push((gettext(locale, "Remove from queue").into_owned(), 0.0));
+        }
         if item.is_track() {
             let saved = app.is_saved(item.uri()).unwrap_or(false);
             labels.push((
@@ -1437,6 +1442,21 @@ pub fn item_menu(
         app.actions.push(Action::AddToQueue {
             uri: uri.clone(),
             label: label.clone(),
+        });
+    }
+    // Only a song the user queued, and only on this computer's queue: the
+    // context's rows play themselves, and no other queue can be rewritten.
+    if let (Some(RowContext::Queue), Some(index)) = (context, index)
+        && app.can_remove_from_queue(index)
+        && menu_item(
+            ui,
+            &palette,
+            Some(Icon::Minus),
+            &gettext(locale, "Remove from queue"),
+        )
+    {
+        app.actions.push(Action::RemoveFromQueue {
+            rows: vec![(index, uri.clone())],
         });
     }
     if let PlayableItem::Track(track) = item

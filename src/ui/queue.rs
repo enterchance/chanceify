@@ -223,7 +223,7 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
 }
 
 /// A faint trash can beside "Playing next" that brightens under the pointer.
-/// Pressing it asks first; the question is drawn by `clear_question`.
+/// Pressing it asks first; the confirm buttons are drawn by `clear_confirm`.
 fn clear_button(app: &mut App, ui: &mut egui::Ui) {
     if !app.can_clear_queue() {
         return;
@@ -244,8 +244,9 @@ fn clear_button(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
-/// "Are you sure?" under the heading, once the trash can has been pressed.
-fn clear_question(app: &mut App, ui: &mut egui::Ui) {
+/// "Yes, clear it" and "Cancel" on the heading's row, right beside the
+/// trash can, once it has been pressed.
+fn clear_confirm(app: &mut App, ui: &mut egui::Ui) {
     let ask_id = egui::Id::new("queue-clear-ask");
     let asking = ui.ctx().data(|data| data.get_temp::<bool>(ask_id)).unwrap_or(false);
     if !asking {
@@ -256,23 +257,14 @@ fn clear_question(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     let palette = app.palette;
-    ui.add_space(2.0);
-    theme::text(
-        ui,
-        &*gettext(app.locale, "Are you sure you want to clear the queue?"),
-        theme::regular(theme::BODY_TEXT),
-        palette.text,
-    );
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        if theme::soft_button(ui, &palette, None, &gettext(app.locale, "Yes, clear it"), false).clicked() {
-            app.actions.push(Action::ClearQueue);
-            ui.ctx().data_mut(|data| data.insert_temp(ask_id, false));
-        }
-        if theme::soft_button(ui, &palette, None, &gettext(app.locale, "Cancel"), false).clicked() {
-            ui.ctx().data_mut(|data| data.insert_temp(ask_id, false));
-        }
-    });
+    ui.spacing_mut().item_spacing.x = 8.0;
+    if theme::soft_button(ui, &palette, None, &gettext(app.locale, "Yes, clear it"), false).clicked() {
+        app.actions.push(Action::ClearQueue);
+        ui.ctx().data_mut(|data| data.insert_temp(ask_id, false));
+    }
+    if theme::soft_button(ui, &palette, None, &gettext(app.locale, "Cancel"), false).clicked() {
+        ui.ctx().data_mut(|data| data.insert_temp(ask_id, false));
+    }
 }
 
 /// A song was dropped on the queue this frame: the primary button was
@@ -481,8 +473,8 @@ fn contents_inner(app: &mut App, ui: &mut egui::Ui, compact: bool) {
                 palette.text,
             );
             clear_button(app, ui);
+            clear_confirm(app, ui);
         });
-        clear_question(app, ui);
         ui.add_space(4.0);
         if reorderable && egui::DragAndDrop::has_payload_of_type::<DragTrack>(ui.ctx()) {
             widgets::scroll_during_drag(ui);
