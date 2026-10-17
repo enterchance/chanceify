@@ -78,7 +78,9 @@ impl App {
     /// Called every frame: queues what plays, collects answers, saves files.
     pub(super) fn drive_lastfm_art(&mut self, ctx: &egui::Context) {
         let api_key = self.art_key();
-        if api_key.is_empty() || self.offline {
+        // Only for someone signed in to Last.fm: the pictures are for
+        // uploading to their Last.fm.
+        if api_key.is_empty() || self.offline || self.settings.lastfm_session.is_empty() {
             return;
         }
         let playing = self
@@ -273,7 +275,13 @@ impl App {
         // Already saved on an earlier run, or taken off the list by the
         // reader: nothing more to do.
         let taken_off = self.art_store.removed.contains(&format!("{folder}/{file}"));
-        if all.exists() && (known != Some(true) || missing_copy.exists() || taken_off) {
+        if self.settings.lastfm_art_all {
+            if all.exists() && (known != Some(true) || missing_copy.exists() || taken_off) {
+                return;
+            }
+        } else if known == Some(false) || missing_copy.exists() || taken_off {
+            // Only the missing ones are kept, and this one isn't (or is
+            // already saved).
             return;
         }
         self.art_exports.push(ArtExport {
@@ -328,6 +336,15 @@ impl App {
                 return true;
             }
         }
+        let keep_all = self.settings.lastfm_art_all;
+        // Only the missing ones: wait for Last.fm's answer before fetching.
+        if !keep_all {
+            match export.missing {
+                None => return true,
+                Some(false) => return false,
+                Some(true) => {}
+            }
+        }
         let Some(url) = export.url.clone() else {
             return false;
         };
@@ -340,7 +357,7 @@ impl App {
             Kind::Album => "albums",
             Kind::Artist => "artists",
         };
-        if !export.saved_all {
+        if !export.saved_all && keep_all {
             let target = root.join(folder).join(format!("{}.jpg", export.file));
             if copy_picture(&source, &target) {
                 export.saved_all = true;

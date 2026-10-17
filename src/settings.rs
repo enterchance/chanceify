@@ -1381,6 +1381,11 @@ pub struct Settings {
     pub ui_font_name: String,
     /// A different app face for every song.
     pub ui_font_random: bool,
+    /// Hovering a face in the app font list shows it on the whole app.
+    pub ui_font_live_preview: bool,
+    /// Save every album cover and artist picture, not only the ones
+    /// Last.fm is missing.
+    pub lastfm_art_all: bool,
     /// Count what is played on Last.fm.
     pub lastfm_scrobble: bool,
     /// Tell Last.fm what is playing right now.
@@ -1743,6 +1748,8 @@ impl Default for Settings {
             ui_font: 0,
             ui_font_name: String::new(),
             ui_font_random: false,
+            ui_font_live_preview: true,
+            lastfm_art_all: false,
             lastfm_scrobble: true,
             lastfm_now_playing: true,
             lastfm_files: true,

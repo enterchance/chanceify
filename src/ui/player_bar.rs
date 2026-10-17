@@ -1895,9 +1895,15 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui, in_panel: bool) {
         let h = own_h.clamp(VIS_PANEL_MIN_H.min(max_h), max_h);
         (h, h)
     } else {
-        (max_h, VIS_PANEL_MIN_H.min(max_h))
+        // Never shorter than the tallest it has been this run, so a font
+        // change (or a live preview) can't make the window jump about.
+        let tallest = ui
+            .ctx()
+            .data(|data| data.get_temp::<f32>(egui::Id::new("vis-panel-tallest")))
+            .unwrap_or(0.0);
+        (max_h, VIS_PANEL_MIN_H.max(tallest).min(max_h))
     };
-    egui::ScrollArea::vertical()
+    let output = egui::ScrollArea::vertical()
         .id_salt("vis-panel-scroll")
         .max_height(scroll_max)
         // Never squeezed to a sliver, whatever room the place it opened at
@@ -1905,6 +1911,13 @@ fn vis_menu_body(app: &mut App, ui: &mut egui::Ui, in_panel: bool) {
         .min_scrolled_height(scroll_min)
         .auto_shrink([false, true])
         .show(ui, |ui| vis_menu_inner(app, ui));
+    let tall = output.content_size.y.min(max_h);
+    ui.ctx().data_mut(|data| {
+        let seen = data.get_temp::<f32>(egui::Id::new("vis-panel-tallest")).unwrap_or(0.0);
+        if tall > seen {
+            data.insert_temp(egui::Id::new("vis-panel-tallest"), tall);
+        }
+    });
 }
 
 fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
@@ -1912,6 +1925,8 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
     {
         {
             ui.set_max_width(vis_panel_inner_w());
+            // A fixed width too, whatever the app font measures.
+            ui.set_min_width(vis_panel_inner_w());
             ui.spacing_mut().item_spacing.y = 3.0;
             // Three independent switches: any mix, or none (which closes
             // the visualizer down to the song-length bar).
@@ -2524,9 +2539,6 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             theme::subtle(ui, &palette, &gettext(app.locale, "TITLE"));
             // The faces first: the title's, then the whole app's.
             font_grid(app, ui);
-            if chip_i(ui, &palette, "Title outline", !app.settings.vis_text_no_outline, ui.available_width().min(290.0)).clicked() {
-                app.actions.push(Action::ToggleVisTextOutline);
-            }
             ui.add_space(6.0);
             app_font_picker(app, ui);
             ui.add_space(8.0);
@@ -2985,6 +2997,10 @@ fn app_font_picker(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     ui.horizontal(|ui| {
         theme::subtle(ui, &palette, "APP FONT");
+        if chip(ui, &palette, "Live preview", app.settings.ui_font_live_preview, 100.0).clicked() {
+            app.settings.ui_font_live_preview = !app.settings.ui_font_live_preview;
+            app.mark_settings_dirty();
+        }
         if chip(ui, &palette, "Random each song", app.settings.ui_font_random, 120.0).clicked() {
             app.settings.ui_font_random = !app.settings.ui_font_random;
             app.mark_settings_dirty();
@@ -2998,7 +3014,9 @@ fn app_font_picker(app: &mut App, ui: &mut egui::Ui) {
         app.settings.ui_font_random = false;
         app.mark_settings_dirty();
     }
-    if let Some(index) = hovered {
+    if app.settings.ui_font_live_preview
+        && let Some(index) = hovered
+    {
         let pass = ui.ctx().cumulative_pass_nr();
         ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("ui-font-preview"), (index, pass)));
     }

@@ -1951,6 +1951,18 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                         app.settings.lastfm_art_auto = !app.settings.lastfm_art_auto;
                         app.mark_settings_dirty();
                     }
+                    let all_label = if app.settings.lastfm_art_all {
+                        "Save: every cover and picture"
+                    } else {
+                        "Save: only the ones Last.fm is missing"
+                    };
+                    if theme::soft_button(ui, &palette, None, all_label, app.settings.lastfm_art_all)
+                        .on_hover_text("Only missing: saves just what Last.fm lacks (to upload). Every: also keeps a copy of all the others.")
+                        .clicked()
+                    {
+                        app.settings.lastfm_art_all = !app.settings.lastfm_art_all;
+                        app.mark_settings_dirty();
+                    }
                     let sweep_label = if app.art_sweep { "Stop checking my library" } else { "Check my whole library" };
                     if theme::soft_button(ui, &palette, None, sweep_label, app.art_sweep)
                         .on_hover_text("Asks Last.fm about the picture of every album and artist you have saved, a few at a time. The ones it lacks go in the missing lists.")
