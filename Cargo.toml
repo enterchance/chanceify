@@ -1,7 +1,7 @@
 [package]
 name = "chanceify"
 default-run = "chanceify"
-version = "0.9.67"
+version = "0.9.68"
 edition = "2024"
 rust-version = "1.98"
 license = "AGPL-3.0-only"
@@ -250,16 +250,19 @@ hyper-proxy2 = { git = "https://github.com/crmne/hyper-proxy2", rev = "efca48113
 # when Spotify refuses an audio key, bounded socket setup with DNS address
 # fallback, an in-memory credential cache for platform storage, full
 # playback-state recovery after a session disconnect, the desktop platform
-# signature for Windows on ARM, and a volume set while the device is inactive.
+# signature for Windows on ARM, a volume set while the device is inactive,
+# (from Spotifast's ef27e12) the dealer through the proxy, tokens kept out of
+# Debug output, a bounded handshake packet, IPv6/IPv4 racing, a CDN fallback
+# on non-206 replies, removal of one upcoming track and live remote state.
 # Recovery is proposed upstream in librespot-org/librespot#1765 and the
 # volume in librespot-org/librespot#1770; the ARM signature answers
 # librespot-org/librespot#1737.
 # Every librespot crate comes from the
 # fork so one copy exists. Drop patches as upstream takes them.
-librespot-audio = { git = "https://github.com/crmne/librespot", rev = "23fc42cff37848e51f0d8eaefad1a93941b71e59" }
-librespot-connect = { git = "https://github.com/crmne/librespot", rev = "23fc42cff37848e51f0d8eaefad1a93941b71e59" }
-librespot-core = { git = "https://github.com/crmne/librespot", rev = "23fc42cff37848e51f0d8eaefad1a93941b71e59" }
-librespot-metadata = { git = "https://github.com/crmne/librespot", rev = "23fc42cff37848e51f0d8eaefad1a93941b71e59" }
-librespot-oauth = { git = "https://github.com/crmne/librespot", rev = "23fc42cff37848e51f0d8eaefad1a93941b71e59" }
-librespot-playback = { git = "https://github.com/crmne/librespot", rev = "23fc42cff37848e51f0d8eaefad1a93941b71e59" }
-librespot-protocol = { git = "https://github.com/crmne/librespot", rev = "23fc42cff37848e51f0d8eaefad1a93941b71e59" }
+librespot-audio = { git = "https://github.com/crmne/librespot", rev = "ef27e124fe50b8519b5a5c6fa92c8f47f2544385" }
+librespot-connect = { git = "https://github.com/crmne/librespot", rev = "ef27e124fe50b8519b5a5c6fa92c8f47f2544385" }
+librespot-core = { git = "https://github.com/crmne/librespot", rev = "ef27e124fe50b8519b5a5c6fa92c8f47f2544385" }
+librespot-metadata = { git = "https://github.com/crmne/librespot", rev = "ef27e124fe50b8519b5a5c6fa92c8f47f2544385" }
+librespot-oauth = { git = "https://github.com/crmne/librespot", rev = "ef27e124fe50b8519b5a5c6fa92c8f47f2544385" }
+librespot-playback = { git = "https://github.com/crmne/librespot", rev = "ef27e124fe50b8519b5a5c6fa92c8f47f2544385" }
+librespot-protocol = { git = "https://github.com/crmne/librespot", rev = "ef27e124fe50b8519b5a5c6fa92c8f47f2544385" }

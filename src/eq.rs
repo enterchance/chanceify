@@ -452,6 +452,16 @@ pub struct Processor {
 }
 
 impl Processor {
+    /// Discards the previous signal without changing the filter settings.
+    pub fn reset(&mut self) {
+        for filter in self.chains.iter_mut().flatten() {
+            filter.x1 = 0.0;
+            filter.x2 = 0.0;
+            filter.y1 = 0.0;
+            filter.y2 = 0.0;
+        }
+    }
+
     pub fn new(shared: SharedEq) -> Self {
         let mut processor = Self {
             shared,

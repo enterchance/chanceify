@@ -796,6 +796,7 @@ impl Engine {
         );
         let tapped = Tapped::new(
             Box::new(output),
+            Some(Arc::clone(&self.audio)),
             Arc::clone(&self.config.tap),
             ceiling,
             false,

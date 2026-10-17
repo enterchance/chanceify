@@ -717,6 +717,7 @@ fn sink_builder(
                         let sink = builder(device, AudioFormat::S16);
                         Box::new(Tapped::new(
                             sink,
+                            Some(audio),
                             tap,
                             applied,
                             true,
@@ -742,11 +743,12 @@ fn sink_builder(
                 report,
                 volume,
                 buffer_ms,
-                audio,
+                Arc::clone(&audio),
                 Arc::clone(&speed),
             ));
             Box::new(Tapped::new(
                 sink,
+                Some(audio),
                 tap,
                 ceiling,
                 false,

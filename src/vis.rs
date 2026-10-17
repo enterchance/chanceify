@@ -195,6 +195,8 @@ impl AudioTap {
 /// Runs the equalizer and taps the signal before passing it to the real sink.
 pub struct Tapped {
     inner: Box<dyn Sink>,
+    /// Says when a skip or seek should drop the equalizer and limiter history.
+    control: Option<Arc<crate::sink::AudioControl>>,
     tap: Arc<AudioTap>,
     eq: crate::eq::Processor,
     /// Reads the stream at the reader's chosen speed. `None` until the
@@ -217,6 +219,7 @@ pub struct Tapped {
 impl Tapped {
     pub fn new(
         inner: Box<dyn Sink>,
+        control: Option<Arc<crate::sink::AudioControl>>,
         tap: Arc<AudioTap>,
         volume: Box<dyn VolumeGetter + Send>,
         applies_volume: bool,
@@ -226,6 +229,7 @@ impl Tapped {
     ) -> Self {
         Self {
             inner,
+            control,
             tap,
             eq: crate::eq::Processor::new(eq),
             speed: None,
@@ -264,6 +268,11 @@ impl Sink for Tapped {
     }
 
     fn write(&mut self, packet: AudioPacket, converter: &mut Converter) -> SinkResult<()> {
+        if self.control.as_ref().is_some_and(|control| control.take_processing_reset()) {
+            self.eq.reset();
+            self.limiter = crate::limiter::Limiter::new(f64::from(SAMPLE_RATE));
+            self.tap.clear();
+        }
         let packet = match packet {
             AudioPacket::Samples(mut samples) => {
                 self.eq.process(&mut samples);
