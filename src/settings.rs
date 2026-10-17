@@ -1338,6 +1338,9 @@ pub struct Settings {
     pub lastfm_session: String,
     /// Last.fm names added by hand to the Friends tab.
     pub lastfm_friends: Vec<String>,
+    /// The face every bit of text in the app uses (0: the built-in Inter),
+    /// from the same list as the visualizer title's.
+    pub ui_font: u8,
     /// Count what is played on Last.fm.
     pub lastfm_scrobble: bool,
     /// Tell Last.fm what is playing right now.
@@ -1693,6 +1696,7 @@ impl Default for Settings {
             lastfm_user: String::new(),
             lastfm_session: String::new(),
             lastfm_friends: Vec::new(),
+            ui_font: 0,
             lastfm_scrobble: true,
             lastfm_now_playing: true,
             lastfm_files: true,

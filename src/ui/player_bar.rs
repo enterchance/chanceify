@@ -2502,11 +2502,11 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 // name, still, react, sens, strength, border
-                for (name, still, react, sens, strength, border) in [
+                for (name, still, react, sens, strength, _border) in [
                     ("Still", true, 0u8, 1.0f32, 1.0f32, false),
-                    ("Soft", false, 0, 0.8, 0.5, false),
-                    ("Lively", false, 1, 1.3, 1.2, true),
-                    ("Heavy", false, 2, 1.8, 2.2, true),
+                    ("Soft", false, 0, 0.8, 0.2, false),
+                    ("Lively", false, 1, 1.3, 1.2, false),
+                    ("Heavy", false, 2, 1.5, 1.6, false),
                 ] {
                     if chip(ui, &palette, &gettext(app.locale, name), false, 52.0).clicked() {
                         app.settings.vis_text_still = still;
@@ -2514,7 +2514,6 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                         app.settings.vis_sway_beat = react == 2;
                         app.settings.sway_sens = sens;
                         app.settings.vis_sway_amount = strength;
-                        app.settings.vis_art_border = border;
                         app.mark_settings_dirty();
                     }
                 }
@@ -2530,6 +2529,9 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             {
                 app.actions.push(Action::ToggleVisTextSway);
             }
+            ui.add_space(4.0);
+            font_grid(app, ui);
+            ui.add_space(4.0);
             if chip_i(
                 ui,
                 &palette,
@@ -2708,6 +2710,22 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                         });
                     });
             }
+            // The side lyrics panel's own options (also on its right-click).
+            super::widgets::menu_separator(ui, &palette);
+            theme::subtle(ui, &palette, &gettext(app.locale, "SIDE LYRICS"));
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                use crate::settings::Settings;
+                let stamps = !app.settings.side_lyrics_flag(Settings::LYRICS_HIDE_STAMPS);
+                if chip_i(ui, &palette, "Timestamps", stamps, 120.0).clicked() {
+                    app.actions.push(Action::ToggleSideLyricsFlag(Settings::LYRICS_HIDE_STAMPS));
+                }
+                for (value, label) in [(1u8, "Smaller"), (0, "Normal"), (2, "Larger")] {
+                    if chip(ui, &palette, label, app.settings.side_lyrics_size == value, 70.0).clicked() {
+                        app.actions.push(Action::SetSideLyricsSize(value));
+                    }
+                }
+            });
             super::widgets::menu_separator(ui, &palette);
             theme::subtle(ui, &palette, &gettext(app.locale, "EQUALIZER"));
             super::settings::eq_panel(app, ui);
@@ -2836,7 +2854,6 @@ fn sway_gate(app: &App) -> f32 {
 /// Every title font as a cell showing the playing song in that very font,
 /// so the choice is made by looking. With the live preview on, hovering a
 /// cell puts that font on the visualizer's title straight away.
-#[allow(dead_code)]
 fn font_grid(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     ui.horizontal(|ui| {
@@ -2924,45 +2941,121 @@ fn font_grid(app: &mut App, ui: &mut egui::Ui) {
 
 /// The font the title is drawn in this frame: the one the reader is hovering
 /// in the grid when the live preview is on, otherwise the chosen one.
-fn vis_font_in_use(_ctx: &egui::Context, _chosen: u8, _random: bool, _uri: &str) -> usize {
-    // The title font is not a setting any more: choosing one made the
-    // picture draw with a face the renderer had not been given yet. The
-    // title always uses the app's own face.
-    0
+fn vis_font_in_use(ctx: &egui::Context, chosen: u8, random: bool, uri: &str) -> usize {
+    let last = crate::system_fonts::VIS_FONTS.len() - 1;
+    let hovered = ctx
+        .data(|data| data.get_temp::<(u8, u64)>(egui::Id::new("vis-font-preview")))
+        .filter(|(_, pass)| pass + 2 >= ctx.cumulative_pass_nr());
+    if let Some((index, _)) = hovered {
+        return usize::from(index).min(last);
+    }
+    if random {
+        // One face per song, from the ones this computer has.
+        let id = egui::Id::new("vis-fonts-available");
+        let available = ctx.data(|data| data.get_temp::<Vec<u8>>(id)).unwrap_or_else(|| {
+            let found: Vec<u8> = (1..=last)
+                .filter(|index| crate::system_fonts::vis_font_bytes(*index).is_some())
+                .map(|index| index as u8)
+                .collect();
+            ctx.data_mut(|data| data.insert_temp(id, found.clone()));
+            found
+        });
+        if !available.is_empty() {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            uri.hash(&mut hasher);
+            return usize::from(available[(hasher.finish() % available.len() as u64) as usize]);
+        }
+    }
+    usize::from(chosen).min(last)
+}
+
+/// Puts the chosen face in front of every text family (not the monospace
+/// one or the title faces), so all text in the app uses it. Returns whether
+/// it was handed over this frame (one font change a frame, see below).
+pub(super) fn apply_ui_font(ctx: &egui::Context, index: usize) -> bool {
+    let pass = ctx.cumulative_pass_nr();
+    let busy_id = egui::Id::new("vis-font-loading-pass");
+    if ctx.data(|data| data.get_temp::<u64>(busy_id)) == Some(pass) {
+        return false;
+    }
+    let mut fonts = ctx.fonts(|fonts| fonts.definitions().clone());
+    for list in fonts.families.values_mut() {
+        list.retain(|name| name != "ui-font");
+    }
+    fonts.font_data.remove("ui-font");
+    if index > 0
+        && let Some(bytes) = crate::system_fonts::vis_font_bytes(index)
+    {
+        fonts
+            .font_data
+            .insert("ui-font".to_string(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
+        for (family, list) in fonts.families.iter_mut() {
+            let title_face = matches!(family, egui::FontFamily::Name(name) if name.starts_with("vis-font-"));
+            if *family != egui::FontFamily::Monospace && !title_face {
+                list.insert(0, "ui-font".to_string());
+            }
+        }
+    }
+    ctx.set_fonts(fonts);
+    ctx.data_mut(|data| data.insert_temp(busy_id, pass));
+    ctx.request_repaint();
+    true
 }
 
 /// The family for visualizer font `font_index`, loading the file the first
 /// time it is asked for. Falls back to Inter while it loads or is missing.
-#[allow(dead_code)]
-fn vis_font_family(ctx: &egui::Context, font_index: usize) -> egui::FontFamily {
-    let mut family = egui::FontFamily::Proportional;
-    if font_index > 0 {
-        let name = format!("vis-font-{font_index}");
-        let flag = egui::Id::new(("vis-font-loaded", font_index));
-        let state = ctx.data(|data| data.get_temp::<bool>(flag));
-        if state.is_none() {
+///
+/// A family is only handed out once the renderer really has it: fonts given
+/// to egui take effect on the next frame, and drawing with a family it does
+/// not know yet is what crashed the title before. One face is loaded per
+/// frame, so two loads in a frame can't undo each other.
+pub(super) fn vis_font_family(ctx: &egui::Context, font_index: usize) -> egui::FontFamily {
+    if font_index == 0 {
+        return egui::FontFamily::Proportional;
+    }
+    let name = format!("vis-font-{font_index}");
+    let family = egui::FontFamily::Name(name.clone().into());
+    if ctx.fonts(|fonts| fonts.definitions().families.contains_key(&family)) {
+        return family;
+    }
+    let flag = egui::Id::new(("vis-font-loaded", font_index));
+    let pass = ctx.cumulative_pass_nr();
+    // (whether the file was found, the frame it was handed over)
+    let state = ctx.data(|data| data.get_temp::<(bool, u64)>(flag));
+    let retry = match state {
+        None => true,
+        Some((false, _)) => false,
+        // Handed over but still not there a few frames on: lost, ask again.
+        Some((true, at)) => pass > at + 3,
+    };
+    let busy_id = egui::Id::new("vis-font-loading-pass");
+    let busy = ctx.data(|data| data.get_temp::<u64>(busy_id)) == Some(pass);
+    if retry && !busy {
+        let loaded = crate::system_fonts::vis_font_bytes(font_index).is_some_and(|bytes| {
+            let mut fonts = ctx.fonts(|fonts| fonts.definitions().clone());
+            fonts
+                .font_data
+                .insert(name.clone(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
             // The display face first, then everything the normal text uses, so
             // Cyrillic, Chinese and other scripts the display face lacks still draw.
-            let loaded = crate::system_fonts::vis_font_bytes(font_index).is_some_and(|bytes| {
-                let mut fonts = ctx.fonts(|fonts| fonts.definitions().clone());
-                fonts
-                    .font_data
-                    .insert(name.clone(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
-                let mut list = vec![name.clone()];
-                if let Some(base) = fonts.families.get(&egui::FontFamily::Proportional) {
-                    list.extend(base.iter().cloned());
-                }
-                fonts.families.insert(egui::FontFamily::Name(name.clone().into()), list);
-                ctx.set_fonts(fonts);
-                true
-            });
-            ctx.data_mut(|data| data.insert_temp(flag, loaded));
-            ctx.request_repaint();
-        } else if state == Some(true) {
-            family = egui::FontFamily::Name(name.into());
-        }
+            let mut list = vec![name.clone()];
+            if let Some(base) = fonts.families.get(&egui::FontFamily::Proportional) {
+                list.extend(base.iter().filter(|each| **each != name).cloned());
+            }
+            fonts.families.insert(family.clone(), list);
+            ctx.set_fonts(fonts);
+            true
+        });
+        ctx.data_mut(|data| {
+            data.insert_temp(flag, (loaded, pass));
+            data.insert_temp(busy_id, pass);
+        });
     }
-    family
+    if retry || matches!(state, Some((true, _))) {
+        ctx.request_repaint();
+    }
+    egui::FontFamily::Proportional
 }
 
 /// Saved visualizer looks: pick one to apply, x to remove, or save the

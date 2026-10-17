@@ -181,7 +181,7 @@ pub(crate) fn clear_search(ctx: &egui::Context) {
 const PROXY_DIRTY_ID: &str = "proxy-settings-dirty";
 
 /// The tabs along the top of the page.
-const TABS: [&str; 7] = ["Accounts", "Playback", "Look", "Visualizer", "Library", "Network", "About"];
+const TABS: [&str; 6] = ["Accounts", "Playback", "Look", "Library", "Network", "About"];
 
 /// Which tab a section sits in. A section that is not listed always shows.
 fn tab_of(title: &str) -> Option<u8> {
@@ -191,16 +191,14 @@ fn tab_of(title: &str) -> Option<u8> {
         Some(0)
     } else if has(&["playback", "equalizer"]) {
         Some(1)
-    } else if has(&["appearance", "song lists", "gradient", "app icon", "lights"]) {
+    } else if has(&["appearance", "song lists", "gradient", "app icon", "lights", "font"]) {
         Some(2)
-    } else if has(&["visualizer", "lyrics"]) {
-        Some(3)
     } else if has(&["storage", "unavailable"]) {
-        Some(4)
+        Some(3)
     } else if has(&["proxy"]) {
-        Some(5)
+        Some(4)
     } else if has(&["about", "tour"]) {
-        Some(6)
+        Some(5)
     } else {
         None
     }
@@ -911,6 +909,30 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
             }
+        });
+    }
+
+    if needle.is_empty() || "font typeface text letters".contains(needle.as_str()) {
+        section(ui, &palette, "App font", |ui| {
+            let fonts = crate::system_fonts::VIS_FONTS;
+            let current = usize::from(app.settings.ui_font).min(fonts.len() - 1);
+            egui::ComboBox::from_id_salt("ui-font-picker")
+                .selected_text(fonts[current].0)
+                .width(260.0)
+                .height(320.0)
+                .show_ui(ui, |ui| {
+                    for (index, (name, _)) in fonts.iter().enumerate() {
+                        // Each name in its own face, once that face has loaded.
+                        let family = super::player_bar::vis_font_family(ui.ctx(), index);
+                        let label = egui::RichText::new(*name).font(egui::FontId::new(theme::BODY_TEXT + 1.0, family));
+                        if ui.selectable_label(index == current, label).clicked() {
+                            app.settings.ui_font = index as u8;
+                            app.mark_settings_dirty();
+                        }
+                    }
+                });
+            note(ui, &palette, "Every bit of text in chanceify: menus, the library, column headings, search. The visualizer title has its own font in the visualizer panel.");
+            ui.add_space(8.0);
         });
     }
 
@@ -1721,34 +1743,6 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     let response = response.on_hover_text(crate::app_icons::name(choice));
                     if response.clicked() {
                         app.actions.push(Action::SetAppIcon(choice));
-                    }
-                }
-            });
-            ui.add_space(8.0);
-        });
-    }
-
-    if needle.is_empty() || "visualizer bars flow swirl colours quick panel".contains(needle.as_str()) {
-        any_visible = true;
-        section(ui, &palette, "Visualizer", |ui| {
-            note(ui, &palette, "The bars, flow, swirl, colours, bass jump and full-screen lyrics are set in the visualizer's quick panel: press V.");
-            ui.add_space(8.0);
-        });
-    }
-
-    if needle.is_empty() || "lyrics timestamps line size".contains(needle.as_str()) {
-        any_visible = true;
-        section(ui, &palette, "Lyrics", |ui| {
-            use crate::settings::Settings;
-            let mut stamps = !app.settings.side_lyrics_flag(Settings::LYRICS_HIDE_STAMPS);
-            if widgets::switch_labeled(ui, &palette, "Timestamps beside the lyrics", &mut stamps).changed() {
-                app.actions.push(Action::ToggleSideLyricsFlag(Settings::LYRICS_HIDE_STAMPS));
-            }
-            ui.horizontal(|ui| {
-                theme::subtle(ui, &palette, "Side lyrics size");
-                for (value, label) in [(1u8, "Smaller"), (0, "Normal"), (2, "Larger")] {
-                    if theme::pill_button(ui, &palette, label, app.settings.side_lyrics_size == value).clicked() {
-                        app.actions.push(Action::SetSideLyricsSize(value));
                     }
                 }
             });

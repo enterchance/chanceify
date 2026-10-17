@@ -109,6 +109,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         window_resize(ui);
         return;
     }
+    // The app-wide font, handed to egui when it changes.
+    {
+        let wanted = usize::from(app.settings.ui_font).min(crate::system_fonts::VIS_FONTS.len() - 1);
+        let id = Id::new("ui-font-applied");
+        if ctx.data(|data| data.get_temp::<usize>(id)) != Some(wanted) && player_bar::apply_ui_font(ctx, wanted) {
+            ctx.data_mut(|data| data.insert_temp(id, wanted));
+        }
+    }
     // The mini player is a window of its own (see `mini::window`), so the
     // main window is never the mini player.
     app.mini_active = false;
