@@ -159,24 +159,67 @@ fn badge(
 /// (not just the straight line back), and a click opens it.
 pub(super) fn history_menu(app: &mut App, response: &egui::Response) {
     let pages: Vec<Page> = app.visited.iter().filter(|page| *page != app.page()).cloned().collect();
-    response.clone().context_menu(|ui| {
-        ui.set_max_width(260.0);
-        if pages.is_empty() {
-            ui.label("nothing visited yet");
-            return;
-        }
-        ui.label("visited lately");
-        ui.separator();
-        egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-            for page in &pages {
-                let name = app.page_name(page);
-                if ui.button(name).clicked() {
-                    app.actions.push(Action::Open(page.clone()));
-                    ui.close();
-                }
+    let palette = app.palette;
+    egui::Popup::context_menu(response)
+        .frame(super::widgets::menu_frame(&palette))
+        .show(|ui| {
+            ui.set_width(260.0);
+            if pages.is_empty() {
+                super::widgets::menu_group(ui, &palette, "nothing visited yet");
+                return;
             }
+            super::widgets::menu_group(ui, &palette, "visited lately");
+            egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                for page in &pages {
+                    let name = app.page_name(page);
+                    let picture = app.page_picture(page);
+                    let (rect, row) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
+                    if row.hovered() {
+                        ui.painter().rect_filled(rect, egui::CornerRadius::same(6), palette.surface_hover);
+                    }
+                    let slot = egui::Rect::from_min_size(egui::pos2(rect.left() + 6.0, rect.top() + 4.0), Vec2::splat(26.0));
+                    let icon = page_icon(page);
+                    match picture {
+                        Some(url) => {
+                            let round = if matches!(page, Page::Artist(_)) { 13.0 } else { 4.0 };
+                            super::widgets::paint_cover(ui, &palette, Some(&url), slot, round, icon, None);
+                        }
+                        None => theme::paint_icon(ui, icon, slot, 18.0, palette.secondary),
+                    }
+                    ui.painter().with_clip_rect(rect.shrink(2.0)).text(
+                        egui::pos2(slot.right() + 10.0, rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        name,
+                        theme::regular(theme::BODY_TEXT),
+                        palette.text,
+                    );
+                    if row.clicked() {
+                        app.actions.push(Action::Open(page.clone()));
+                        ui.close();
+                    }
+                }
+            });
         });
-    });
+}
+
+/// The picture a page stands for when it has none of its own.
+fn page_icon(page: &Page) -> Icon {
+    match page {
+        Page::Home => Icon::House,
+        Page::TopSongs => Icon::TrendingUp,
+        Page::Search => Icon::Search,
+        Page::LikedSongs => Icon::Heart,
+        Page::Albums | Page::Album(_) => Icon::Disc,
+        Page::Artists => Icon::Users,
+        Page::Artist(_) => Icon::User,
+        Page::Podcasts | Page::Episodes | Page::Show(_) => Icon::Mic,
+        Page::Queue => Icon::ListMusic,
+        Page::Settings => Icon::Settings,
+        Page::Local => Icon::Laptop,
+        Page::Playlist(_) => Icon::ListMusic,
+        Page::Radio(_) => Icon::Radio,
+    }
 }
 
 fn nav_button(

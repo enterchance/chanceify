@@ -8339,6 +8339,39 @@ impl App {
         }
     }
 
+    /// A small picture for a page in the history menu: the playlist's,
+    /// album's, artist's or show's own picture, when it is known.
+    pub fn page_picture(&self, page: &Page) -> Option<String> {
+        use crate::api::models::pick_image;
+        match page {
+            Page::Playlist(id) => self
+                .playlist_pages
+                .get(id)
+                .and_then(|p| p.playlist.get())
+                .or_else(|| self.known_playlist(id))
+                .and_then(|p| pick_image(&p.images, 64).map(str::to_string)),
+            Page::Album(id) => self
+                .album_pages
+                .get(id)
+                .and_then(|p| p.album.get())
+                .or_else(|| self.known_album(id))
+                .and_then(|p| pick_image(&p.images, 64).map(str::to_string)),
+            Page::Artist(id) => self
+                .artist_pages
+                .get(id)
+                .and_then(|p| p.artist.get())
+                .or_else(|| self.known_artist(id))
+                .and_then(|p| pick_image(&p.images, 64).map(str::to_string)),
+            Page::Show(id) => self
+                .show_pages
+                .get(id)
+                .and_then(|p| p.show.get())
+                .or_else(|| self.known_show(id))
+                .and_then(|p| pick_image(&p.images, 64).map(str::to_string)),
+            _ => None,
+        }
+    }
+
     pub fn can_go_back(&self) -> bool {
         self.history_index > 0
     }
