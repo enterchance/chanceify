@@ -112,9 +112,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
     // The app-wide font, handed to egui when it changes.
     {
-        let wanted = usize::from(app.settings.ui_font).min(crate::system_fonts::VIS_FONTS.len() - 1);
+        let index = player_bar::ui_font_in_use(app, ctx);
+        let wanted = crate::system_fonts::list().get(index).map(|font| font.name.clone()).unwrap_or_default();
         let id = Id::new("ui-font-applied");
-        if ctx.data(|data| data.get_temp::<usize>(id)) != Some(wanted) && player_bar::apply_ui_font(ctx, wanted) {
+        if ctx.data(|data| data.get_temp::<String>(id)).as_deref() != Some(wanted.as_str())
+            && player_bar::apply_ui_font(ctx, index)
+        {
             ctx.data_mut(|data| data.insert_temp(id, wanted));
         }
     }
@@ -441,8 +444,16 @@ fn header_art(app: &App) -> Option<String> {
 fn central(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let tint = page_tint(app);
+    // With the swirl behind everything, the page lets it through too,
+    // unless the page shows its own cover background.
+    let backdrop_page = app.settings.page_backdrop && matches!(app.page(), Page::Playlist(_) | Page::Album(_));
+    let page_fill = if player_bar::swirl_behind_panels(app) && !backdrop_page {
+        palette.window.gamma_multiply(0.55)
+    } else {
+        palette.window
+    };
     egui::CentralPanel::default()
-        .frame(Frame::new().fill(palette.window))
+        .frame(Frame::new().fill(page_fill))
         .show(ui, |ui| {
             let rect = ui.max_rect();
             if !app.is_connected() {

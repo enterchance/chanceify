@@ -43,10 +43,14 @@ impl App {
     /// The screen jumps by itself when the music does what the visualizer
     /// settings ask: a rise in loudness, in the bass, or a beat.
     pub fn auto_jump(&mut self) {
-        let mode = self.settings.vis_jump_react.min(3);
         if !self.settings.vis_jump_on || !self.now_playing().is_some_and(|now| now.playing && now.local) {
             return;
         }
+        let mode = if self.settings.vis_jump_auto {
+            self.auto_jump_mode()
+        } else {
+            self.settings.vis_jump_react.min(3)
+        };
         // Mode 3: on the song's own tempo, one jump per beat of its BPM.
         if mode == 3 {
             let Some(bpm) = self.now_playing_item().and_then(|item| self.bpm_for(&item)) else {
@@ -83,7 +87,15 @@ impl App {
         // average follows the song are theirs too.
         let sens = self.settings.jump_sens.clamp(0.4, 2.5);
         let ratio = 1.0 + (ratio - 1.0) / sens;
-        let gap = self.settings.jump_gap.clamp(10.0, 100.0) / 100.0;
+        let mut gap = self.settings.jump_gap.clamp(10.0, 100.0) / 100.0;
+        // Auto: the rest follows the song's tempo, so jumps stay in time.
+        if self.settings.vis_jump_auto
+            && let Some(bpm) = self.now_playing_item().and_then(|item| self.bpm_for(&item))
+            && bpm.is_finite()
+            && bpm > 30.0
+        {
+            gap = (0.5 * 60.0 / bpm).clamp(0.12, 0.6);
+        }
         let floor = self.settings.jump_floor.clamp(0.0, 20.0) / 100.0;
         let adapt = self.settings.jump_adapt.clamp(1.0, 30.0) / 100.0;
         let rested = self.jump_at.is_none_or(|at| at.elapsed().as_secs_f32() > gap);
@@ -92,6 +104,42 @@ impl App {
                 self.jump_stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
         }
         self.jump_avg += (energy - self.jump_avg) * adapt;
+    }
+
+    /// Auto: what the jump follows for this song, picked from how it sounds
+    /// in its first seconds. A song carried by its low end follows the
+    /// bass; otherwise a known tempo is followed beat for beat; failing
+    /// both, it jumps on the beats it hears.
+    fn auto_jump_mode(&mut self) -> u8 {
+        let uri = self.now_playing().map(|now| now.uri).unwrap_or_default();
+        if self.jump_auto.0 != uri {
+            self.jump_auto = (uri, 2, 0.0, 0.0, Some(Instant::now()));
+        }
+        let elapsed = self.jump_auto.4.map_or(0.0, |at| at.elapsed().as_secs_f32());
+        if elapsed < 6.0 {
+            // Still listening: average the bass and the loudness.
+            let bass = self.music_bass_level_raw();
+            let window = self.audio.tap.window(1536, 0);
+            let loud = if window.is_empty() {
+                0.0
+            } else {
+                (window.iter().map(|x| x * x).sum::<f32>() / window.len() as f32).sqrt() * 2.0
+            };
+            if bass.is_finite() && loud.is_finite() {
+                self.jump_auto.2 += (bass - self.jump_auto.2) * 0.02;
+                self.jump_auto.3 += (loud - self.jump_auto.3) * 0.02;
+            }
+            let share = self.jump_auto.2 / self.jump_auto.3.max(0.001);
+            let tempo = self.now_playing_item().and_then(|item| self.bpm_for(&item)).is_some_and(|bpm| bpm > 30.0);
+            self.jump_auto.1 = if share > 0.55 {
+                1
+            } else if tempo {
+                3
+            } else {
+                2
+            };
+        }
+        self.jump_auto.1
     }
 
     fn music_bass_level_raw(&self) -> f32 {

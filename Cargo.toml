@@ -35,6 +35,9 @@ keyring-core = "1"
 # AccessKit connects egui's control names, states, and actions to native screen readers.
 eframe = { version = "0.36", default-features = false, features = ["accesskit", "glow", "default_fonts", "links", "wayland", "x11", "persistence"] }
 egui = "0.36"
+# Reads installed fonts' family names for the font pickers (already in the
+# tree through egui's text stack).
+ttf-parser = "0.25"
 egui_extras = { version = "0.36", features = ["image", "svg"] }
 # The shared foundation of Chanceify, ZapFast, RekordFlash and TonePush
 # (crmne/fastframe). Every crate comes from the same revision; move them

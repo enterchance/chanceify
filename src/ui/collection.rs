@@ -487,29 +487,6 @@ pub fn actions_row(
                     .show(|ui| {
                         widgets::columns_menu(ui, &palette, locale, &mut columns);
                         widgets::menu_separator(ui, &palette);
-                        // Orders with no column of their own.
-                        let page = app.page().clone();
-                        let current = app.table_sorts.get(&page).and_then(TableSort::primary);
-                        let lastfm = !app.settings.lastfm_user.is_empty();
-                        for (column, label, enabled) in [
-                            (SortColumn::Plays, "sort by your plays (Last.fm)", lastfm),
-                            (SortColumn::Popularity, "sort by popularity", true),
-                        ] {
-                            let on = current.is_some_and(|key| key.column == column);
-                            if widgets::menu_item_enabled(ui, &palette, on.then_some(Icon::Check), label, enabled) {
-                                if on {
-                                    app.table_sorts.remove(&page);
-                                } else {
-                                    if column == SortColumn::Plays && !crate::lastfm::plays_loaded() {
-                                        app.lastfm.top_tracks();
-                                    }
-                                    app.table_sorts.insert(page.clone(), TableSort::single(column, false));
-                                    app.actions.push(Action::LoadMore(page.clone()));
-                                }
-                                app.note_session_change();
-                            }
-                        }
-                        widgets::menu_separator(ui, &palette);
                         widgets::switch_labeled(ui, &palette, "cover background", &mut backdrop.0);
                         if backdrop.0 {
                             ui.add_space(4.0);

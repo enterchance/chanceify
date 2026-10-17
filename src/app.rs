@@ -574,6 +574,9 @@ pub struct App {
     pub jump_stamp: u64,
     lights_jump_seen: u64,
     pub jump_avg: f32,
+    /// The bass jump's own pick for this song (Auto): (song, mode, bass
+    /// average, loudness average, when the song started being measured).
+    pub jump_auto: (String, u8, f32, f32, Option<Instant>),
     /// Songs in the user's playlists that can no longer be played.
     pub unavailable: crate::unavailable::Store,
     /// The scan in progress, if any.
@@ -1249,6 +1252,7 @@ impl App {
             jump_stamp: 0,
             lights_jump_seen: 0,
             jump_avg: 0.0,
+            jump_auto: (String::new(), 2, 0.0, 0.0, None),
             unavailable: crate::unavailable::Store::load(&dirs_cache_unavailable),
             unavailable_scan: None,
             optimistic_user,
@@ -12354,9 +12358,12 @@ impl App {
                 self.mark_settings_dirty();
             }
             Action::SetVisFont(index) => {
-                let count = crate::system_fonts::VIS_FONTS.len() as u8;
-                self.settings.vis_text_font = index.min(count.saturating_sub(1));
-                self.mark_settings_dirty();
+                let fonts = crate::system_fonts::list();
+                if let Some(font) = fonts.get(usize::from(index)) {
+                    self.settings.vis_text_font_name =
+                        if font.path.is_none() { String::new() } else { font.name.clone() };
+                    self.mark_settings_dirty();
+                }
             }
             Action::SaveVisPreset(name) => {
                 if !name.trim().is_empty() {

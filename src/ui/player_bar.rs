@@ -2150,56 +2150,57 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                 crate::crash::stage("menu: swirl column");
                 super::widgets::menu_separator(ui, &palette);
                 let art_scroll = app.settings.swirl_art_scroll;
-                for (index, (label, low, high, _)) in
-                    crate::settings::Settings::SWIRL_TUNE.iter().enumerate()
-                {
-                    // Scrolling art only has a speed; the ripple, blur and
-                    // colour sliders are for the waves.
-                    // Only the two speeds are left; the ripples, blur and
-                    // colour are what the looks above are for.
-                    if index != 8 && index != 9 {
-                        continue;
-                    }
-                    slider_row(
-                        ui,
-                        &palette,
-                        &gettext(app.locale, label),
-                        *low..=*high,
-                        app.settings.swirl_tune_value(index),
-                        |value| app.actions.push(Action::SetSwirlTune(index, value)),
-                    );
-                }
-                slider_row(
-                    ui,
-                    &palette,
-                    &gettext(app.locale, "Colour drift"),
-                    0.2..=4.0,
-                    (9.0 / app.settings.swirl_drift_secs()) as f32,
-                    |value| app.actions.push(Action::SetSwirlDrift(value)),
-                );
-                // One-click speed, music boost and colour drift together.
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
+                // One-click speed, music boost and colour drift together:
+                // calm ones first, then ones that pick up with the music.
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
                     let speed_now = app.settings.swirl_tune_value(8);
                     let boost_now = app.settings.swirl_tune_value(9);
                     let drift_now = (9.0 / app.settings.swirl_drift_secs()) as f32;
-                    let width = ((col_w - 12.0) / 4.0).max(40.0);
-                    for (label, speed, boost, drift) in [
-                        ("Slow", 30.0f32, 30.0f32, 0.6f32),
-                        ("Calm", 60.0, 60.0, 1.2),
-                        ("Lively", 130.0, 140.0, 2.6),
-                        ("Fast", 220.0, 220.0, 4.0),
+                    let width = ((col_w - 12.0) / 4.0).max(52.0);
+                    for (label, speed, boost, drift, tip) in [
+                        ("Easy", 75.0f32, 60.0f32, 1.2f32, "Slow and even"),
+                        ("Steady", 90.0, 85.0, 1.5, "A little livelier"),
+                        ("Groove", 105.0, 105.0, 1.5, "Moves with the music"),
+                        ("Lively", 120.0, 120.0, 1.8, "Busier, still smooth"),
+                        ("Drift", 55.0, 170.0, 1.5, "Slow, but the music speeds it up"),
+                        ("Pulse", 70.0, 220.0, 1.5, "Calm between hits, quick on them"),
                     ] {
                         let active = (speed_now - speed).abs() < 1.0
                             && (boost_now - boost).abs() < 1.0
                             && (drift_now - drift).abs() < 0.05;
-                        if chip(ui, &palette, &gettext(app.locale, label), active, width).clicked() {
+                        if chip(ui, &palette, &gettext(app.locale, label), active, width).on_hover_text(tip).clicked() {
                             app.actions.push(Action::SetSwirlTune(8, speed));
                             app.actions.push(Action::SetSwirlTune(9, boost));
                             app.actions.push(Action::SetSwirlDrift(drift));
                         }
                     }
                 });
+                if more_fold(ui, &palette, "swirl-more") {
+                    for (index, (label, low, high, _)) in
+                        crate::settings::Settings::SWIRL_TUNE.iter().enumerate()
+                    {
+                        if index != 8 && index != 9 {
+                            continue;
+                        }
+                        slider_row(
+                            ui,
+                            &palette,
+                            &gettext(app.locale, label),
+                            *low..=*high,
+                            app.settings.swirl_tune_value(index),
+                            |value| app.actions.push(Action::SetSwirlTune(index, value)),
+                        );
+                    }
+                    slider_row(
+                        ui,
+                        &palette,
+                        &gettext(app.locale, "Colour drift"),
+                        0.2..=2.5,
+                        (9.0 / app.settings.swirl_drift_secs()) as f32,
+                        |value| app.actions.push(Action::SetSwirlDrift(value)),
+                    );
+                }
                 if art_scroll {
                     slider_row(
                         ui,
@@ -2295,18 +2296,41 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             ui.spacing_mut().item_spacing.x = 18.0;
             if tab.get() == 1 { ui.vertical(|ui| {
             ui.set_width(VIS_SINGLE_W);
-            theme::subtle(ui, &palette, &gettext(app.locale, "BASS JUMP"));
+            // The switch, Auto, and what it follows, on one row.
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                if chip(ui, &palette, &gettext(app.locale, "On"), app.settings.vis_jump_on, 60.0).clicked() {
+                theme::subtle(ui, &palette, &gettext(app.locale, "BASS JUMP"));
+                if chip(ui, &palette, &gettext(app.locale, "On"), app.settings.vis_jump_on, 52.0).clicked() {
                     app.actions.push(Action::ToggleJumpAuto);
+                }
+                let auto = app.settings.vis_jump_auto;
+                if chip(ui, &palette, "Auto", auto, 60.0)
+                    .on_hover_text("Picks loudness, bass, beat or tempo for each song, and keeps the rest in time with its tempo")
+                    .clicked()
+                {
+                    app.settings.vis_jump_auto = !auto;
+                    app.mark_settings_dirty();
+                }
+                let shown = if auto { app.jump_auto.1.min(3) } else { app.settings.vis_jump_react.min(3) };
+                for (value, glyph, tip) in [
+                    (0u8, Glyph::Icon(Icon::Volume2), "Jumps with the loudness"),
+                    (1, Glyph::Icon(Icon::Speaker), "Jumps with the bass"),
+                    (2, Glyph::Icon(Icon::Zap), "Jumps on the beat"),
+                    (3, Glyph::Icon(Icon::Music), "Jumps on the song's tempo (BPM)"),
+                ] {
+                    if glyph_button(ui, &palette, glyph, tip, shown == value).clicked() {
+                        // Picking one by hand turns Auto off.
+                        app.settings.vis_jump_auto = false;
+                        app.mark_settings_dirty();
+                        app.actions.push(Action::SetJumpReact(value));
+                    }
                 }
             });
             // Ready-made feels for the reaction picked below: strength,
             // sensitivity, rest, cutoff, follow.
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                let react = app.settings.vis_jump_react.min(3);
+                let react = if app.settings.vis_jump_auto { app.jump_auto.1.min(3) } else { app.settings.vis_jump_react.min(3) };
                 let sets: [(&str, f32, f32, f32, f32, f32); 4] = match react {
                     0 => [
                         ("Gentle", 0.4, 0.8, 50.0, 5.0, 5.0),
@@ -2343,19 +2367,7 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                     }
                 }
             });
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                for (value, glyph, tip) in [
-                    (0u8, Glyph::Icon(Icon::Volume2), "Jumps with the loudness"),
-                    (1, Glyph::Icon(Icon::Speaker), "Jumps with the bass"),
-                    (2, Glyph::Icon(Icon::Zap), "Jumps on the beat"),
-                    (3, Glyph::Icon(Icon::Music), "Jumps on the song's tempo (BPM)"),
-                ] {
-                    if glyph_button(ui, &palette, glyph, tip, app.settings.vis_jump_react.min(3) == value).clicked() {
-                        app.actions.push(Action::SetJumpReact(value));
-                    }
-                }
-            });
+            if more_fold(ui, &palette, "bass-jump-more") {
             slider_row(
                 ui,
                 &palette,
@@ -2379,6 +2391,7 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             slider_row(ui, &palette, &gettext(app.locale, "Follows the song"), 1.0..=30.0,
                 app.settings.jump_adapt,
                 |value| app.actions.push(Action::SetJumpTune(3, value)));
+            }
             ui.add_space(6.0);
             theme::subtle(ui, &palette, &gettext(app.locale, "COLOUR"));
             // How dark the colours run, for all three shapes: Bright is the
@@ -2509,18 +2522,39 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             if tab.get() == 2 { ui.horizontal_top(|ui| { ui.vertical(|ui| {
             ui.set_width(VIS_SINGLE_W);
             theme::subtle(ui, &palette, &gettext(app.locale, "TITLE"));
-            // Ready-made feels for the vibration and the art border.
+            // The faces first: the title's, then the whole app's.
+            font_grid(app, ui);
+            if chip_i(ui, &palette, "Title outline", !app.settings.vis_text_no_outline, ui.available_width().min(290.0)).clicked() {
+                app.actions.push(Action::ToggleVisTextOutline);
+            }
+            ui.add_space(6.0);
+            app_font_picker(app, ui);
+            ui.add_space(8.0);
+            // How the title moves: on or off, a feel, and what it follows.
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                // name, still, react, sens, strength, border
-                for (name, still, react, sens, strength, _border) in [
-                    ("Still", true, 0u8, 1.0f32, 1.0f32, false),
-                    ("Soft", false, 0, 0.8, 0.2, false),
-                    ("Lively", false, 1, 1.3, 1.2, false),
-                    ("Heavy", false, 2, 1.5, 1.6, false),
+                theme::subtle(ui, &palette, &gettext(app.locale, "VIBRATION"));
+                if chip(ui, &palette, &gettext(app.locale, "On"), !app.settings.vis_text_still, 52.0).clicked() {
+                    app.actions.push(Action::ToggleVisTextSway);
+                }
+                if chip(ui, &palette, "Follows music", app.settings.vis_sway_beat, 110.0).clicked() {
+                    app.actions.push(Action::ToggleVisSwayBeat);
+                }
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                // name, react, sens, strength
+                for (name, react, sens, strength) in [
+                    ("Soft", 0u8, 0.8f32, 0.2f32),
+                    ("Lively", 1, 1.3, 1.2),
+                    ("Heavy", 2, 1.5, 1.6),
                 ] {
-                    if chip(ui, &palette, &gettext(app.locale, name), false, 52.0).clicked() {
-                        app.settings.vis_text_still = still;
+                    let active = !app.settings.vis_text_still
+                        && app.settings.vis_sway_react.min(2) == react
+                        && (app.settings.sway_sens - sens).abs() < 0.01
+                        && (app.settings.vis_sway_amount - strength).abs() < 0.01;
+                    if chip(ui, &palette, &gettext(app.locale, name), active, 60.0).clicked() {
+                        app.settings.vis_text_still = false;
                         app.settings.vis_sway_react = react;
                         app.settings.vis_sway_beat = react == 2;
                         app.settings.sway_sens = sens;
@@ -2528,43 +2562,17 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                         app.mark_settings_dirty();
                     }
                 }
+                for (value, glyph, tip) in [
+                    (0u8, Glyph::Icon(Icon::Volume2), "Vibrates with the loudness"),
+                    (1, Glyph::Icon(Icon::Speaker), "Vibrates with the bass"),
+                    (2, Glyph::Icon(Icon::Zap), "Vibrates on the beat"),
+                ] {
+                    if glyph_button(ui, &palette, glyph, tip, app.settings.vis_sway_react.min(2) == value).clicked() {
+                        app.actions.push(Action::SetSwayReact(value));
+                    }
+                }
             });
-            if chip_i(
-                ui,
-                &palette,
-                "Title vibration",
-                !app.settings.vis_text_still,
-                ui.available_width().min(290.0),
-            )
-            .clicked()
-            {
-                app.actions.push(Action::ToggleVisTextSway);
-            }
-            ui.add_space(4.0);
-            font_grid(app, ui);
-            ui.add_space(4.0);
-            app_font_picker(app, ui);
-            ui.add_space(4.0);
-            {
-                theme::subtle(ui, &palette, &gettext(app.locale, "VIBRATION REACTS TO THE MUSIC"));
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    if chip(ui, &palette, &gettext(app.locale, "On"), app.settings.vis_sway_beat, 60.0).clicked() {
-                        app.actions.push(Action::ToggleVisSwayBeat);
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    for (value, glyph, tip) in [
-                        (0u8, Glyph::Icon(Icon::Volume2), "Vibrates with the loudness"),
-                        (1, Glyph::Icon(Icon::Speaker), "Vibrates with the bass"),
-                        (2, Glyph::Icon(Icon::Zap), "Vibrates on the beat"),
-                    ] {
-                        if glyph_button(ui, &palette, glyph, tip, app.settings.vis_sway_react.min(2) == value).clicked() {
-                            app.actions.push(Action::SetSwayReact(value));
-                        }
-                    }
-                });
+            if more_fold(ui, &palette, "title-vibration-more") {
                 slider_row(
                     ui,
                     &palette,
@@ -2713,6 +2721,7 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                             }
                             // The equalizer on the same row, at the end.
                             ui.vertical(|ui| {
+                                ui.set_min_width(470.0);
                                 theme::subtle(ui, &palette, &gettext(app.locale, "EQUALIZER"));
                                 super::settings::eq_panel(app, ui);
                             });
@@ -2847,9 +2856,99 @@ fn sway_gate(app: &App) -> f32 {
     }
 }
 
-/// Every title font as a cell showing the playing song in that very font,
-/// so the choice is made by looking. With the live preview on, hovering a
-/// cell puts that font on the visualizer's title straight away.
+/// A small "More" switch that folds the fine-tuning sliders away; returns
+/// whether they show. Remembered while the app runs.
+fn more_fold(ui: &mut egui::Ui, palette: &crate::theme::Palette, id: &str) -> bool {
+    let key = egui::Id::new(("more-fold", id));
+    let open = ui.ctx().data(|data| data.get_temp::<bool>(key)).unwrap_or(false);
+    let label = if open { "Fewer settings" } else { "More settings" };
+    if chip(ui, palette, label, open, 120.0).clicked() {
+        ui.ctx().data_mut(|data| data.insert_temp(key, !open));
+    }
+    open
+}
+
+/// A font picker: a button with the chosen face, opening a scrolling pop-up
+/// where every name is drawn in its own face (only the rows in view are
+/// loaded). Returns the face hovered (for a live preview) and the one picked.
+fn font_menu(
+    ui: &mut egui::Ui,
+    palette: &crate::theme::Palette,
+    id: &str,
+    current: usize,
+    sample: &str,
+) -> (Option<usize>, Option<usize>) {
+    let fonts = crate::system_fonts::list();
+    let current = current.min(fonts.len() - 1);
+    let width = ui.available_width().min(290.0);
+    let (rect, button) = ui.allocate_exact_size(vec2(width, theme::CONTROL_HEIGHT + 2.0), Sense::click());
+    let fill = if button.hovered() { palette.surface_hover } else { palette.surface };
+    ui.painter().rect_filled(rect, egui::CornerRadius::same(theme::CONTROL_RADIUS), fill);
+    ui.painter().with_clip_rect(rect.shrink2(vec2(6.0, 0.0))).text(
+        pos2(rect.left() + 10.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        &fonts[current].name,
+        egui::FontId::new(theme::BODY_TEXT + 1.0, vis_font_family(ui.ctx(), current)),
+        palette.text,
+    );
+    theme::paint_icon(
+        ui,
+        Icon::ChevronDown,
+        Rect::from_center_size(pos2(rect.right() - 16.0, rect.center().y), vec2(20.0, 20.0)),
+        15.0,
+        palette.secondary,
+    );
+    let mut hovered = None;
+    let mut picked = None;
+    egui::Popup::menu(&button)
+        .id(egui::Id::new(("font-menu", id)))
+        .frame(super::widgets::menu_frame(palette))
+        .width(width.max(260.0))
+        .show(|ui| {
+            ui.set_width(width.max(260.0));
+            let row_h = 28.0;
+            egui::ScrollArea::vertical()
+                .id_salt(("font-menu-list", id))
+                .max_height(340.0)
+                .show_rows(ui, row_h, fonts.len(), |ui, range| {
+                    for index in range {
+                        let (row, response) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
+                        let fill = if index == current {
+                            palette.accent.gamma_multiply(0.30)
+                        } else if response.hovered() {
+                            palette.surface_hover
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+                        ui.painter().rect_filled(row, egui::CornerRadius::same(6), fill);
+                        let family = vis_font_family(ui.ctx(), index);
+                        let text = if sample.is_empty() {
+                            fonts[index].name.clone()
+                        } else {
+                            format!("{}   {}", fonts[index].name, sample)
+                        };
+                        ui.painter().with_clip_rect(row.shrink2(vec2(4.0, 0.0))).text(
+                            pos2(row.left() + 8.0, row.center().y),
+                            egui::Align2::LEFT_CENTER,
+                            text,
+                            egui::FontId::new(theme::BODY_TEXT + 1.0, family),
+                            palette.text,
+                        );
+                        if response.hovered() {
+                            hovered = Some(index);
+                        }
+                        if response.clicked() {
+                            picked = Some(index);
+                            ui.close();
+                        }
+                    }
+                });
+        });
+    (hovered, picked)
+}
+
+/// The title's face: a pop-up list with a live preview on the title, and a
+/// different face for every song if asked.
 fn font_grid(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     ui.horizontal(|ui| {
@@ -2864,128 +2963,85 @@ fn font_grid(app: &mut App, ui: &mut egui::Ui) {
     let sample = app
         .now_playing()
         .map_or_else(|| "Song title".to_string(), |now| now.title.clone());
-    let current = usize::from(app.settings.vis_text_font).min(crate::system_fonts::VIS_FONTS.len() - 1);
-    let mut hovered: Option<u8> = None;
-    // A drop-down: one button showing the chosen face, a list under it when
-    // it is opened. Built into the panel rather than a pop-up on a pop-up.
-    let open_id = egui::Id::new("vis-font-open");
-    let open = ui.ctx().data(|data| data.get_temp::<bool>(open_id)).unwrap_or(false);
-    let width = ui.available_width().min(290.0);
-    let family_now = vis_font_family(ui.ctx(), current);
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 30.0), Sense::click());
-    let fill = if response.hovered() { palette.surface_hover } else { palette.surface };
-    ui.painter().rect_filled(rect, egui::CornerRadius::same(6), fill);
-    ui.painter().with_clip_rect(rect.shrink2(vec2(6.0, 0.0))).text(
-        pos2(rect.left() + 10.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        crate::system_fonts::VIS_FONTS[current].0,
-        egui::FontId::new(15.0, family_now),
-        palette.text,
-    );
-    theme::paint_icon(
-        ui,
-        if open { Icon::ChevronUp } else { Icon::ChevronDown },
-        Rect::from_center_size(pos2(rect.right() - 16.0, rect.center().y), vec2(20.0, 20.0)),
-        15.0,
-        palette.secondary,
-    );
-    if response.clicked() {
-        ui.ctx().data_mut(|data| data.insert_temp(open_id, !open));
+    let current = crate::system_fonts::index_of(&app.settings.vis_text_font_name);
+    let (hovered, picked) = font_menu(ui, &palette, "title", current, &sample);
+    if let Some(index) = picked {
+        let fonts = crate::system_fonts::list();
+        app.settings.vis_text_font_name = if index == 0 { String::new() } else { fonts[index].name.clone() };
+        app.mark_settings_dirty();
     }
-    if open {
-        egui::ScrollArea::vertical()
-            .id_salt("vis-font-list")
-            .max_height(240.0)
-            .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                for index in 0..crate::system_fonts::VIS_FONTS.len() {
-                    let (rect, response) = ui.allocate_exact_size(vec2(width - 8.0, 30.0), Sense::click());
-                    let fill = if index == current {
-                        palette.accent.gamma_multiply(0.35)
-                    } else if response.hovered() {
-                        palette.surface_hover
-                    } else {
-                        palette.surface
-                    };
-                    ui.painter().rect_filled(rect, egui::CornerRadius::same(6), fill);
-                    let family = vis_font_family(ui.ctx(), index);
-                    ui.painter().with_clip_rect(rect.shrink2(vec2(4.0, 0.0))).text(
-                        pos2(rect.left() + 10.0, rect.center().y),
-                        egui::Align2::LEFT_CENTER,
-                        format!("{}   {}", crate::system_fonts::VIS_FONTS[index].0, sample),
-                        egui::FontId::new(15.0, family),
-                        palette.text,
-                    );
-                    if response.hovered() || ui.rect_contains_pointer(rect) {
-                        hovered = Some(index as u8);
-                    }
-                    if response.clicked() {
-                        app.actions.push(Action::SetVisFont(index as u8));
-                        ui.ctx().data_mut(|data| data.insert_temp(open_id, false));
-                    }
-                }
-            });
-    }
-    let pass = ui.ctx().cumulative_pass_nr();
     if app.settings.vis_live_preview
         && let Some(index) = hovered
     {
+        let pass = ui.ctx().cumulative_pass_nr();
         ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("vis-font-preview"), (index, pass)));
         ui.ctx().request_repaint();
     }
 }
 
-/// The face for all of the app's text, beside the title's.
+/// The face for all of the app's text, with its own live preview (the
+/// whole app changes while a name is hovered) and its own random choice.
 fn app_font_picker(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
-    theme::subtle(ui, &palette, "APP FONT");
-    let fonts = crate::system_fonts::VIS_FONTS;
-    let current = usize::from(app.settings.ui_font).min(fonts.len() - 1);
-    egui::ComboBox::from_id_salt("ui-font-picker")
-        .selected_text(fonts[current].0)
-        .width(ui.available_width().min(290.0))
-        .height(320.0)
-        .show_ui(ui, |ui| {
-            for (index, (name, _)) in fonts.iter().enumerate() {
-                let family = vis_font_family(ui.ctx(), index);
-                let label = egui::RichText::new(*name).font(egui::FontId::new(theme::BODY_TEXT + 1.0, family));
-                if ui.selectable_label(index == current, label).clicked() {
-                    app.settings.ui_font = index as u8;
-                    app.mark_settings_dirty();
-                }
-            }
-        });
+    ui.horizontal(|ui| {
+        theme::subtle(ui, &palette, "APP FONT");
+        if chip(ui, &palette, "Random each song", app.settings.ui_font_random, 120.0).clicked() {
+            app.settings.ui_font_random = !app.settings.ui_font_random;
+            app.mark_settings_dirty();
+        }
+    });
+    let current = crate::system_fonts::index_of(&app.settings.ui_font_name);
+    let (hovered, picked) = font_menu(ui, &palette, "app", current, "");
+    if let Some(index) = picked {
+        let fonts = crate::system_fonts::list();
+        app.settings.ui_font_name = if index == 0 { String::new() } else { fonts[index].name.clone() };
+        app.settings.ui_font_random = false;
+        app.mark_settings_dirty();
+    }
+    if let Some(index) = hovered {
+        let pass = ui.ctx().cumulative_pass_nr();
+        ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("ui-font-preview"), (index, pass)));
+    }
+}
+
+/// The app's face this frame: the one hovered in its picker, a song's own
+/// when "random each song" is on, otherwise the chosen one.
+pub(super) fn ui_font_in_use(app: &App, ctx: &egui::Context) -> usize {
+    let hovered = ctx
+        .data(|data| data.get_temp::<(usize, u64)>(egui::Id::new("ui-font-preview")))
+        .filter(|(_, pass)| pass + 2 >= ctx.cumulative_pass_nr());
+    if let Some((index, _)) = hovered {
+        return index;
+    }
+    let count = crate::system_fonts::list().len();
+    if app.settings.ui_font_random && count > 1 {
+        let uri = app.now_playing().map(|now| now.uri).unwrap_or_default();
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        ("app", uri).hash(&mut hasher);
+        return 1 + (hasher.finish() % (count as u64 - 1)) as usize;
+    }
+    crate::system_fonts::index_of(&app.settings.ui_font_name)
 }
 
 /// The font the title is drawn in this frame: the one the reader is hovering
 /// in the grid when the live preview is on, otherwise the chosen one.
-fn vis_font_in_use(ctx: &egui::Context, chosen: u8, random: bool, uri: &str) -> usize {
-    let last = crate::system_fonts::VIS_FONTS.len() - 1;
+fn vis_font_in_use(ctx: &egui::Context, chosen: &str, random: bool, uri: &str) -> usize {
+    let count = crate::system_fonts::list().len();
     let hovered = ctx
-        .data(|data| data.get_temp::<(u8, u64)>(egui::Id::new("vis-font-preview")))
+        .data(|data| data.get_temp::<(usize, u64)>(egui::Id::new("vis-font-preview")))
         .filter(|(_, pass)| pass + 2 >= ctx.cumulative_pass_nr());
     if let Some((index, _)) = hovered {
-        return usize::from(index).min(last);
+        return index.min(count - 1);
     }
-    if random {
+    if random && count > 1 {
         // One face per song, from the ones this computer has.
-        let id = egui::Id::new("vis-fonts-available");
-        let available = ctx.data(|data| data.get_temp::<Vec<u8>>(id)).unwrap_or_else(|| {
-            let found: Vec<u8> = (1..=last)
-                .filter(|index| crate::system_fonts::vis_font_bytes(*index).is_some())
-                .map(|index| index as u8)
-                .collect();
-            ctx.data_mut(|data| data.insert_temp(id, found.clone()));
-            found
-        });
-        if !available.is_empty() {
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            uri.hash(&mut hasher);
-            return usize::from(available[(hasher.finish() % available.len() as u64) as usize]);
-        }
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        uri.hash(&mut hasher);
+        return 1 + (hasher.finish() % (count as u64 - 1)) as usize;
     }
-    usize::from(chosen).min(last)
+    crate::system_fonts::index_of(chosen)
 }
 
 /// Puts the chosen face in front of every text family (not the monospace
@@ -3003,7 +3059,7 @@ pub(super) fn apply_ui_font(ctx: &egui::Context, index: usize) -> bool {
     }
     fonts.font_data.remove("ui-font");
     if index > 0
-        && let Some(bytes) = crate::system_fonts::vis_font_bytes(index)
+        && let Some(bytes) = crate::system_fonts::bytes(index)
     {
         fonts
             .font_data
@@ -3032,12 +3088,18 @@ pub(super) fn vis_font_family(ctx: &egui::Context, font_index: usize) -> egui::F
     if font_index == 0 {
         return egui::FontFamily::Proportional;
     }
-    let name = format!("vis-font-{font_index}");
+    let fonts = crate::system_fonts::list();
+    let Some(font) = fonts.get(font_index) else {
+        return egui::FontFamily::Proportional;
+    };
+    // Named after the face, so the list growing or reordering never points
+    // a family at the wrong file.
+    let name = format!("vis-font-{}", font.name);
     let family = egui::FontFamily::Name(name.clone().into());
     if ctx.fonts(|fonts| fonts.definitions().families.contains_key(&family)) {
         return family;
     }
-    let flag = egui::Id::new(("vis-font-loaded", font_index));
+    let flag = egui::Id::new(("vis-font-loaded", name.as_str()));
     let pass = ctx.cumulative_pass_nr();
     // (whether the file was found, the frame it was handed over)
     let state = ctx.data(|data| data.get_temp::<(bool, u64)>(flag));
@@ -3050,19 +3112,18 @@ pub(super) fn vis_font_family(ctx: &egui::Context, font_index: usize) -> egui::F
     let busy_id = egui::Id::new("vis-font-loading-pass");
     let busy = ctx.data(|data| data.get_temp::<u64>(busy_id)) == Some(pass);
     if retry && !busy {
-        let loaded = crate::system_fonts::vis_font_bytes(font_index).is_some_and(|bytes| {
-            let mut fonts = ctx.fonts(|fonts| fonts.definitions().clone());
-            fonts
-                .font_data
+        let loaded = crate::system_fonts::bytes(font_index).is_some_and(|bytes| {
+            let mut defs = ctx.fonts(|fonts| fonts.definitions().clone());
+            defs.font_data
                 .insert(name.clone(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
-            // The display face first, then everything the normal text uses, so
-            // Cyrillic, Chinese and other scripts the display face lacks still draw.
+            // The face first, then everything the normal text uses, so
+            // scripts the face lacks still draw.
             let mut list = vec![name.clone()];
-            if let Some(base) = fonts.families.get(&egui::FontFamily::Proportional) {
-                list.extend(base.iter().filter(|each| **each != name).cloned());
+            if let Some(base) = defs.families.get(&egui::FontFamily::Proportional) {
+                list.extend(base.iter().filter(|each| **each != name && **each != "ui-font").cloned());
             }
-            fonts.families.insert(family.clone(), list);
-            ctx.set_fonts(fonts);
+            defs.families.insert(family.clone(), list);
+            ctx.set_fonts(defs);
             true
         });
         ctx.data_mut(|data| {
@@ -4207,7 +4268,7 @@ fn swirl_scene(app: &mut App, ui: &egui::Ui, rect: Rect, now: Option<&NowPlaying
     };
     // The face: Inter, or one of the installed ones, loaded the first time
     // it is asked for.
-    let font_index = vis_font_in_use(ui.ctx(), app.settings.vis_text_font, app.settings.vis_font_random, &now.uri);
+    let font_index = vis_font_in_use(ui.ctx(), &app.settings.vis_text_font_name, app.settings.vis_font_random, &now.uri);
     let family = vis_font_family(ui.ctx(), font_index);
     // Where the words go depends on the layout the reader chose: under the
     // cover (0), beside it (1), beside it and big (2), or above it with the
@@ -5349,7 +5410,7 @@ pub fn now_playing_overlay(app: &mut App, ui: &mut egui::Ui, art: Rect, now: &No
     // The title is sized to fit, and the card to the title.
     let biggest = (art.width() * 0.2).clamp(20.0, 56.0);
     // The same face as the visualizer's title, and it sways the same way.
-    let font_index = vis_font_in_use(ui.ctx(), app.settings.vis_text_font, app.settings.vis_font_random, &now.uri);
+    let font_index = vis_font_in_use(ui.ctx(), &app.settings.vis_text_font_name, app.settings.vis_font_random, &now.uri);
     let family = vis_font_family(ui.ctx(), font_index);
     let (title_galley, title_size) = fit_title(
         ui.painter(),

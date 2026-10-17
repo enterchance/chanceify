@@ -1094,6 +1094,10 @@ pub struct Settings {
     /// Which of `system_fonts::VIS_FONTS` it is drawn in.
     #[serde(default)]
     pub vis_text_font: u8,
+    /// The title's face by name (see `system_fonts`); empty for Inter.
+    pub vis_text_font_name: String,
+    /// The bass jump picks what to follow for each song by itself.
+    pub vis_jump_auto: bool,
     /// Hide the artist name under the full-screen title.
     pub vis_text_no_artist: bool,
     /// A thin border round the album art in the full screen visualizer.
@@ -1369,6 +1373,10 @@ pub struct Settings {
     /// The face every bit of text in the app uses (0: the built-in Inter),
     /// from the same list as the visualizer title's.
     pub ui_font: u8,
+    /// The app's face by name; empty for Inter.
+    pub ui_font_name: String,
+    /// A different app face for every song.
+    pub ui_font_random: bool,
     /// Count what is played on Last.fm.
     pub lastfm_scrobble: bool,
     /// Tell Last.fm what is playing right now.
@@ -1602,6 +1610,8 @@ impl Default for Settings {
             vis_live_preview: true,
             vis_font_random: false,
             vis_text_font: 0,
+            vis_text_font_name: String::new(),
+            vis_jump_auto: true,
             vis_text_no_artist: false,
             vis_art_border: false,
             extra_show_title: true,
@@ -1726,6 +1736,8 @@ impl Default for Settings {
             lastfm_session: String::new(),
             lastfm_friends: Vec::new(),
             ui_font: 0,
+            ui_font_name: String::new(),
+            ui_font_random: false,
             lastfm_scrobble: true,
             lastfm_now_playing: true,
             lastfm_files: true,
@@ -2149,7 +2161,7 @@ impl Settings {
         "swirl_scale", "swirl_tune", "swirl_warp", "swirl_waves", "theme", "theme_from_cover", "custom_bg", "custom_accent",
         "track_columns", "tracklist_compact", "vis", "vis_bar_sides", "vis_flow_sides", "vis_shapes",
         "vis_shapes_last", "vis_shapes_set", "volume_presets", "zoom",
-        "volume_custom_width", "vis_no_gradient", "vis_lyrics", "vis_text_still", "vis_sway", "vis_sway_amount", "vis_sway_react", "sway_sens", "vis_text_no_outline", "vis_text_back", "vis_back_alpha", "vis_back_round", "vis_back_pad", "vis_back_block", "vis_live_preview", "vis_font_random", "vis_text_font", "vis_text_no_artist", "vis_lyrics_no_back", "vis_bars_stay", "lyrics_vis", "lyrics_vis_dark", "lyrics_vis_mode", "window_opacity", "anchor_controls", "anchor_volume", "bar_stacked", "bar_layout", "bar_free", "lyrics_ctl_off", "vis_bars_opacity", "vis_flow_opacity", "swirl_react_mode", "vis_jump_react", "vis_jump_on", "float_idle",
+        "volume_custom_width", "vis_no_gradient", "vis_lyrics", "vis_text_still", "vis_sway", "vis_sway_amount", "vis_sway_react", "sway_sens", "vis_text_no_outline", "vis_text_back", "vis_back_alpha", "vis_back_round", "vis_back_pad", "vis_back_block", "vis_live_preview", "vis_font_random", "vis_text_font", "vis_text_font_name", "vis_text_no_artist", "vis_lyrics_no_back", "vis_bars_stay", "lyrics_vis", "lyrics_vis_dark", "lyrics_vis_mode", "window_opacity", "anchor_controls", "anchor_volume", "bar_stacked", "bar_layout", "bar_free", "lyrics_ctl_off", "vis_bars_opacity", "vis_flow_opacity", "swirl_react_mode", "vis_jump_react", "vis_jump_on", "vis_jump_auto", "float_idle",
         "jump_sens", "jump_gap", "jump_floor", "jump_adapt", "vis_sway_beat", "vis_depth", "vis_art_border", "calm_look", "disc_dim", "vis_views", "vis_view_mini", "vis_reverse_flow", "vis_reverse_swirl", "extra_show_title", "extra_show_artist", "extra_show_heart",
     ];
 
@@ -2294,7 +2306,8 @@ impl Settings {
         let speed = if self.swirl_drift.is_finite() && self.swirl_drift > 0.0 {
             self.swirl_drift.clamp(0.2, 4.0)
         } else {
-            1.0
+            // Unset: a gentle drift (faster than about 2 moves too quickly).
+            1.5
         };
         9.0 / f64::from(speed)
     }
