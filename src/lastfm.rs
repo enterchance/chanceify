@@ -290,6 +290,30 @@ impl Drop for LastFm {
     }
 }
 
+/// Sends a prepared request and reads Last.fm's answer.
+fn send(client: &reqwest::blocking::Client, url: &str, params: &[(String, String)]) -> Reply {
+    let response = match client.post(url).form(params).send() {
+        Ok(response) => response,
+        Err(error) => return Reply::Network(error.to_string()),
+    };
+    let status = response.status();
+    let body: serde_json::Value = match response.json() {
+        Ok(body) => body,
+        Err(error) => {
+            return Reply::Network(format!("unreadable answer ({status}): {error}"));
+        }
+    };
+    if let Some(code) = body.get("error").and_then(serde_json::Value::as_i64) {
+        let message = body
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("Last.fm said no")
+            .to_string();
+        return Reply::Api(code, message);
+    }
+    Reply::Ok(body)
+}
+
 /// A Last.fm list that may come back as one object instead of an array.
 fn list_of(value: Option<&serde_json::Value>) -> Vec<serde_json::Value> {
     match value {
@@ -579,36 +603,63 @@ impl Worker {
                 names.push((name, None));
             }
         }
+        // Everyone at once (eight at a time), not one after another: with
+        // dozens of friends the sequential reads took most of a minute.
+        let Some(client) = self.client().cloned() else {
+            self.with_view(|view| view.friends_loading = false);
+            return;
+        };
+        let requests: Vec<(String, Option<String>, &'static str, Vec<(String, String)>)> = names
+            .into_iter()
+            .map(|(user, avatar)| {
+                let (url, params) = self.request(
+                    "user.getRecentTracks",
+                    &[("user", user.clone()), ("limit", "1".to_string())],
+                    false,
+                );
+                (user, avatar, url, params)
+            })
+            .collect();
         let mut friends = Vec::new();
-        for (user, avatar) in names {
-            let mut now = FriendNow { user: user.clone(), avatar, ..FriendNow::default() };
-            match self.call(
-                "user.getRecentTracks",
-                &[("user", user), ("limit", "1".to_string())],
-                false,
-            ) {
-                Reply::Ok(body) => {
-                    if let Some(track) = list_of(body.get("recenttracks").and_then(|r| r.get("track"))).first() {
-                        now.title = text_of(track.get("name"));
-                        now.artist = text_of(track.get("artist"));
-                        now.image = image_of(track);
-                        now.now = track
-                            .get("@attr")
-                            .and_then(|attr| attr.get("nowplaying"))
-                            .and_then(serde_json::Value::as_str)
-                            == Some("true");
-                        now.at = track
-                            .get("date")
-                            .and_then(|date| date.get("uts"))
-                            .and_then(serde_json::Value::as_str)
-                            .and_then(|text| text.parse().ok())
-                            .unwrap_or(0);
+        for batch in requests.chunks(8) {
+            let replies: Vec<Reply> = std::thread::scope(|scope| {
+                let handles: Vec<_> = batch
+                    .iter()
+                    .map(|(_, _, url, params)| {
+                        let client = &client;
+                        scope.spawn(move || send(client, url, params))
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|handle| handle.join().unwrap_or_else(|_| Reply::Network("lost".into())))
+                    .collect()
+            });
+            for ((user, avatar, _, _), reply) in batch.iter().zip(replies) {
+                let mut now = FriendNow { user: user.clone(), avatar: avatar.clone(), ..FriendNow::default() };
+                match reply {
+                    Reply::Ok(body) => {
+                        if let Some(track) = list_of(body.get("recenttracks").and_then(|r| r.get("track"))).first() {
+                            now.title = text_of(track.get("name"));
+                            now.artist = text_of(track.get("artist"));
+                            now.image = image_of(track);
+                            now.now = track
+                                .get("@attr")
+                                .and_then(|attr| attr.get("nowplaying"))
+                                .and_then(serde_json::Value::as_str)
+                                == Some("true");
+                            now.at = track
+                                .get("date")
+                                .and_then(|date| date.get("uts"))
+                                .and_then(serde_json::Value::as_str)
+                                .and_then(|text| text.parse().ok())
+                                .unwrap_or(0);
+                        }
                     }
+                    Reply::Api(_, message) | Reply::Network(message) => now.error = Some(message),
                 }
-                Reply::Api(_, message) => now.error = Some(message),
-                Reply::Network(message) => now.error = Some(message),
+                friends.push(now);
             }
-            friends.push(now);
         }
         // Playing now first, then the most recent.
         friends.sort_by_key(|friend| (!friend.now, std::cmp::Reverse(friend.at)));
@@ -674,8 +725,8 @@ impl Worker {
         self.http.as_ref()
     }
 
-    /// Sends one signed request.
-    fn call(&mut self, method: &str, extra: &[(&str, String)], signed_in: bool) -> Reply {
+    /// The address and form for one request, signed when not proxied.
+    fn request(&self, method: &str, extra: &[(&str, String)], signed_in: bool) -> (&'static str, Vec<(String, String)>) {
         let proxied = self.key == VIA_PROXY && !PROXY_URL.is_empty();
         let mut params: Vec<(String, String)> = vec![("method".into(), method.to_string())];
         if !proxied {
@@ -692,30 +743,16 @@ impl Worker {
             params.push(("api_sig".into(), api_sig));
         }
         params.push(("format".into(), "json".into()));
-        let url = if proxied { PROXY_URL } else { API_URL };
+        (if proxied { PROXY_URL } else { API_URL }, params)
+    }
+
+    /// Sends one signed request.
+    fn call(&mut self, method: &str, extra: &[(&str, String)], signed_in: bool) -> Reply {
+        let (url, params) = self.request(method, extra, signed_in);
         let Some(client) = self.client() else {
             return Reply::Network("could not set up the connection".into());
         };
-        let response = match client.post(url).form(&params).send() {
-            Ok(response) => response,
-            Err(error) => return Reply::Network(error.to_string()),
-        };
-        let status = response.status();
-        let body: serde_json::Value = match response.json() {
-            Ok(body) => body,
-            Err(error) => {
-                return Reply::Network(format!("unreadable answer ({status}): {error}"));
-            }
-        };
-        if let Some(code) = body.get("error").and_then(serde_json::Value::as_i64) {
-            let message = body
-                .get("message")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("Last.fm said no")
-                .to_string();
-            return Reply::Api(code, message);
-        }
-        Reply::Ok(body)
+        send(client, url, &params)
     }
 
     /// The session has stopped working: sign out and say so.

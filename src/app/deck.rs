@@ -155,9 +155,19 @@ impl App {
         let state = self.deck_state()?;
         let track = state.track.as_ref()?;
         // The cover is offered once it has been handed to the art loader.
-        let art = (track.cover.is_some() && self.deck_art.as_deref() == Some(track.uri.as_str()))
-            .then(|| cover_url(&track.uri));
         let matched = self.deck_spotify_match(&track.uri);
+        // The picture inside the file first; a file with none borrows the
+        // album picture of the Spotify song it was matched to, so the player,
+        // the swirl and the visualizer still have a cover.
+        let art = (track.cover.is_some() && self.deck_art.as_deref() == Some(track.uri.as_str()))
+            .then(|| cover_url(&track.uri))
+            .or_else(|| {
+                matched
+                    .as_ref()
+                    .and_then(|m| m.album.as_ref())
+                    .and_then(|album| crate::api::models::pick_image(&album.images, 640))
+                    .map(str::to_string)
+            });
         let artists = if let Some(matched) = &matched {
             matched.artists.clone()
         } else if track.artist.is_empty() {

@@ -22,10 +22,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     theme::text(ui, greeting.as_ref(), theme::bold(theme::TITLE_TEXT), palette.text);
     theme::text(ui, crate::util::welcome_line(), theme::regular(theme::BODY_TEXT), palette.secondary);
     ui.add_space(10.0);
-    let tab = app.settings.home.tab.min(1);
+    let tab = app.settings.home.tab.min(2);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        for (index, label) in ["For you", "Music stats"].into_iter().enumerate() {
+        for (index, label) in ["For you", "Music stats", "Friends"].into_iter().enumerate() {
             if theme::pill_button(ui, &palette, &gettext(app.locale, label), tab as usize == index)
                 .clicked()
                 && tab as usize != index
@@ -45,8 +45,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         if app.settings.home.recommendations.visible {
             recommendations(app, ui);
         }
-    } else {
+    } else if tab == 1 {
         stats_section(app, ui);
+    } else {
+        super::queue::friends_contents(app, ui);
     }
 }
 

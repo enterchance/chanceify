@@ -99,15 +99,14 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
             );
             row_ui.spacing_mut().item_spacing.x = 8.0;
             let each = if beside {
-                ((row_ui.available_width() - super::WINDOWS_WINDOW_CONTROLS_WIDTH - 16.0) / 3.0)
+                ((row_ui.available_width() - super::WINDOWS_WINDOW_CONTROLS_WIDTH - 8.0) / 2.0)
                     .max(40.0)
             } else {
-                ((row_ui.available_width() - 16.0) / 3.0).max(40.0)
+                ((row_ui.available_width() - 8.0) / 2.0).max(40.0)
             };
             for (value, label) in [
                 (QueueTab::Queue, gettext(app.locale, "Queue")),
                 (QueueTab::Recents, gettext(app.locale, "Recent")),
-                (QueueTab::Friends, gettext(app.locale, "Friends")),
             ] {
                 let response = theme::soft_button_tall(&mut row_ui, &palette, &label, value == tab, each, tall);
                 if response.clicked() {
@@ -209,7 +208,8 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
             |ui| match app.queue_tab {
                 QueueTab::Queue => contents(app, ui, false),
                 QueueTab::Recents => recents_contents(app, ui),
-                QueueTab::Friends => friends_contents(app, ui),
+                // Friends moved to Home; an old saved tab shows the queue.
+                QueueTab::Friends => contents(app, ui, false),
             },
         );
     });
@@ -590,18 +590,18 @@ fn queue_is_empty(app: &App) -> bool {
 }
 
 /// What your Last.fm friends, and the Last.fm names you added, are playing.
-fn friends_contents(app: &mut App, ui: &mut egui::Ui) {
+pub(super) fn friends_contents(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let view = app.lastfm.view();
     let extra = app.settings.lastfm_friends.clone();
     let signed_in = matches!(view.status, crate::lastfm::Status::SignedIn);
-    // Read on opening, then once a minute while the tab shows.
+    // Read on opening, then every 15 seconds while it shows.
     let asked_id = egui::Id::new("friends-asked");
     let asked: Option<f64> = ui.data(|data| data.get_temp(asked_id));
     let now = ui.input(|input| input.time);
     if (signed_in || !extra.is_empty())
         && !view.friends_loading
-        && (view.friends.is_none() || asked.is_none_or(|at| now - at > 60.0))
+        && (view.friends.is_none() || asked.is_none_or(|at| now - at > 15.0))
     {
         app.lastfm.friends(extra.clone());
         ui.data_mut(|data| data.insert_temp(asked_id, now));
