@@ -66,6 +66,85 @@ fn refused(error: librespot_core::Error) -> Failure {
     }
 }
 
+/// A future album's own mapping and ordered preview rows, through the same
+/// playback session. An unknown row remains a non-playable placeholder.
+pub async fn prerelease(
+    session: &Session,
+    web: &crate::api::ApiClient,
+    uri: &str,
+) -> anyhow::Result<crate::prerelease::Prerelease> {
+    anyhow::ensure!(
+        crate::link::parse(uri).as_deref() == Some(uri) && uri.starts_with("spotify:prerelease:"),
+        "invalid prerelease URI"
+    );
+    let mut request = BatchedEntityRequest::new();
+    request.entity_request.push(EntityRequest {
+        entity_uri: uri.into(),
+        query: vec![ExtensionQuery {
+            extension_kind: EnumOrUnknown::new(ExtensionKind::PRERELEASE),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let response = session.spclient().get_extended_metadata(request).await?;
+    let mut page = None;
+    for array in &response.extended_metadata {
+        if array.extension_kind.enum_value() != Ok(ExtensionKind::PRERELEASE) {
+            continue;
+        }
+        anyhow::ensure!(
+            matches!(array.header.provider_error_status, 0 | 200),
+            "Spotify could not resolve this prerelease"
+        );
+        for data in &array.extension_data {
+            if data.entity_uri != uri {
+                continue;
+            }
+            anyhow::ensure!(
+                matches!(data.header.status_code, 0 | 200),
+                "Spotify prerelease answered {}",
+                data.header.status_code
+            );
+            let bytes = &data
+                .extension_data
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("empty prerelease response"))?
+                .value;
+            page = Some(crate::prerelease::Prerelease::decode(bytes, uri)?);
+        }
+    }
+    let mut page = page.ok_or_else(|| anyhow::anyhow!("Spotify did not return this prerelease"))?;
+    let login = session.login5().auth_token().await?;
+    let client_token = session.spclient().client_token().await?;
+    let mut offset = 0;
+    loop {
+        let query = serde_json::json!({
+            "operationName":"getAlbum",
+            "variables":{"uri":page.album.uri,"locale":"","offset":offset,"limit":50},
+            "extensions":{"persistedQuery":{"version":1,"sha256Hash":"b9bfabef66ed756e5e13f68a942deb60bd4125ec1f1be8cc42769dc0259b4b10"}}
+        });
+        let body = web
+            .partner_request(&login.access_token, &client_token, &query)
+            .await?;
+        let (rows, total) = page.album_preview(&body)?;
+        anyhow::ensure!(
+            offset == 0 || page.album.total_tracks == Some(total),
+            "Spotify changed this track list while loading"
+        );
+        page.album.total_tracks = Some(total);
+        offset += rows.len();
+        page.tracks.extend(rows);
+        if offset >= total as usize {
+            break;
+        }
+        anyhow::ensure!(
+            offset > 0 && offset <= 1000,
+            "Spotify returned an incomplete track list"
+        );
+    }
+    Ok(page)
+}
+
 /// A playlist's header: name, owner, cover, and snapshot.
 pub async fn playlist(session: &Session, id: &str) -> Result<Playlist, Failure> {
     let list = window(session, id, 0, 0).await?;

@@ -60,6 +60,7 @@ pub mod opener;
 pub mod paths;
 pub mod player;
 pub mod playlist_cover;
+pub mod prerelease;
 pub mod releases;
 pub mod resample;
 pub mod response_cache;

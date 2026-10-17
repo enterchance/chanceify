@@ -14,6 +14,7 @@ pub mod login;
 mod lyrics;
 mod mini;
 pub mod player_bar;
+mod prerelease;
 pub mod queue;
 pub mod radio;
 pub mod search;

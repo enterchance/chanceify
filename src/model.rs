@@ -757,6 +757,9 @@ pub struct PlaylistCachePending {
 pub struct AlbumPage {
     pub generation: u64,
     pub album: Loadable<Album>,
+    /// Set when the page came from an upcoming album's countdown link; the
+    /// album then draws as its native upcoming page instead.
+    pub prerelease: Option<crate::prerelease::Prerelease>,
     pub tracks: PagedList<Track>,
 }
 

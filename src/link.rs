@@ -113,7 +113,15 @@ fn lookup_from_link(rest: &str) -> Option<Lookup> {
 }
 
 /// Resource pages. Search links carry text instead of a resource id.
-const KINDS: [&str; 6] = ["track", "album", "artist", "playlist", "show", "episode"];
+const KINDS: [&str; 7] = [
+    "track",
+    "album",
+    "artist",
+    "playlist",
+    "show",
+    "episode",
+    "prerelease",
+];
 
 /// The canonical form of a context URI Spotify reports as playing.
 /// Personalized playlists report their context with the owner embedded,
@@ -133,7 +141,7 @@ pub fn canonical_context_uri(uri: &str) -> String {
 }
 
 /// The canonical `spotify:<kind>:<id>` behind `text`, or `None` when it is
-/// not a link to a track, album, artist, playlist, show, episode, or search.
+/// not a link to a track, album, artist, playlist, show, episode, prerelease, or search.
 ///
 /// Accepted: `spotify:track:ID`, the old `spotify:user:NAME:playlist:ID`,
 /// `spotify://track/ID`, and `https://open.spotify.com/track/ID` with or
@@ -277,6 +285,22 @@ fn is_id(id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prerelease_web_and_protocol_links_keep_the_prerelease_id() {
+        for link in [
+            "spotify:prerelease:0kRaNkRxpO16BjxJU0IQAL",
+            "spotify://prerelease/0kRaNkRxpO16BjxJU0IQAL",
+            "https://open.spotify.com/prerelease/0kRaNkRxpO16BjxJU0IQAL?si=ignored&go=1",
+            "https://open.spotify.com/intl-ru/prerelease/0kRaNkRxpO16BjxJU0IQAL",
+        ] {
+            assert_eq!(
+                parse(link).as_deref(),
+                Some("spotify:prerelease:0kRaNkRxpO16BjxJU0IQAL")
+            );
+        }
+        assert!(parse("https://open.spotify.com/prerelease/invalid-id").is_none());
+    }
 
     /// A page asks for a song by name; the canonical form carries the names.
     #[test]
