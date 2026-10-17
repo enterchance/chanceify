@@ -4475,6 +4475,38 @@ pub fn card(
     }
 }
 
+/// Lets the mouse wheel scroll a sideways row: over the row last drawn
+/// under `id`, an up/down wheel turn moves it left/right while it has room
+/// that way, and the page scrolls as usual once it reaches an end. Call
+/// before showing the row, and [`note_sideways`] after.
+pub(crate) fn wheel_sideways(ui: &Ui, id: egui::Id) {
+    let Some((rect, offset, max)) = ui.ctx().data(|data| data.get_temp::<(Rect, f32, f32)>(id)) else {
+        return;
+    };
+    if max <= 0.5 || !ui.rect_contains_pointer(rect) {
+        return;
+    }
+    ui.ctx().input_mut(|input| {
+        let delta = input.smooth_scroll_delta;
+        if delta.y == 0.0 || delta.x != 0.0 {
+            return;
+        }
+        // Wheel down (negative) moves the row on to the right.
+        let room = if delta.y < 0.0 { offset < max - 0.5 } else { offset > 0.5 };
+        if room {
+            input.smooth_scroll_delta = vec2(delta.y, 0.0);
+        }
+    });
+}
+
+/// Remembers where a sideways row is and how far it can scroll, for
+/// [`wheel_sideways`] on the next frame.
+pub(crate) fn note_sideways<R>(ui: &Ui, id: egui::Id, output: &egui::scroll_area::ScrollAreaOutput<R>) {
+    let max = (output.content_size.x - output.inner_rect.width()).max(0.0);
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(id, (output.inner_rect, output.state.offset.x, max)));
+}
+
 /// A horizontal shelf of cards with a title.
 pub fn shelf(
     ui: &mut Ui,
@@ -4486,7 +4518,9 @@ pub fn shelf(
     ui.add_space(8.0);
     theme::section_title(ui, palette, title);
     ui.add_space(4.0);
-    crate::autoscroll::show(
+    let wheel = egui::Id::new(("shelf-wheel", id));
+    wheel_sideways(ui, wheel);
+    let output = crate::autoscroll::show(
         ui,
         egui::ScrollArea::horizontal().id_salt(id),
         egui::Vec2b::new(true, false),
@@ -4497,6 +4531,7 @@ pub fn shelf(
             });
         },
     );
+    note_sideways(ui, wheel, &output);
     ui.add_space(12.0);
 }
 

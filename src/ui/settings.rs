@@ -912,30 +912,6 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
         });
     }
 
-    if needle.is_empty() || "font typeface text letters".contains(needle.as_str()) {
-        section(ui, &palette, "App font", |ui| {
-            let fonts = crate::system_fonts::VIS_FONTS;
-            let current = usize::from(app.settings.ui_font).min(fonts.len() - 1);
-            egui::ComboBox::from_id_salt("ui-font-picker")
-                .selected_text(fonts[current].0)
-                .width(260.0)
-                .height(320.0)
-                .show_ui(ui, |ui| {
-                    for (index, (name, _)) in fonts.iter().enumerate() {
-                        // Each name in its own face, once that face has loaded.
-                        let family = super::player_bar::vis_font_family(ui.ctx(), index);
-                        let label = egui::RichText::new(*name).font(egui::FontId::new(theme::BODY_TEXT + 1.0, family));
-                        if ui.selectable_label(index == current, label).clicked() {
-                            app.settings.ui_font = index as u8;
-                            app.mark_settings_dirty();
-                        }
-                    }
-                });
-            note(ui, &palette, "Every bit of text in chanceify: menus, the library, column headings, search. The visualizer title has its own font in the visualizer panel.");
-            ui.add_space(8.0);
-        });
-    }
-
     let appearance = gettext(locale, "Appearance");
     let theme_title = gettext(locale, "Theme");
     let theme_guide = gettext(locale, "How to make a theme");

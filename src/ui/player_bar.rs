@@ -1939,9 +1939,11 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             let mut columns = |app: &mut App, ui: &mut egui::Ui, which: u8| {
             ui.spacing_mut().item_spacing.x = 18.0;
             if which == 0 { ui.vertical(|ui| {
+            // A shape that is off is only as wide as its button.
+            let on = shapes & crate::settings::Settings::SHAPE_BARS != 0;
+            let col_w = if on { col_w } else { 120.0 };
             ui.set_width(col_w);
             {
-                let on = shapes & crate::settings::Settings::SHAPE_BARS != 0;
                 if shape_button(ui, &palette, ShapeIcon::Bars, &gettext(app.locale, "Bars"), on, col_w).clicked() {
                     app.actions.push(Action::ToggleVisShape(crate::settings::Settings::SHAPE_BARS));
                 }
@@ -2029,9 +2031,11 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             }
             }); }
             if which == 0 { ui.vertical(|ui| {
+            // A shape that is off is only as wide as its button.
+            let on = shapes & crate::settings::Settings::SHAPE_FLOW != 0;
+            let col_w = if on { col_w } else { 120.0 };
             ui.set_width(col_w);
             {
-                let on = shapes & crate::settings::Settings::SHAPE_FLOW != 0;
                 if shape_button(ui, &palette, ShapeIcon::Flow, &gettext(app.locale, "Flow"), on, col_w).clicked() {
                     app.actions.push(Action::ToggleVisShape(crate::settings::Settings::SHAPE_FLOW));
                 }
@@ -2132,9 +2136,11 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             }
             }); }
             if which == 1 { ui.vertical(|ui| {
+            // A shape that is off is only as wide as its button.
+            let on = shapes & crate::settings::Settings::SHAPE_SWIRL != 0;
+            let col_w = if on { col_w } else { 120.0 };
             ui.set_width(col_w);
             {
-                let on = shapes & crate::settings::Settings::SHAPE_SWIRL != 0;
                 if shape_button(ui, &palette, ShapeIcon::Swirl, &gettext(app.locale, "Swirl"), on, col_w).clicked() {
                     app.actions.push(Action::ToggleVisShape(crate::settings::Settings::SHAPE_SWIRL));
                 }
@@ -2537,18 +2543,8 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             ui.add_space(4.0);
             font_grid(app, ui);
             ui.add_space(4.0);
-            if chip_i(
-                ui,
-                &palette,
-                "Art border",
-                app.settings.vis_art_border,
-                ui.available_width().min(290.0),
-            )
-            .clicked()
-            {
-                app.settings.vis_art_border = !app.settings.vis_art_border;
-                app.mark_settings_dirty();
-            }
+            app_font_picker(app, ui);
+            ui.add_space(4.0);
             {
                 theme::subtle(ui, &palette, &gettext(app.locale, "VIBRATION REACTS TO THE MUSIC"));
                 ui.horizontal_wrapped(|ui| {
@@ -2700,17 +2696,8 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
             } else {
                 // Every part in one row, with a bar to scroll sideways. The
                 // mouse wheel scrolls it sideways too while over it.
-                let row_rect_id = egui::Id::new("vis-panel-row-rect");
-                if let Some(rect) = ui.ctx().data(|data| data.get_temp::<Rect>(row_rect_id))
-                    && ui.rect_contains_pointer(rect)
-                {
-                    ui.ctx().input_mut(|input| {
-                        let delta = input.smooth_scroll_delta;
-                        if delta.y != 0.0 && delta.x == 0.0 {
-                            input.smooth_scroll_delta = vec2(delta.y, 0.0);
-                        }
-                    });
-                }
+                let row_rect_id = egui::Id::new("vis-panel-row-wheel");
+                super::widgets::wheel_sideways(ui, row_rect_id);
                 let row = egui::ScrollArea::horizontal()
                     .id_salt("vis-panel-row")
                     .auto_shrink([false, true])
@@ -2724,29 +2711,20 @@ fn vis_menu_inner(app: &mut App, ui: &mut egui::Ui) {
                                 }
                                 shared(&mut *app, ui);
                             }
+                            // The equalizer on the same row, at the end.
+                            ui.vertical(|ui| {
+                                theme::subtle(ui, &palette, &gettext(app.locale, "EQUALIZER"));
+                                super::settings::eq_panel(app, ui);
+                            });
                         });
                     });
-                ui.ctx().data_mut(|data| data.insert_temp(row_rect_id, row.inner_rect));
+                super::widgets::note_sideways(ui, row_rect_id, &row);
             }
-            // The side lyrics panel's own options (also on its right-click).
-            super::widgets::menu_separator(ui, &palette);
-            theme::subtle(ui, &palette, &gettext(app.locale, "SIDE LYRICS"));
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                use crate::settings::Settings;
-                let stamps = !app.settings.side_lyrics_flag(Settings::LYRICS_HIDE_STAMPS);
-                if chip_i(ui, &palette, "Timestamps", stamps, 120.0).clicked() {
-                    app.actions.push(Action::ToggleSideLyricsFlag(Settings::LYRICS_HIDE_STAMPS));
-                }
-                for (value, label) in [(1u8, "Smaller"), (0, "Normal"), (2, "Larger")] {
-                    if chip(ui, &palette, label, app.settings.side_lyrics_size == value, 70.0).clicked() {
-                        app.actions.push(Action::SetSideLyricsSize(value));
-                    }
-                }
-            });
-            super::widgets::menu_separator(ui, &palette);
-            theme::subtle(ui, &palette, &gettext(app.locale, "EQUALIZER"));
-            super::settings::eq_panel(app, ui);
+            if columns_fit {
+                super::widgets::menu_separator(ui, &palette);
+                theme::subtle(ui, &palette, &gettext(app.locale, "EQUALIZER"));
+                super::settings::eq_panel(app, ui);
+            }
         }
     }
 }
@@ -2955,6 +2933,28 @@ fn font_grid(app: &mut App, ui: &mut egui::Ui) {
         ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("vis-font-preview"), (index, pass)));
         ui.ctx().request_repaint();
     }
+}
+
+/// The face for all of the app's text, beside the title's.
+fn app_font_picker(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    theme::subtle(ui, &palette, "APP FONT");
+    let fonts = crate::system_fonts::VIS_FONTS;
+    let current = usize::from(app.settings.ui_font).min(fonts.len() - 1);
+    egui::ComboBox::from_id_salt("ui-font-picker")
+        .selected_text(fonts[current].0)
+        .width(ui.available_width().min(290.0))
+        .height(320.0)
+        .show_ui(ui, |ui| {
+            for (index, (name, _)) in fonts.iter().enumerate() {
+                let family = vis_font_family(ui.ctx(), index);
+                let label = egui::RichText::new(*name).font(egui::FontId::new(theme::BODY_TEXT + 1.0, family));
+                if ui.selectable_label(index == current, label).clicked() {
+                    app.settings.ui_font = index as u8;
+                    app.mark_settings_dirty();
+                }
+            }
+        });
 }
 
 /// The font the title is drawn in this frame: the one the reader is hovering
