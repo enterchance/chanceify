@@ -272,9 +272,12 @@ impl LastFm {
         self.send(Job::Friends(extra));
     }
 
-    /// Reads your play counts for sorting by plays.
+    /// Reads your play counts for sorting by plays (once a run).
     pub fn top_tracks(&self) {
-        self.send(Job::TopTracks);
+        static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !ASKED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            self.send(Job::TopTracks);
+        }
     }
 }
 

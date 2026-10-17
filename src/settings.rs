@@ -1336,6 +1336,8 @@ pub struct Settings {
     pub lastfm_secret: String,
     pub lastfm_user: String,
     pub lastfm_session: String,
+    /// Last.fm names added by hand to the Friends tab.
+    pub lastfm_friends: Vec<String>,
     /// Count what is played on Last.fm.
     pub lastfm_scrobble: bool,
     /// Tell Last.fm what is playing right now.
@@ -1690,6 +1692,7 @@ impl Default for Settings {
             lastfm_secret: String::new(),
             lastfm_user: String::new(),
             lastfm_session: String::new(),
+            lastfm_friends: Vec::new(),
             lastfm_scrobble: true,
             lastfm_now_playing: true,
             lastfm_files: true,

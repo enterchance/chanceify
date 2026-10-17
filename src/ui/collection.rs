@@ -487,6 +487,29 @@ pub fn actions_row(
                     .show(|ui| {
                         widgets::columns_menu(ui, &palette, locale, &mut columns);
                         widgets::menu_separator(ui, &palette);
+                        // Orders with no column of their own.
+                        let page = app.page().clone();
+                        let current = app.table_sorts.get(&page).and_then(TableSort::primary);
+                        let lastfm = !app.settings.lastfm_user.is_empty();
+                        for (column, label, enabled) in [
+                            (SortColumn::Plays, "sort by your plays (Last.fm)", lastfm),
+                            (SortColumn::Popularity, "sort by popularity", true),
+                        ] {
+                            let on = current.is_some_and(|key| key.column == column);
+                            if widgets::menu_item_enabled(ui, &palette, on.then_some(Icon::Check), label, enabled) {
+                                if on {
+                                    app.table_sorts.remove(&page);
+                                } else {
+                                    if column == SortColumn::Plays && !crate::lastfm::plays_loaded() {
+                                        app.lastfm.top_tracks();
+                                    }
+                                    app.table_sorts.insert(page.clone(), TableSort::single(column, false));
+                                    app.actions.push(Action::LoadMore(page.clone()));
+                                }
+                                app.note_session_change();
+                            }
+                        }
+                        widgets::menu_separator(ui, &palette);
                         widgets::switch_labeled(ui, &palette, "cover background", &mut backdrop.0);
                         if backdrop.0 {
                             ui.add_space(4.0);
@@ -619,6 +642,8 @@ pub struct TableCache {
     /// as answers land rather than staying in whatever order the partial
     /// set put it in.
     pub bpms_revision: u64,
+    /// Whether your Last.fm play counts had arrived when this was built.
+    pub plays_loaded: bool,
     pub visible: Arc<[usize]>,
     pub view_uris: Option<Arc<[String]>>,
     /// Playback positions for visible rows; unavailable rows have no position.
@@ -718,6 +743,10 @@ pub fn prepare_table_view(
         _ => None,
     };
 
+    // A list saved sorted by your plays asks Last.fm for them once.
+    if sort.is_some_and(|sort| sort.uses(SortColumn::Plays)) && !crate::lastfm::plays_loaded() {
+        app.lastfm.top_tracks();
+    }
     let is_valid = cached.as_ref().is_some_and(|c| {
         c.sort.as_ref() == sort
             && c.needle == needle
@@ -727,6 +756,7 @@ pub fn prepare_table_view(
             // A tempo arriving can change the order of a list sorted by it,
             // so the cache is stale the moment one does.
             && c.bpms_revision == app.bpms_revision
+            && c.plays_loaded == crate::lastfm::plays_loaded()
     });
 
     if let Some(entry) = cached.filter(|_| is_valid) {
@@ -753,6 +783,7 @@ pub fn prepare_table_view(
             items_revision,
             user_names_revision: app.user_names_revision,
             bpms_revision: app.bpms_revision,
+            plays_loaded: crate::lastfm::plays_loaded(),
             membership_scanned: membership.map_or(0, |index| index.scanned()),
             visible: visible.into(),
             view_uris,
@@ -1690,6 +1721,19 @@ fn sort_value(
                 .into_iter()
                 .next()
                 .map(|name| (name.to_lowercase(), std::cmp::Reverse(0usize))),
+            PlayableItem::Episode(_) => None,
+        }),
+        SortColumn::Plays => SortValue::Optional(match &items[index].0 {
+            PlayableItem::Track(track) => crate::lastfm::plays_of(
+                &track.name,
+                &track.artists.first().map(|artist| artist.name.clone()).unwrap_or_default(),
+            )
+            .filter(|plays| *plays > 0)
+            .map(|plays| plays.min(i32::MAX as u32) as i32),
+            PlayableItem::Episode(_) => None,
+        }),
+        SortColumn::Popularity => SortValue::Optional(match &items[index].0 {
+            PlayableItem::Track(track) => track.popularity.map(i32::from),
             PlayableItem::Episode(_) => None,
         }),
         SortColumn::Release => match &items[index].0 {

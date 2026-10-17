@@ -199,6 +199,8 @@ pub enum QueueTab {
     #[default]
     Queue,
     Recents,
+    /// What your Last.fm friends are playing.
+    Friends,
 }
 
 impl QueueTab {
@@ -206,6 +208,7 @@ impl QueueTab {
         match self {
             Self::Queue => "queue",
             Self::Recents => "recents",
+            Self::Friends => "friends",
         }
     }
 
@@ -213,6 +216,7 @@ impl QueueTab {
         match text {
             "queue" => Some(Self::Queue),
             "recents" => Some(Self::Recents),
+            "friends" => Some(Self::Friends),
             // Backward compatibility with the old tab name.
             "recently_played" => Some(Self::Recents),
             _ => None,
@@ -973,6 +977,11 @@ pub enum SortColumn {
     /// The song's genres (from MusicBrainz), by the first one's name. A
     /// song with none sorts last whichever way this runs.
     Genre,
+    /// How many times you have played the song, by Last.fm. Sort only: it
+    /// has no column. A song you never played sorts last.
+    Plays,
+    /// How popular the song is on Spotify. Sort only: it has no column.
+    Popularity,
 }
 
 /// Playback and action context for a track row.

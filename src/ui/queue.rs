@@ -99,14 +99,15 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
             );
             row_ui.spacing_mut().item_spacing.x = 8.0;
             let each = if beside {
-                ((row_ui.available_width() - super::WINDOWS_WINDOW_CONTROLS_WIDTH - 8.0) / 2.0)
+                ((row_ui.available_width() - super::WINDOWS_WINDOW_CONTROLS_WIDTH - 16.0) / 3.0)
                     .max(40.0)
             } else {
-                ((row_ui.available_width() - 8.0) / 2.0).max(40.0)
+                ((row_ui.available_width() - 16.0) / 3.0).max(40.0)
             };
             for (value, label) in [
                 (QueueTab::Queue, gettext(app.locale, "Queue")),
                 (QueueTab::Recents, gettext(app.locale, "Recent")),
+                (QueueTab::Friends, gettext(app.locale, "Friends")),
             ] {
                 let response = theme::soft_button_tall(&mut row_ui, &palette, &label, value == tab, each, tall);
                 if response.clicked() {
@@ -208,6 +209,7 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
             |ui| match app.queue_tab {
                 QueueTab::Queue => contents(app, ui, false),
                 QueueTab::Recents => recents_contents(app, ui),
+                QueueTab::Friends => friends_contents(app, ui),
             },
         );
     });
@@ -593,6 +595,148 @@ fn contents_inner(app: &mut App, ui: &mut egui::Ui, compact: bool) {
 
 fn queue_is_empty(app: &App) -> bool {
     app.queue.get().is_none_or(|queue| queue.queue.is_empty())
+}
+
+/// What your Last.fm friends, and the Last.fm names you added, are playing.
+fn friends_contents(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    let view = app.lastfm.view();
+    let extra = app.settings.lastfm_friends.clone();
+    let signed_in = matches!(view.status, crate::lastfm::Status::SignedIn);
+    // Read on opening, then once a minute while the tab shows.
+    let asked_id = egui::Id::new("friends-asked");
+    let asked: Option<f64> = ui.data(|data| data.get_temp(asked_id));
+    let now = ui.input(|input| input.time);
+    if (signed_in || !extra.is_empty())
+        && !view.friends_loading
+        && (view.friends.is_none() || asked.is_none_or(|at| now - at > 60.0))
+    {
+        app.lastfm.friends(extra.clone());
+        ui.data_mut(|data| data.insert_temp(asked_id, now));
+    }
+    ui.ctx().request_repaint_after(std::time::Duration::from_secs(5));
+    // Add a Last.fm name by hand.
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        let id = egui::Id::new("friends-add-name");
+        let mut name = ui.data(|data| data.get_temp::<String>(id)).unwrap_or_default();
+        let field = egui::TextEdit::singleline(&mut name)
+            .hint_text("Add a Last.fm name")
+            .desired_width((ui.available_width() - 60.0).max(80.0))
+            .show(ui)
+            .response;
+        let enter = field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+        if (theme::soft_button(ui, &palette, Some(Icon::Plus), "", false).on_hover_text("Add").clicked() || enter)
+            && !name.trim().is_empty()
+        {
+            let name = name.trim().to_string();
+            if !app.settings.lastfm_friends.iter().any(|have| have.eq_ignore_ascii_case(&name)) {
+                app.settings.lastfm_friends.push(name);
+                app.mark_settings_dirty();
+                let extra = app.settings.lastfm_friends.clone();
+                app.lastfm.friends(extra);
+                ui.data_mut(|data| data.insert_temp(asked_id, now));
+            }
+            name.clear();
+        }
+        ui.data_mut(|data| data.insert_temp(id, name));
+    });
+    ui.add_space(6.0);
+    let Some(friends) = view.friends.clone() else {
+        if view.friends_loading {
+            widgets::loading_row(ui, &palette, app.locale);
+        } else if !signed_in && extra.is_empty() {
+            theme::hint(ui, &palette, "Sign in to Last.fm in Settings to see your friends, or add a Last.fm name above.");
+        }
+        return;
+    };
+    if friends.is_empty() {
+        theme::hint(ui, &palette, "No Last.fm friends yet. Add a Last.fm name above.");
+        return;
+    }
+    let unix_now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs() as i64);
+    for friend in &friends {
+        let row = ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            let picture = friend.avatar.as_deref().or(friend.image.as_deref());
+            widgets::cover(ui, &palette, picture, 40.0, 20.0, Icon::User);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 1.0;
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(&friend.user)
+                            .font(theme::semibold(theme::BODY_TEXT))
+                            .color(palette.text),
+                    )
+                    .truncate(),
+                );
+                let song = if let Some(error) = &friend.error {
+                    error.clone()
+                } else if friend.title.is_empty() {
+                    "Nothing played yet".to_string()
+                } else {
+                    format!("{} \u{2014} {}", friend.title, friend.artist)
+                };
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(song)
+                            .font(theme::regular(theme::SMALL_TEXT))
+                            .color(if friend.now { palette.accent } else { palette.secondary }),
+                    )
+                    .truncate(),
+                );
+                let when = if friend.now {
+                    "Playing now".to_string()
+                } else if friend.at > 0 {
+                    let minutes = (unix_now - friend.at).max(0) / 60;
+                    match minutes {
+                        0 => "Just now".to_string(),
+                        1..=59 => format!("{minutes} min ago"),
+                        60..=1439 => format!("{} h ago", minutes / 60),
+                        _ => format!("{} d ago", minutes / 1440),
+                    }
+                } else {
+                    String::new()
+                };
+                if !when.is_empty() {
+                    theme::hint(ui, &palette, &when);
+                }
+            });
+        });
+        let response = ui.interact(row.response.rect, ui.id().with(("friend", &friend.user)), egui::Sense::click());
+        let search = format!("{} {}", friend.title, friend.artist).trim().to_string();
+        if response.double_clicked() && !friend.title.is_empty() {
+            app.actions.push(Action::Search(search.clone()));
+        }
+        egui::Popup::context_menu(&response)
+            .frame(widgets::menu_frame(&palette))
+            .show(|ui| {
+                widgets::fit_menu(ui, 280.0);
+                if !friend.title.is_empty()
+                    && widgets::menu_item(ui, &palette, Some(Icon::Search), "Find this song")
+                {
+                    app.actions.push(Action::Search(search.clone()));
+                }
+                if widgets::menu_item(ui, &palette, Some(Icon::ExternalLink), "Open their Last.fm") {
+                    app.actions.push(Action::OpenUrl(format!(
+                        "https://www.last.fm/user/{}",
+                        super::settings::last_fm_part(&friend.user)
+                    )));
+                }
+                let added = app.settings.lastfm_friends.iter().position(|have| have.eq_ignore_ascii_case(&friend.user));
+                if let Some(at) = added
+                    && widgets::menu_item(ui, &palette, Some(Icon::Trash), "Remove")
+                {
+                    app.settings.lastfm_friends.remove(at);
+                    app.mark_settings_dirty();
+                    let extra = app.settings.lastfm_friends.clone();
+                    app.lastfm.friends(extra);
+                }
+            });
+        ui.add_space(6.0);
+    }
 }
 
 fn recents_contents(app: &mut App, ui: &mut egui::Ui) {
