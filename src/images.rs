@@ -350,7 +350,7 @@ impl Inner {
         let bytes: Arc<[u8]> = match cached {
             Some(bytes) if !bytes.is_empty() => Arc::from(bytes),
             _ => {
-                let response = self
+                let mut response = self
                     .http
                     .client()?
                     .get(url)
@@ -360,12 +360,23 @@ impl Inner {
                 if !response.status().is_success() {
                     return Err(format!("artwork request failed: {}", response.status()));
                 }
-                let bytes = response.bytes().await.map_err(|error| error.to_string())?;
-                if bytes.len() > MAX_ART_BYTES {
+                // Refuse oversized artwork as it arrives, not once it is all
+                // in memory.
+                if response
+                    .content_length()
+                    .is_some_and(|length| length > MAX_ART_BYTES as u64)
+                {
                     return Err("artwork is too large".to_string());
                 }
+                let mut bytes = Vec::new();
+                while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+                    if bytes.len() + chunk.len() > MAX_ART_BYTES {
+                        return Err("artwork is too large".to_string());
+                    }
+                    bytes.extend_from_slice(&chunk);
+                }
                 // The loader and file worker share one immutable payload.
-                let bytes: Arc<[u8]> = Arc::from(bytes.as_ref());
+                let bytes: Arc<[u8]> = Arc::from(bytes);
                 let write_path = path.clone();
                 let payload = Arc::clone(&bytes);
                 self.runtime.spawn_blocking(move || {
@@ -783,13 +794,24 @@ mod tests {
     use std::time::Duration;
 
     async fn serve_artwork(status: &str, bytes: Vec<u8>) -> (String, tokio::task::JoinHandle<()>) {
+        serve_artwork_sized(status, bytes, true).await
+    }
+
+    /// Without a declared length the body runs until the connection closes.
+    async fn serve_artwork_sized(
+        status: &str,
+        bytes: Vec<u8>,
+        declare_length: bool,
+    ) -> (String, tokio::task::JoinHandle<()>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/cover", listener.local_addr().unwrap());
-        let header = format!(
-            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            bytes.len()
-        );
+        let length = if declare_length {
+            format!("Content-Length: {}\r\n", bytes.len())
+        } else {
+            String::new()
+        };
+        let header = format!("HTTP/1.1 {status}\r\n{length}Connection: close\r\n\r\n");
         let server = tokio::spawn(async move {
             tokio::time::timeout(Duration::from_secs(10), async move {
                 let (mut socket, _) = listener.accept().await.unwrap();
@@ -799,7 +821,8 @@ mod tests {
                     assert!(request.len() < 8192);
                 }
                 socket.write_all(header.as_bytes()).await.unwrap();
-                socket.write_all(&bytes).await.unwrap();
+                // A client that refuses the body hangs up partway through.
+                let _ = socket.write_all(&bytes).await;
             })
             .await
             .expect("the owned artwork request completes");
@@ -913,11 +936,27 @@ mod tests {
         let runtime = artwork_test_runtime();
         let loader = artwork_test_loader(&runtime, dir.clone());
         runtime.block_on(async {
-            for (status, body, message) in [
-                ("404 Not Found", Vec::new(), "artwork request failed: 404"),
-                ("200 OK", vec![1; MAX_ART_BYTES + 1], "artwork is too large"),
+            for (status, body, declare_length, message) in [
+                (
+                    "404 Not Found",
+                    Vec::new(),
+                    true,
+                    "artwork request failed: 404",
+                ),
+                (
+                    "200 OK",
+                    vec![1; MAX_ART_BYTES + 1],
+                    true,
+                    "artwork is too large",
+                ),
+                (
+                    "200 OK",
+                    vec![1; MAX_ART_BYTES + 1],
+                    false,
+                    "artwork is too large",
+                ),
             ] {
-                let (url, server) = serve_artwork(status, body).await;
+                let (url, server) = serve_artwork_sized(status, body, declare_length).await;
                 let error = loader.fetch(&url).await.unwrap_err();
                 assert!(error.starts_with(message), "{error}");
                 server.await.unwrap();
