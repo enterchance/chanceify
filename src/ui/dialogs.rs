@@ -310,7 +310,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     // fit the footer.
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new("Ctrl+click a song queues it. Shift+Ctrl+click plays it next. Or bind a key under Playback.")
+                            egui::RichText::new("Ctrl+click picks songs. Queue a song with the key bound here.")
                                 .font(theme::regular(theme::BODY_TEXT))
                                 .color(palette.secondary),
                         )

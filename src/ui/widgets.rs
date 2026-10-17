@@ -1918,7 +1918,7 @@ pub fn context_menu_items(
 pub(crate) fn queue_click_held(app: &App, ui: &Ui) -> bool {
     let modifiers = ui.input(|input| input.modifiers);
     match app.settings.queue_click {
-        0 => modifiers.command && !modifiers.shift,
+        // Ctrl+click picks songs, as in Spotify; queuing is a key or Alt.
         1 => modifiers.alt && !modifiers.shift,
         _ => false,
     }
@@ -1928,7 +1928,6 @@ pub(crate) fn queue_click_held(app: &App, ui: &Ui) -> bool {
 pub(crate) fn play_next_held(app: &App, ui: &Ui) -> bool {
     let modifiers = ui.input(|input| input.modifiers);
     match app.settings.queue_click {
-        0 => modifiers.command && modifiers.shift,
         1 => modifiers.alt && modifiers.shift,
         _ => false,
     }
@@ -3301,9 +3300,7 @@ fn track_row_contents(
             let modifiers = ui.input(|input| input.modifiers);
             pick = Some(if modifiers.shift {
                 RowPick::Range
-            } else if (app.settings.queue_click == 0 && modifiers.alt)
-                || (app.settings.queue_click != 0 && modifiers.command)
-            {
+            } else if modifiers.command {
                 RowPick::Toggle
             } else {
                 RowPick::Only
