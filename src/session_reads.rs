@@ -166,7 +166,7 @@ pub async fn station(session: &Session, station: &str) -> anyhow::Result<Vec<Tra
         })?;
     Ok(uris
         .iter()
-        .filter_map(|uri| uri.to_uri().ok())
+        .map(|uri| uri.to_uri())
         .filter_map(|uri| match found.get(&uri) {
             Some(PlayableItem::Track(track)) => Some(track.clone()),
             _ => None,
@@ -190,7 +190,7 @@ fn station_songs(context: &librespot_protocol::context::Context) -> Vec<SpotifyU
             },
         )
         .filter(|uri| matches!(uri, SpotifyUri::Track { .. }))
-        .filter(|uri| uri.to_uri().is_ok_and(|text| seen.insert(text)))
+        .filter(|uri| seen.insert(uri.to_uri()))
         .collect()
 }
 
@@ -380,7 +380,7 @@ fn non_empty(text: &str) -> Option<String> {
 /// so its details are looked up, not taken. A local file has no details
 /// to look up; its URI carries what the Web API would have said of it.
 fn item(row: &SessionRow, playables: &HashMap<String, PlayableItem>) -> PlaylistItem {
-    let uri = row.id.to_uri().unwrap_or_default();
+    let uri = row.id.to_uri();
     PlaylistItem {
         added_at: iso8601(row.attributes.timestamp.as_timestamp_ms()),
         added_by: non_empty(&row.attributes.added_by).map(|id| UserRef { id: Some(id) }),
@@ -456,9 +456,7 @@ fn batch<'a>(
             SpotifyUri::Episode { .. } => ExtensionKind::EPISODE_V4,
             _ => continue,
         };
-        let Ok(text) = uri.to_uri() else {
-            continue;
-        };
+        let text = uri.to_uri();
         if !asked.insert(text.clone()) {
             continue;
         }
@@ -533,7 +531,7 @@ fn playable(kind: ExtensionKind, bytes: &[u8]) -> Option<PlayableItem> {
             // the row's link to the show needs.
             let show_id = SpotifyId::from_raw(message.show.gid())
                 .ok()
-                .and_then(|id| id.to_base62().ok());
+                .map(|id| id.to_base62());
             Some(PlayableItem::Episode(episode(
                 SessionEpisode::try_from(&message).ok()?,
                 show_id,
@@ -545,8 +543,8 @@ fn playable(kind: ExtensionKind, bytes: &[u8]) -> Option<PlayableItem> {
 
 fn track(track: SessionTrack) -> Track {
     Track {
-        id: track.id.to_id().ok(),
-        uri: track.id.to_uri().unwrap_or_default(),
+        id: Some(track.id.to_id()),
+        uri: track.id.to_uri(),
         name: track.name,
         duration_ms: u32::try_from(track.duration).unwrap_or_default(),
         explicit: track.is_explicit,
@@ -561,8 +559,8 @@ fn track(track: SessionTrack) -> Track {
 
 fn album(album: SessionAlbum) -> Album {
     Album {
-        id: album.id.to_id().unwrap_or_default(),
-        uri: album.id.to_uri().unwrap_or_default(),
+        id: album.id.to_id(),
+        uri: album.id.to_uri(),
         images: images(&album.covers),
         artists: album.artists.iter().map(artist_ref).collect(),
         label: non_empty(&album.label),
@@ -573,8 +571,8 @@ fn album(album: SessionAlbum) -> Album {
 
 fn episode(episode: SessionEpisode, show_id: Option<String>) -> Episode {
     Episode {
-        id: episode.id.to_id().unwrap_or_default(),
-        uri: episode.id.to_uri().unwrap_or_default(),
+        id: episode.id.to_id(),
+        uri: episode.id.to_uri(),
         name: episode.name,
         duration_ms: u32::try_from(episode.duration).unwrap_or_default(),
         description: episode.description,
@@ -593,9 +591,9 @@ fn episode(episode: SessionEpisode, show_id: Option<String>) -> Episode {
 
 fn artist_ref(artist: &SessionArtist) -> ArtistRef {
     ArtistRef {
-        id: artist.id.to_id().ok(),
+        id: Some(artist.id.to_id()),
         name: artist.name.clone(),
-        uri: artist.id.to_uri().ok(),
+        uri: Some(artist.id.to_uri()),
     }
 }
 
@@ -802,7 +800,7 @@ mod tests {
         0xef,
     ];
     fn id_of(gid: &[u8]) -> String {
-        SpotifyId::from_raw(gid).unwrap().to_base62().unwrap()
+        SpotifyId::from_raw(gid).unwrap().to_base62()
     }
 
     fn cover(file_id: u8, width: i32) -> librespot_protocol::metadata::Image {
@@ -891,7 +889,7 @@ mod tests {
 
         let show_id = SpotifyId::from_raw(message.show.gid())
             .ok()
-            .and_then(|id| id.to_base62().ok());
+            .map(|id| id.to_base62());
         let episode = episode(SessionEpisode::try_from(&message).unwrap(), show_id);
         assert_eq!(episode.uri, format!("spotify:episode:{}", id_of(&GID)));
         assert_eq!(episode.name, "Episode 1");
@@ -1315,7 +1313,7 @@ mod tests {
         };
         let uris: Vec<String> = station_songs(&context)
             .iter()
-            .map(|uri| uri.to_uri().unwrap())
+            .map(|uri| uri.to_uri())
             .collect();
         assert_eq!(
             uris,

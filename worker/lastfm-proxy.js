@@ -20,7 +20,13 @@ const SIGNED = new Set([
   "track.unlove",
   "user.getInfo",
 ]);
-const PLAIN = new Set(["album.getinfo", "artist.getinfo"]);
+const PLAIN = new Set([
+  "album.getinfo",
+  "artist.getinfo",
+  "user.getfriends",
+  "user.getrecenttracks",
+  "user.gettoptracks",
+]);
 
 async function md5(text) {
   const bytes = new TextEncoder().encode(text);
