@@ -771,6 +771,15 @@ pub struct MyView {
     pub window: Option<[f32; 2]>,
 }
 
+/// A playlist of song files made on the Local songs page: a name and the
+/// files in it, in order, by path.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LocalPlaylist {
+    pub name: String,
+    pub paths: Vec<String>,
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -978,6 +987,9 @@ pub struct Settings {
     pub swirl_behind_panels: bool,
     /// The local songs table's columns, in order: (column id, share of the width).
     pub local_columns: Vec<(u8, f32)>,
+    /// Playlists of song files made on the Local songs page.
+    #[serde(default)]
+    pub local_playlists: Vec<LocalPlaylist>,
     /// How many ripples run across the swirl; 0 (never set) means the default.
     #[serde(default)]
     pub swirl_waves: u8,
@@ -1542,6 +1554,7 @@ impl Default for Settings {
             swirl_colours_fixed: false,
             swirl_behind_panels: false,
             local_columns: vec![(0, 0.05), (1, 0.32), (2, 0.22), (3, 0.20), (4, 0.09), (5, 0.05), (7, 0.07)],
+            local_playlists: Vec::new(),
             swirl_waves: 0,
             swirl_tune: Vec::new(),
             swirl_art_scroll: false,

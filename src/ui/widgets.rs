@@ -3516,13 +3516,13 @@ pub(crate) fn icon_toggle(ui: &mut Ui, palette: &Palette, icon: Icon, on: bool, 
 }
 
 /// A compact row with a green tick box, as in Spotify's Columns menu.
-fn checkbox_row(ui: &mut Ui, palette: &Palette, label: &str, checked: bool) -> bool {
+pub(crate) fn checkbox_row(ui: &mut Ui, palette: &Palette, label: &str, checked: bool) -> bool {
     checkbox_row_ex(ui, palette, label, checked, true, "")
 }
 
 /// The same row, optionally greyed out (always-on or not-yet-built columns)
 /// with a short note on the right.
-fn checkbox_row_ex(
+pub(crate) fn checkbox_row_ex(
     ui: &mut Ui,
     palette: &Palette,
     label: &str,

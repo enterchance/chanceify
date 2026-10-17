@@ -1594,6 +1594,18 @@ pub enum Action {
     ScanMusic,
     /// Look the music files up on Spotify, in the background.
     MatchSpotify,
+    /// Make a local playlist (Local songs page) with this name and these
+    /// song files in it.
+    CreateLocalPlaylist { name: String, paths: Vec<String> },
+    /// Give the local playlist at this place a new name.
+    RenameLocalPlaylist(usize, String),
+    /// Delete the local playlist at this place.
+    DeleteLocalPlaylist(usize),
+    /// Add song files to the end of a local playlist (ones already in it
+    /// are left where they are).
+    AddToLocalPlaylist { playlist: usize, paths: Vec<String> },
+    /// Take song files out of a local playlist.
+    RemoveFromLocalPlaylist { playlist: usize, paths: Vec<String> },
     /// Last.fm: open the browser to allow chanceify™, then wait for it.
     LastfmSignIn,
     LastfmCancel,

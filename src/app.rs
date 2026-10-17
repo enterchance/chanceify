@@ -12387,6 +12387,52 @@ impl App {
             }
             Action::ScanMusic => self.start_music_scan(),
             Action::MatchSpotify => self.queue_spotify_matches(),
+            Action::CreateLocalPlaylist { name, paths } => {
+                let name = name.trim().to_string();
+                if !name.is_empty() {
+                    let mut unique: Vec<String> = Vec::with_capacity(paths.len());
+                    for path in paths {
+                        if !unique.contains(&path) {
+                            unique.push(path);
+                        }
+                    }
+                    self.settings
+                        .local_playlists
+                        .push(crate::settings::LocalPlaylist { name, paths: unique });
+                    self.mark_settings_dirty();
+                }
+            }
+            Action::RenameLocalPlaylist(at, name) => {
+                let name = name.trim().to_string();
+                if !name.is_empty()
+                    && let Some(playlist) = self.settings.local_playlists.get_mut(at)
+                {
+                    playlist.name = name;
+                    self.mark_settings_dirty();
+                }
+            }
+            Action::DeleteLocalPlaylist(at) => {
+                if at < self.settings.local_playlists.len() {
+                    self.settings.local_playlists.remove(at);
+                    self.mark_settings_dirty();
+                }
+            }
+            Action::AddToLocalPlaylist { playlist, paths } => {
+                if let Some(playlist) = self.settings.local_playlists.get_mut(playlist) {
+                    for path in paths {
+                        if !playlist.paths.contains(&path) {
+                            playlist.paths.push(path);
+                        }
+                    }
+                    self.mark_settings_dirty();
+                }
+            }
+            Action::RemoveFromLocalPlaylist { playlist, paths } => {
+                if let Some(playlist) = self.settings.local_playlists.get_mut(playlist) {
+                    playlist.paths.retain(|path| !paths.contains(path));
+                    self.mark_settings_dirty();
+                }
+            }
             Action::LastfmSignIn => {
                 self.sync_lastfm_config();
                 self.lastfm.sign_in();
