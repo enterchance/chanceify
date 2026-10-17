@@ -1,5 +1,6 @@
 //! The Home page.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use egui::{CornerRadius, Rect, Sense, Vec2, pos2, vec2};
@@ -8,6 +9,8 @@ use crate::api::models::{Episode, PlayableItem, Playlist, Show, pick_image};
 use crate::app::App;
 use crate::i18n::gettext;
 use crate::model::{Action, DISCOVER_TERMS, Loadable, Page, RowContext};
+use crate::releases::Release;
+use crate::stats::{Days, Month, Range};
 use crate::theme::{self, Icon};
 
 use super::widgets::{self, TrackRow};
@@ -55,11 +58,23 @@ fn new_releases(app: &mut App, ui: &mut egui::Ui) {
         .releases_scan
         .as_ref()
         .map(|scan| (scan.total.saturating_sub(scan.queue.len()), scan.total));
-    let releases: Vec<crate::releases::Release> = if app.releases.user == user {
+    // Releases already heard drop out when the reader asks for that.
+    let mut hidden = 0;
+    let releases: Vec<Release> = if app.releases.user == user {
+        let heard = if app.settings.home.releases_hide_heard {
+            heard_albums(app)
+        } else {
+            HashSet::new()
+        };
         app.releases
             .found
             .iter()
             .filter(|release| !app.releases.dismissed.contains(&release.album_id))
+            .filter(|release| {
+                let seen = heard.contains(release.album_id.as_str());
+                hidden += usize::from(seen);
+                !seen
+            })
             .cloned()
             .collect()
     } else {
@@ -70,7 +85,7 @@ fn new_releases(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     let folded = app.settings.home.releases_folded;
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if theme::icon_button(
             ui,
             if folded { Icon::ChevronRight } else { Icon::ChevronDown },
@@ -87,6 +102,9 @@ fn new_releases(app: &mut App, ui: &mut egui::Ui) {
         theme::section_title(ui, &palette, &gettext(app.locale, "New from your artists"));
         if folded && !releases.is_empty() {
             theme::subtle(ui, &palette, &format!("{} new", releases.len()));
+        }
+        if !folded {
+            release_controls(app, ui);
         }
         {
             let mut only = app.settings.releases_spotify_only;
@@ -125,158 +143,351 @@ fn new_releases(app: &mut App, ui: &mut egui::Ui) {
     }
     if releases.is_empty() {
         if scanning.is_none() {
-            theme::subtle(
-                ui,
-                &palette,
-                &gettext(
-                    app.locale,
-                    "Nothing new in the last 3 months. Press Check now to look at the artists in your playlists.",
-                ),
-            );
+            let message = if hidden > 0 {
+                "You have heard everything new. Turn off Hide after I listen to see it again."
+            } else {
+                "Nothing new in the last 3 months. Press Check now to look at the artists in your playlists."
+            };
+            theme::subtle(ui, &palette, &gettext(app.locale, message));
         }
         ui.add_space(14.0);
         return;
     }
     ui.add_space(4.0);
-    // One numbered list, the newest first, as far back as the check goes
-    // (about three months). It scrolls inside its own box.
-    let mut shown: Vec<_> = releases.iter().collect();
+    // The newest first, as far back as the check goes (about three months),
+    // or under each artist's name. It scrolls inside its own box.
+    let mut shown: Vec<&Release> = releases.iter().collect();
     shown.sort_by(|a, b| b.date.cmp(&a.date));
+    let groups = if app.settings.home.releases_by_artist {
+        by_artist(&shown)
+    } else {
+        vec![(String::new(), shown)]
+    };
+    let grid = app.settings.home.releases_grid;
     egui::ScrollArea::vertical()
         .id_salt("new-releases-list")
-        .max_height(440.0)
+        .max_height(if grid { 560.0 } else { 440.0 })
         .auto_shrink([false, true])
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
-            for (index, release) in shown.iter().enumerate() {
-                let (rect, response) =
-                    ui.allocate_exact_size(vec2(ui.available_width(), 60.0), Sense::click());
-                if !ui.is_rect_visible(rect) {
-                    continue;
-                }
-                let hovered = ui.rect_contains_pointer(rect);
-                ui.painter().rect_filled(
-                    rect,
-                    CornerRadius::same(6),
-                    if hovered { palette.surface_hover } else { palette.surface },
-                );
-                let number = Rect::from_min_size(rect.min, vec2(40.0, 60.0));
-                ui.painter().text(
-                    number.center(),
-                    egui::Align2::CENTER_CENTER,
-                    format!("{}", index + 1),
-                    theme::semibold(theme::BODY_TEXT),
-                    palette.dim,
-                );
-                let cover = Rect::from_min_size(pos2(rect.left() + 40.0, rect.top()), Vec2::splat(60.0));
-                widgets::paint_cover(
-                    ui,
-                    &palette,
-                    release.image.as_deref(),
-                    cover,
-                    6.0,
-                    Icon::Music,
-                    Some(app.backend.art()),
-                );
-                let text = Rect::from_min_max(
-                    pos2(cover.right() + 12.0, rect.top()),
-                    pos2(rect.right() - 12.0 - 72.0, rect.bottom()),
-                );
-                let painter = ui.painter().with_clip_rect(text);
-                crate::bidi::paint_line(
-                    &painter,
-                    text.left(),
-                    text.right(),
-                    rect.center().y - 10.0,
-                    &release.name,
-                    theme::bold(theme::BODY_TEXT),
-                    palette.text,
-                );
-                crate::bidi::paint_line(
-                    &painter,
-                    text.left(),
-                    text.right(),
-                    rect.center().y + 10.0,
-                    &format!(
-                        "{} · {} · {}",
-                        release.artists,
-                        if release.kind == "single" { "Single" } else { "Album" },
-                        release.date
-                    ),
-                    theme::regular(theme::SMALL_TEXT),
-                    palette.secondary,
-                );
-                // Play and remove, at the right of the row. Asking first when the
-                // reader wants to be asked.
-                let ask_id = egui::Id::new(("release-remove", &release.album_id));
-                let asking = ui.data(|data| data.get_temp::<bool>(ask_id)).unwrap_or(false);
-                let mut used_button = false;
-                let slot = |n: f32| Rect::from_min_size(pos2(rect.right() - 12.0 - 34.0 * n, rect.center().y - 15.0), vec2(30.0, 30.0));
-                if asking {
-                    let yes_rect = Rect::from_min_size(pos2(rect.right() - 12.0 - 150.0, rect.center().y - 14.0), vec2(70.0, 28.0));
-                    let no_rect = Rect::from_min_size(pos2(rect.right() - 12.0 - 72.0, rect.center().y - 14.0), vec2(70.0, 28.0));
-                    ui.painter().text(
-                        pos2(yes_rect.left() - 8.0, rect.center().y),
-                        egui::Align2::RIGHT_CENTER,
-                        "Remove it?",
-                        theme::regular(theme::SMALL_TEXT),
-                        palette.warning,
-                    );
-                    for (area, label, yes) in [(yes_rect, "Yes", true), (no_rect, "No", false)] {
-                        let r = ui.interact(area, ui.id().with(("release-ask", index, yes)), Sense::click());
-                        ui.painter().rect_filled(
-                            area,
-                            CornerRadius::same(6),
-                            if yes { palette.accent.gamma_multiply(0.45) } else { palette.surface_hover },
-                        );
-                        ui.painter().text(area.center(), egui::Align2::CENTER_CENTER, label, theme::semibold(theme::SMALL_TEXT), palette.text);
-                        if r.clicked() {
-                            used_button = true;
-                            if yes {
-                                app.actions.push(Action::DismissRelease(release.album_id.clone()));
-                            }
-                            ui.data_mut(|data| data.insert_temp(ask_id, false));
-                        }
+            let mut index = 0;
+            for (artist, group) in &groups {
+                if !artist.is_empty() {
+                    if index > 0 {
+                        ui.add_space(6.0);
                     }
+                    theme::text(ui, artist, theme::bold(theme::BODY_TEXT), palette.text);
+                }
+                if grid {
+                    widgets::grid(ui, |ui| {
+                        for release in group {
+                            release_card(app, ui, release);
+                        }
+                    });
+                    index += group.len();
                 } else {
-                    let play = ui.interact(slot(2.0), ui.id().with(("release-play", index)), Sense::click());
-                    let remove = ui.interact(slot(1.0), ui.id().with(("release-remove", index)), Sense::click());
-                    for (area, icon, is_play, response) in [(slot(2.0), Icon::PlayFilled, true, &play), (slot(1.0), Icon::X, false, &remove)] {
-                        if response.hovered() {
-                            ui.painter().rect_filled(area, CornerRadius::same(15), palette.surface_hover);
-                        }
-                        theme::paint_icon(
-                            ui,
-                            icon,
-                            area,
-                            if is_play { 16.0 } else { 15.0 },
-                            if response.hovered() { palette.text } else { palette.secondary },
-                        );
+                    for (number, release) in group.iter().enumerate() {
+                        release_row(app, ui, release, index, number + 1);
+                        index += 1;
                     }
-                    if play.clicked() {
-                        used_button = true;
-                        app.actions.push(Action::PlayContext {
-                            uri: release.album_uri.clone(),
-                            offset_uri: None,
-                            offset_index: None,
-                        });
-                    } else if remove.clicked() {
-                        used_button = true;
-                        if app.settings.release_confirm_remove {
-                            ui.data_mut(|data| data.insert_temp(ask_id, true));
-                        } else {
-                            app.actions.push(Action::DismissRelease(release.album_id.clone()));
-                        }
-                    }
-                    let _ = (play.on_hover_text("Play"), remove.on_hover_text("Remove from this list"));
-                }
-                if response.clicked() && !used_button {
-                    app.actions.push(Action::Open(Page::Album(release.album_id.clone())));
                 }
             }
         });
     ui.add_space(16.0);
 }
+
+/// The shelf's own choices, beside its heading: grid or list, the order,
+/// and whether releases already heard stay.
+fn release_controls(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    let home = app.settings.home;
+    if layout_chip(ui, &palette, home.releases_grid) {
+        app.settings.home.releases_grid = !home.releases_grid;
+        app.mark_settings_dirty();
+    }
+    let orders = ["Newest first", "By artist"].map(|label| gettext(app.locale, label).into_owned());
+    let current = usize::from(home.releases_by_artist);
+    if let Some(picked) = choice_chip(ui, &palette, &orders[current], false, &orders, Some(current)) {
+        app.settings.home.releases_by_artist = picked == 1;
+        app.mark_settings_dirty();
+    }
+    if theme::soft_button(
+        ui,
+        &palette,
+        home.releases_hide_heard.then_some(Icon::Check),
+        &gettext(app.locale, "Hide after I listen"),
+        home.releases_hide_heard,
+    )
+    .on_hover_text("Leave out a release once you have played one of its songs.")
+    .clicked()
+    {
+        app.settings.home.releases_hide_heard = !home.releases_hide_heard;
+        app.mark_settings_dirty();
+    }
+}
+
+/// The albums played lately: from the listening log, the recent plays made
+/// here, and Spotify's recently played (which covers other devices).
+fn heard_albums(app: &App) -> HashSet<&str> {
+    // New releases reach back about three months; half a year is plenty.
+    let since = jiff::Timestamp::now().as_second() - 183 * 86_400;
+    let mut heard = app.stats.albums_heard_since(since);
+    let spotify = match &app.home.recently_played {
+        Loadable::Loaded(history) => history.as_slice(),
+        _ => &[],
+    };
+    for play in app.plays.plays().iter().chain(spotify) {
+        if let Some(album) = &play.track.album
+            && !album.id.is_empty()
+        {
+            heard.insert(album.id.as_str());
+        }
+    }
+    heard
+}
+
+/// Releases under the name of each one's first artist, the artists in
+/// alphabetical order, each one's releases kept in the order given.
+fn by_artist<'a>(releases: &[&'a Release]) -> Vec<(String, Vec<&'a Release>)> {
+    let mut groups: Vec<(String, Vec<&'a Release>)> = Vec::new();
+    for &release in releases {
+        let artist = release.artists.split(", ").next().unwrap_or_default().trim();
+        match groups
+            .iter_mut()
+            .find(|(name, _)| name.eq_ignore_ascii_case(artist))
+        {
+            Some((_, list)) => list.push(release),
+            None => groups.push((artist.to_string(), vec![release])),
+        }
+    }
+    groups.sort_by_key(|(name, _)| name.to_lowercase());
+    groups
+}
+
+fn release_line(release: &Release) -> String {
+    format!(
+        "{} · {} · {}",
+        release.artists,
+        if release.kind == "single" { "Single" } else { "Album" },
+        release.date
+    )
+}
+
+/// One release as a numbered row with play and remove at its right.
+fn release_row(app: &mut App, ui: &mut egui::Ui, release: &Release, index: usize, number: usize) {
+    let palette = app.palette;
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 60.0), Sense::click());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let hovered = ui.rect_contains_pointer(rect);
+    ui.painter().rect_filled(
+        rect,
+        CornerRadius::same(6),
+        if hovered { palette.surface_hover } else { palette.surface },
+    );
+    let number_rect = Rect::from_min_size(rect.min, vec2(40.0, 60.0));
+    ui.painter().text(
+        number_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        format!("{number}"),
+        theme::semibold(theme::BODY_TEXT),
+        palette.dim,
+    );
+    let cover = Rect::from_min_size(pos2(rect.left() + 40.0, rect.top()), Vec2::splat(60.0));
+    widgets::paint_cover(
+        ui,
+        &palette,
+        release.image.as_deref(),
+        cover,
+        6.0,
+        Icon::Music,
+        Some(app.backend.art()),
+    );
+    let text = Rect::from_min_max(
+        pos2(cover.right() + 12.0, rect.top()),
+        pos2(rect.right() - 12.0 - 72.0, rect.bottom()),
+    );
+    let painter = ui.painter().with_clip_rect(text);
+    crate::bidi::paint_line(
+        &painter,
+        text.left(),
+        text.right(),
+        rect.center().y - 10.0,
+        &release.name,
+        theme::bold(theme::BODY_TEXT),
+        palette.text,
+    );
+    crate::bidi::paint_line(
+        &painter,
+        text.left(),
+        text.right(),
+        rect.center().y + 10.0,
+        &release_line(release),
+        theme::regular(theme::SMALL_TEXT),
+        palette.secondary,
+    );
+    // Play and remove, at the right of the row. Asking first when the
+    // reader wants to be asked.
+    let ask_id = egui::Id::new(("release-remove", &release.album_id));
+    let asking = ui.data(|data| data.get_temp::<bool>(ask_id)).unwrap_or(false);
+    let mut used_button = false;
+    let slot = |n: f32| Rect::from_min_size(pos2(rect.right() - 12.0 - 34.0 * n, rect.center().y - 15.0), vec2(30.0, 30.0));
+    if asking {
+        let yes_rect = Rect::from_min_size(pos2(rect.right() - 12.0 - 150.0, rect.center().y - 14.0), vec2(70.0, 28.0));
+        let no_rect = Rect::from_min_size(pos2(rect.right() - 12.0 - 72.0, rect.center().y - 14.0), vec2(70.0, 28.0));
+        ui.painter().text(
+            pos2(yes_rect.left() - 8.0, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            "Remove it?",
+            theme::regular(theme::SMALL_TEXT),
+            palette.warning,
+        );
+        for (area, label, yes) in [(yes_rect, "Yes", true), (no_rect, "No", false)] {
+            let r = ui.interact(area, ui.id().with(("release-ask", index, yes)), Sense::click());
+            ui.painter().rect_filled(
+                area,
+                CornerRadius::same(6),
+                if yes { palette.accent.gamma_multiply(0.45) } else { palette.surface_hover },
+            );
+            ui.painter().text(area.center(), egui::Align2::CENTER_CENTER, label, theme::semibold(theme::SMALL_TEXT), palette.text);
+            if r.clicked() {
+                used_button = true;
+                if yes {
+                    app.actions.push(Action::DismissRelease(release.album_id.clone()));
+                }
+                ui.data_mut(|data| data.insert_temp(ask_id, false));
+            }
+        }
+    } else {
+        let play = ui.interact(slot(2.0), ui.id().with(("release-play", index)), Sense::click());
+        let remove = ui.interact(slot(1.0), ui.id().with(("release-remove", index)), Sense::click());
+        for (area, icon, is_play, response) in [(slot(2.0), Icon::PlayFilled, true, &play), (slot(1.0), Icon::X, false, &remove)] {
+            if response.hovered() {
+                ui.painter().rect_filled(area, CornerRadius::same(15), palette.surface_hover);
+            }
+            theme::paint_icon(
+                ui,
+                icon,
+                area,
+                if is_play { 16.0 } else { 15.0 },
+                if response.hovered() { palette.text } else { palette.secondary },
+            );
+        }
+        if play.clicked() {
+            used_button = true;
+            app.actions.push(Action::PlayContext {
+                uri: release.album_uri.clone(),
+                offset_uri: None,
+                offset_index: None,
+            });
+        } else if remove.clicked() {
+            used_button = true;
+            if app.settings.release_confirm_remove {
+                ui.data_mut(|data| data.insert_temp(ask_id, true));
+            } else {
+                app.actions.push(Action::DismissRelease(release.album_id.clone()));
+            }
+        }
+        let _ = (play.on_hover_text("Play"), remove.on_hover_text("Remove from this list"));
+    }
+    if response.clicked() && !used_button {
+        app.actions.push(Action::Open(Page::Album(release.album_id.clone())));
+    }
+}
+
+/// One release as a cover card. Its right-click menu removes it from the
+/// shelf, above the usual album choices.
+fn release_card(app: &mut App, ui: &mut egui::Ui, release: &Release) {
+    let palette = app.palette;
+    let playing_here = app.playing_context_uri().as_deref() == Some(release.album_uri.as_str())
+        && app.believed_playing();
+    let card = widgets::card(
+        ui,
+        app,
+        release.image.as_deref(),
+        &release.name,
+        &release_line(release),
+        widgets::CardCover::square(playing_here),
+    );
+    if card.play {
+        if playing_here {
+            app.actions.push(Action::TogglePlay);
+        } else {
+            app.actions.push(Action::PlayContext {
+                uri: release.album_uri.clone(),
+                offset_uri: None,
+                offset_index: None,
+            });
+        }
+    }
+    if card.clicked {
+        app.actions.push(Action::Open(Page::Album(release.album_id.clone())));
+    }
+    egui::Popup::context_menu(&card.response)
+        .id(ui.make_persistent_id(("release-card-menu", &release.album_id)))
+        .frame(widgets::menu_frame(&palette))
+        .show(|ui| {
+            if widgets::menu_item(ui, &palette, Some(Icon::X), "Remove from this list") {
+                app.actions.push(Action::DismissRelease(release.album_id.clone()));
+            }
+            widgets::menu_separator(ui, &palette);
+            widgets::context_menu_items(ui, app, &release.album_uri, &release.name, None);
+        });
+}
+
+/// One chip that switches between a grid of tiles and a list. It names
+/// the view that shows now.
+fn layout_chip(ui: &mut egui::Ui, palette: &theme::Palette, grid: bool) -> bool {
+    let (icon, label, tip) = if grid {
+        (Icon::LayoutGrid, "Grid", "Show as a list")
+    } else {
+        (Icon::LayoutList, "List", "Show as a grid")
+    };
+    theme::soft_button(ui, palette, Some(icon), label, false)
+        .on_hover_text(tip)
+        .clicked()
+}
+
+/// A chip naming a choice; a click lists the choices in a menu. Returns
+/// the one picked.
+fn choice_chip(
+    ui: &mut egui::Ui,
+    palette: &theme::Palette,
+    label: &str,
+    active: bool,
+    choices: &[String],
+    current: Option<usize>,
+) -> Option<usize> {
+    let chip = theme::soft_button(ui, palette, Some(Icon::ChevronDown), label, active);
+    let mut picked = None;
+    let mut rows = |ui: &mut egui::Ui| {
+        for (index, choice) in choices.iter().enumerate() {
+            let icon = (current == Some(index)).then_some(Icon::Check);
+            if widgets::menu_item(ui, palette, icon, choice) {
+                picked = Some(index);
+            }
+        }
+    };
+    egui::Popup::menu(&chip)
+        .frame(widgets::menu_frame(palette))
+        .show(|ui| {
+            // A long list (many months) scrolls.
+            if choices.len() > 12 {
+                egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| rows(ui));
+            } else {
+                widgets::fit_menu(ui, 280.0);
+                rows(ui);
+            }
+        });
+    picked
+}
+
+const PERIODS: [(&str, Range); 3] = [
+    ("Last 7 days", Range::Week),
+    ("Last 30 days", Range::Month),
+    ("All time", Range::Ever),
+];
 
 /// What has been heard, from the long listening log in the chanceify folder.
 fn stats_section(app: &mut App, ui: &mut egui::Ui) {
@@ -296,88 +507,96 @@ fn stats_section(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     let now = jiff::Timestamp::now().as_second();
-    let summary = app.stats.summary(now, crate::stats::local_offset());
-    let hours = |minutes: u64| {
-        if minutes >= 120 {
-            format!("{} hours", minutes / 60)
-        } else {
-            format!("{minutes} minutes")
+    let offset = crate::stats::local_offset();
+    let months = app.stats.months(offset);
+    stats_controls(app, ui, &months);
+    ui.add_space(10.0);
+    // One period, or one month, for the line and both lists.
+    let range = Range::from_saved(app.settings.home.stats_range);
+    let (days, label) = match chosen_month(app, &months) {
+        Some(month) => (Days::month(month), month.label()),
+        None => {
+            let label = PERIODS
+                .iter()
+                .find(|(_, choice)| *choice == range)
+                .map_or("", |(label, _)| *label);
+            (Days::last(range, now, offset), gettext(app.locale, label).into_owned())
         }
     };
+    let (plays, minutes) = app.stats.totals_in(offset, days);
+    let time = if minutes >= 120 {
+        format!("{} hours", minutes / 60)
+    } else {
+        format!("{minutes} minutes")
+    };
     ui.horizontal(|ui| {
+        theme::text(ui, &format!("{label}:"), theme::semibold(theme::BODY_TEXT), palette.text);
         theme::text(
             ui,
-            &format!("{}:", gettext(app.locale, "Last 30 days")),
-            theme::semibold(theme::BODY_TEXT),
-            palette.text,
-        );
-        theme::text(
-            ui,
-            &format!("{} songs, {}", summary.month, hours(summary.minutes_month)),
+            &format!("{plays} songs, {time}"),
             theme::regular(theme::BODY_TEXT),
             palette.secondary,
         );
     });
-    ui.add_space(10.0);
-    ui.add_space(12.0);
+    ui.add_space(14.0);
+    let (artists, songs) = app.stats.ranking_in(offset, days);
     if app.settings.home.stats_list {
         // The list is one narrow column each, so artists and songs sit side
         // by side instead of leaving the page's width empty.
         ui.columns(2, |columns| {
-            ranked_shelf(app, &mut columns[0], false, now);
-            ranked_shelf(app, &mut columns[1], true, now);
+            ranked_shelf(app, &mut columns[0], &artists, false);
+            ranked_shelf(app, &mut columns[1], &songs, true);
         });
     } else {
-        for songs in [false, true] {
-            ranked_shelf(app, ui, songs, now);
-        }
+        ranked_shelf(app, ui, &artists, false);
+        ranked_shelf(app, ui, &songs, true);
     }
     ui.add_space(8.0);
 }
 
-/// "Your artists" or "Your songs": a row that scrolls sideways, for the last
-/// 7 days, the last 30 days or all time.
-fn ranked_shelf(app: &mut App, ui: &mut egui::Ui, songs: bool, now: i64) {
+/// The saved month, while the log still has plays in it.
+fn chosen_month(app: &App, months: &[Month]) -> Option<Month> {
+    Month::from_saved(app.settings.home.stats_month).filter(|month| months.contains(month))
+}
+
+/// One row for the whole tab: the period, or a single month, and grid or
+/// list for both lists.
+fn stats_controls(app: &mut App, ui: &mut egui::Ui, months: &[Month]) {
     let palette = app.palette;
-    let saved = if songs { app.settings.home.song_range } else { app.settings.home.artist_range };
-    let range = crate::stats::Range::from_saved(saved);
-    let title = if songs { "Your songs" } else { "Your artists" };
+    let month = chosen_month(app, months);
+    let range = Range::from_saved(app.settings.home.stats_range);
     ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        theme::section_title(ui, &palette, &gettext(app.locale, title));
-        for (label, choice) in [
-            ("Last 7 days", crate::stats::Range::Week),
-            ("Last 30 days", crate::stats::Range::Month),
-            ("All time", crate::stats::Range::Ever),
-        ] {
-            if theme::pill_button(ui, &palette, &gettext(app.locale, label), range == choice).clicked()
-                && range != choice
-            {
-                if songs {
-                    app.settings.home.song_range = choice.saved();
-                } else {
-                    app.settings.home.artist_range = choice.saved();
-                }
+        ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+        for (label, choice) in PERIODS {
+            let on = month.is_none() && range == choice;
+            if theme::soft_button(ui, &palette, None, &gettext(app.locale, label), on).clicked() && !on {
+                app.settings.home.stats_range = choice.saved();
+                app.settings.home.stats_month = 0;
                 app.mark_settings_dirty();
             }
         }
-        // Grid of small tiles, or one column.
+        let names: Vec<String> = months.iter().map(|month| month.label()).collect();
+        let current = month.and_then(|month| months.iter().position(|each| *each == month));
+        let label = month.map_or_else(|| gettext(app.locale, "Month").into_owned(), Month::label);
+        if let Some(picked) = choice_chip(ui, &palette, &label, month.is_some(), &names, current) {
+            app.settings.home.stats_month = months[picked].saved();
+            app.mark_settings_dirty();
+        }
+        ui.add_space(6.0);
         let list = app.settings.home.stats_list;
-        if theme::pill_button(
-            ui,
-            &palette,
-            &gettext(app.locale, if list { "Grid" } else { "List" }),
-            false,
-        )
-        .clicked()
-        {
+        if layout_chip(ui, &palette, !list) {
             app.settings.home.stats_list = !list;
             app.mark_settings_dirty();
         }
     });
+}
+
+/// "Your artists" or "Your songs", for the tab's period or month.
+fn ranked_shelf(app: &mut App, ui: &mut egui::Ui, rows: &[crate::stats::Ranked], songs: bool) {
+    let palette = app.palette;
+    let title = if songs { "Your songs" } else { "Your artists" };
+    theme::section_title(ui, &palette, &gettext(app.locale, title));
     ui.add_space(4.0);
-    let (artists, tracks) = app.stats.ranking(now, crate::stats::local_offset(), range);
-    let rows = if songs { tracks } else { artists };
     if rows.is_empty() {
         theme::subtle(ui, &palette, &gettext(app.locale, "Nothing in this time yet."));
         ui.add_space(12.0);
@@ -1320,6 +1539,29 @@ mod tests {
 
     fn today() -> jiff::civil::Date {
         "2026-09-23".parse().unwrap()
+    }
+
+    fn release(id: &str, artists: &str) -> Release {
+        Release {
+            album_id: id.into(),
+            album_uri: format!("spotify:album:{id}"),
+            name: id.into(),
+            artists: artists.into(),
+            kind: "single".into(),
+            date: "2026-10-01".into(),
+            image: None,
+        }
+    }
+
+    #[test]
+    fn releases_group_under_their_first_artist() {
+        let (a, b, c) = (release("a", "Zed"), release("b", "amy, Zed"), release("c", "Amy"));
+        let groups = by_artist(&[&a, &b, &c]);
+        let names: Vec<_> = groups
+            .iter()
+            .map(|(name, list)| (name.as_str(), list.iter().map(|r| r.album_id.as_str()).collect::<Vec<_>>()))
+            .collect();
+        assert_eq!(names, [("amy", vec!["b", "c"]), ("Zed", vec!["a"])]);
     }
 
     #[test]

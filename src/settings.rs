@@ -390,9 +390,14 @@ pub struct HomeSettings {
     pub recommendations: HomeShelfSettings,
     /// Which tab of Home is open: 0 For you, 1 Your music and stats.
     pub tab: u8,
-    /// Top artists and songs: 0 last 30 days, 1 last 7 days, 2 all time.
-    pub artist_range: u8,
-    pub song_range: u8,
+    /// The period of the stats tab, for top artists and songs alike: 0 last
+    /// 30 days, 1 last 7 days, 2 all time. Older files kept one per list;
+    /// the artists' one carries over.
+    #[serde(alias = "artist_range")]
+    pub stats_range: u8,
+    /// One calendar month for the stats tab instead of the period, written
+    /// as year * 100 + month (202610); 0 for none.
+    pub stats_month: u32,
     /// Top artists and songs as one column (true) or a grid of small tiles.
     pub stats_list: bool,
     /// How many recommended songs show: 0 is the usual 20.
@@ -401,6 +406,14 @@ pub struct HomeSettings {
     pub recent_all: bool,
     /// Whether the New from your artists list is folded away.
     pub releases_folded: bool,
+    /// New from your artists leaves out a release once one of its songs
+    /// has been heard.
+    pub releases_hide_heard: bool,
+    /// New from your artists as a grid of covers instead of a list.
+    pub releases_grid: bool,
+    /// New from your artists grouped under each artist instead of the
+    /// newest first.
+    pub releases_by_artist: bool,
 }
 
 /// What moves behind the player bar's controls.

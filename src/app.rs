@@ -13508,6 +13508,7 @@ impl App {
                 .and_then(|artist| artist.id.clone())
                 .unwrap_or_default(),
             ms: now.duration_ms,
+            album_id: now.album_id.clone().unwrap_or_default(),
         });
         self.stats.save(&self.dirs.stats_file());
         self.plays
