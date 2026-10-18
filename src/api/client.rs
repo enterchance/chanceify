@@ -32,7 +32,9 @@ pub enum ApiError {
     Status { status: u16, message: String },
     #[error("Spotify is rate limiting requests; try again in a moment")]
     RateLimited,
-    #[error("Spotify's Development Mode quota is exhausted; try again after the quota resets")]
+    #[error(
+        "Spotify's shared app is out of quota. Add your own free Spotify app in Settings, Accounts, for a quota of your own"
+    )]
     QuotaExhausted,
     #[error("your Spotify sign-in expired; please sign in again")]
     SignInExpired { api_source: ApiSource },

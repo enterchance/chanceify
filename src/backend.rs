@@ -4201,6 +4201,22 @@ async fn handle(
                 log::info!("the personal app cannot read the library; asking the shared app");
                 result = shared.my_playlists(offset, 50).await;
             }
+            // A spent or throttled app must not hide the library: the rootlist
+            // and each playlist's header come over the streaming session,
+            // which has no per-app quota.
+            if offset == 0
+                && result
+                    .as_ref()
+                    .is_err_and(|error| matches!(error, ApiError::QuotaExhausted) || error.is_rate_limited())
+                && let Some(engine) = engine.filter(|engine| {
+                    same_account(&engine.session().username(), api.account().as_ref())
+                })
+            {
+                log::info!("the app's quota is spent; reading the playlist list over the session");
+                if let Some(page) = library_over_session(engine).await {
+                    result = Ok(page);
+                }
+            }
             ApiResponse::MyPlaylists {
                 offset,
                 generation,
@@ -4725,6 +4741,44 @@ async fn handle(
     };
     observe_playlists(api, &response);
     (response, expired.get())
+}
+
+/// The account's playlists as one page, read over the streaming session:
+/// the rootlist names them and each header is read in turn. `None` when
+/// the session cannot, leaving the Web API's error to be shown.
+async fn library_over_session(engine: &Engine) -> Option<Page<Playlist>> {
+    let read = async {
+        let rootlist = engine.rootlist().await.ok()?;
+        let ids: Vec<String> = rootlist
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                crate::player::RootlistEntry::Playlist(uri) => {
+                    uri.strip_prefix("spotify:playlist:").map(str::to_owned)
+                }
+                _ => None,
+            })
+            .collect();
+        if ids.is_empty() {
+            return None;
+        }
+        let items = session_reads::library(engine.session(), &ids).await;
+        if items.is_empty() {
+            return None;
+        }
+        let total = u32::try_from(items.len()).unwrap_or(u32::MAX);
+        Some(Page {
+            items,
+            total,
+            limit: 50,
+            offset: 0,
+            next: None,
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(60), read)
+        .await
+        .ok()
+        .flatten()
 }
 
 /// Whether a session signed in as `username` answers for the Web API's

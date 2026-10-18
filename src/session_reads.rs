@@ -145,6 +145,34 @@ pub async fn prerelease(
     Ok(page)
 }
 
+/// The headers of the playlists a rootlist names, in its order, eight at a
+/// time. This is the account's playlist list for when the Web API cannot
+/// give it (a spent quota): the streaming session has none. A playlist that
+/// cannot be read is left out rather than failing the rest.
+pub async fn library(session: &Session, ids: &[String]) -> Vec<Playlist> {
+    let mut lists = Vec::with_capacity(ids.len());
+    for chunk in ids.chunks(8) {
+        let mut set = tokio::task::JoinSet::new();
+        for (slot, id) in chunk.iter().enumerate() {
+            let session = session.clone();
+            let id = id.clone();
+            set.spawn(async move {
+                let list = window(&session, &id, 0, 0).await.ok()?;
+                Some((slot, header(&id, &list)))
+            });
+        }
+        let mut done = Vec::new();
+        while let Some(joined) = set.join_next().await {
+            if let Ok(Some(entry)) = joined {
+                done.push(entry);
+            }
+        }
+        done.sort_by_key(|(slot, _)| *slot);
+        lists.extend(done.into_iter().map(|(_, playlist)| playlist));
+    }
+    lists
+}
+
 /// A playlist's header: name, owner, cover, and snapshot.
 pub async fn playlist(session: &Session, id: &str) -> Result<Playlist, Failure> {
     let list = window(session, id, 0, 0).await?;
