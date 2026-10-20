@@ -5269,9 +5269,15 @@ pub(super) fn now_playing_block(app: &mut App, ui: &mut egui::Ui, region: Rect, 
     // Hovering the cover offers to dock the art large at the sidebar's
     // bottom, the way Spotify expands it. (#92)
     // No expand arrow: the A key toggles the big picture. Clicking the cover
-    // jumps to the song's place in the playlist it is playing from.
+    // does what clicking the name does.
     if cover_response.clicked() {
-        if let Some(item) = &song {
+        // The same as the name: from a playlist or album, to the song's place
+        // in it; from anywhere else, to the album the song is on.
+        let from_list = app
+            .playing_context_uri()
+            .and_then(|context| Page::from_uri(&context))
+            .is_some_and(|page| matches!(page, Page::Playlist(_) | Page::Album(_)));
+        if from_list && let Some(item) = &song {
             app.actions.push(Action::RevealSong {
                 uri: item.uri().to_string(),
             });
@@ -6985,7 +6991,9 @@ pub(super) fn volume_row(app: &mut App, ui: &mut egui::Ui, rect: Rect) {
     }
     // In the pop-out the bar only answers a right-click, a double-click or the
     // wheel (see lyrics.rs), so a press and drag moves the panel instead.
-    let locked = ui.data(|data| data.get_temp::<bool>(egui::Id::new("sliders-locked"))).unwrap_or(false);
+    let knob = pos2(track.left() + track.width() * (shown as f32 / 100.0), mid);
+    let locked = ui.data(|data| data.get_temp::<bool>(egui::Id::new("sliders-locked"))).unwrap_or(false)
+        && !super::widgets::knob_grabbed(ui, egui::Id::new("pop-volume-slider"), knob, 12.0 * k);
     ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("pop-volume-slider").with("rect"), track));
     let response = ui.interact(
         track.expand2(vec2(6.0, 0.0)),

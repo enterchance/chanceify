@@ -1220,6 +1220,11 @@ pub enum Action {
         label: String,
     },
     ToggleSaved(String),
+    /// Every song on an artist's albums and singles, queued in release order.
+    QueueArtistSongs {
+        id: String,
+        name: String,
+    },
     /// Queue several songs in order and show one notification.
     QueueMany {
         songs: Vec<(String, String)>,

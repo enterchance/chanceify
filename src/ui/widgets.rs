@@ -2632,6 +2632,24 @@ fn track_row_contents(
             },
             Some(app.backend.art()),
         );
+        // A click on the cover opens the song's album. (Without a number
+        // column the cover is the play control instead.)
+        if !cover_plays
+            && let PlayableItem::Track(track) = row.item
+            && let Some(album) = track.album.as_ref().filter(|album| !album.id.is_empty())
+        {
+            let open = ui.interact(
+                cover_rect,
+                ui.id().with(("row-cover-open", row.index, left as i32)),
+                Sense::click(),
+            );
+            if open.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if open.clicked() {
+                app.actions.push(Action::Open(Page::Album(album.id.clone())));
+            }
+        }
         if cover_plays {
             let scrim = |alpha: u8| {
                 painter.rect_filled(
@@ -4667,6 +4685,41 @@ pub fn thin_slider(
     thin_slider_scaled(ui, palette, id, label, value, width, wheel_step, 1.0)
 }
 
+/// Whether the dot of a slider locked inside the pop-out controls is being
+/// held: a press that lands on the dot, until the button is let go. The
+/// panel does not move for it (see [`window_drag_blocked`]).
+pub(crate) fn knob_grabbed(ui: &Ui, id: egui::Id, knob: egui::Pos2, radius: f32) -> bool {
+    let key = egui::Id::new("sliders-knob-grab");
+    let held = ui.data(|data| data.get_temp::<egui::Id>(key)) == Some(id);
+    let (pressed, down, at) = ui.input(|input| {
+        (
+            input.pointer.primary_pressed(),
+            input.pointer.primary_down(),
+            input.pointer.interact_pos(),
+        )
+    });
+    if !down {
+        if held {
+            ui.data_mut(|data| data.remove::<egui::Id>(key));
+        }
+        return false;
+    }
+    if held {
+        return true;
+    }
+    if pressed && at.is_some_and(|at| at.distance(knob) <= radius) {
+        ui.data_mut(|data| data.insert_temp(key, id));
+        return true;
+    }
+    false
+}
+
+/// Whether a press this frame took hold of a slider's dot, so it must not
+/// also pick up the pop-out window.
+pub(crate) fn window_drag_blocked(ctx: &egui::Context) -> bool {
+    ctx.data(|data| data.get_temp::<egui::Id>(egui::Id::new("sliders-knob-grab"))).is_some()
+}
+
 /// `thin_slider` with its height scaled: the track, the handle and the room
 /// to grab it all grow together.
 #[allow(clippy::too_many_arguments)]
@@ -4689,8 +4742,14 @@ pub fn thin_slider_scaled(
     ui.data_mut(|data| data.insert_temp(id.with("rect"), rect));
     // In the pop-out controls a press or a drag on the bar only moves the
     // panel: the bar answers a right-click or a double-click instead.
-    let locked = ui.data(|data| data.get_temp::<bool>(egui::Id::new("sliders-locked"))).unwrap_or(false);
     let dragging_value = ui.data(|data| data.get_temp::<f32>(id));
+    // The dot itself is the exception: held and dragged, it sets the value.
+    let knob = pos2(
+        rect.left() + rect.width() * dragging_value.unwrap_or(value).clamp(0.0, 1.0),
+        rect.center().y,
+    );
+    let locked = ui.data(|data| data.get_temp::<bool>(egui::Id::new("sliders-locked"))).unwrap_or(false)
+        && !knob_grabbed(ui, id, knob, 12.0 * scale);
     let pointer_value = response
         .interact_pointer_pos()
         .map(|pos| ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0));

@@ -1471,7 +1471,9 @@ pub(super) fn controls_box_inner(app: &mut App, ui: &mut egui::Ui, top_left: egu
     let drag_flag = egui::Id::new(("popout-bar-dragging", viewport));
     let mut dragging = ctx.data(|data| data.get_temp::<bool>(drag_flag)).unwrap_or(false);
     if pressed {
-        dragging = pos.is_some_and(|p| bars.iter().any(|bar| bar.contains(p)));
+        // A press on a bar's dot sets the value; it never moves the panel.
+        dragging = pos.is_some_and(|p| bars.iter().any(|bar| bar.contains(p)))
+            && !super::widgets::window_drag_blocked(&ctx);
     }
     if !down {
         dragging = false;

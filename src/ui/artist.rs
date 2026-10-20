@@ -367,6 +367,15 @@ fn artist_actions(app: &mut App, ui: &mut egui::Ui, artist: &Artist) {
         {
             app.actions.push(Action::ToggleSaved(artist.uri.clone()));
         }
+        if theme::soft_button(ui, &palette, Some(Icon::ListEnd), &gettext(locale, "Queue all songs"), false)
+            .on_hover_text(gettext(locale, "Add every song from their albums and singles to the queue, oldest first"))
+            .clicked()
+        {
+            app.actions.push(Action::QueueArtistSongs {
+                id: artist.id.clone(),
+                name: artist.name.clone(),
+            });
+        }
         let more = theme::icon_button(
             ui,
             Icon::Ellipsis,

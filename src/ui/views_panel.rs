@@ -440,9 +440,38 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                 .ctx()
                 .data(|data| data.get_temp::<bool>(Id::new(("popout-bar-dragging", vp))))
                 .unwrap_or(false);
+            // A press on an edge or a corner resizes the panel and never
+            // moves it as well: one or the other, for the whole press.
+            let resize_key = Id::new(("pop-out-resizing", vp));
+            let mut resizing = ui.ctx().data(|data| data.get_temp::<bool>(resize_key)).unwrap_or(false);
+            let (pressed, down, press_at) = ui.ctx().input(|input| {
+                (
+                    input.pointer.primary_pressed(),
+                    input.pointer.primary_down(),
+                    input.pointer.interact_pos(),
+                )
+            });
+            if pressed {
+                resizing = press_at.is_some_and(|p| {
+                    let sides = p.y >= outer.top() + 14.0
+                        && p.y <= outer.bottom() + 6.0
+                        && ((p.x >= outer.right() - 10.0 && p.x <= outer.right() + 6.0)
+                            || (p.x >= outer.left() - 6.0 && p.x <= outer.left() + 10.0));
+                    let bottom = p.x >= outer.left() - 6.0
+                        && p.x <= outer.right() + 6.0
+                        && p.y >= outer.bottom() - 10.0
+                        && p.y <= outer.bottom() + 6.0;
+                    sides || bottom
+                });
+            }
+            if !down {
+                resizing = false;
+            }
+            ui.ctx().data_mut(|data| data.insert_temp(resize_key, resizing));
             let grab_key = Id::new(("pop-out-grab", vp));
             let pointer = ui.ctx().input(|input| input.pointer.latest_pos());
-            if (grip_response.dragged() || card_dragging || bar_dragging)
+            if !resizing
+                && (grip_response.dragged() || card_dragging || bar_dragging)
                 && let Some(p) = pointer
             {
                 let grab = ui
@@ -702,7 +731,11 @@ fn detached_controls(app: &mut App, ctx: &Context) {
                     .unwrap_or(false);
                 let was_key = Id::new("detached-bar-was");
                 let was = ctx.data(|data| data.get_temp::<bool>(was_key)).unwrap_or(false);
-                if bar_dragging && !was {
+                // (Not when the press is on the resize corner: one or the other.)
+                let on_corner = ctx
+                    .input(|input| input.pointer.interact_pos())
+                    .is_some_and(|p| p.x >= body.right() - 22.0 && p.y >= body.bottom() - 22.0);
+                if bar_dragging && !was && !on_corner {
                     ctx.send_viewport_cmd(ViewportCommand::StartDrag);
                 }
                 ctx.data_mut(|data| data.insert_temp(was_key, bar_dragging));

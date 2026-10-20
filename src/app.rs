@@ -176,6 +176,23 @@ pub enum Target {
     Remote(Option<String>),
 }
 
+/// "Queue all songs" on an artist page: first the artist's albums and singles
+/// are listed, then each one's songs are read in turn, and everything is
+/// queued at once, oldest release first, each song once.
+struct ArtistQueueJob {
+    id: String,
+    name: String,
+    target: Target,
+    /// The request number the album-song reads carry.
+    request: u64,
+    albums: Vec<crate::api::models::Album>,
+    /// Which album's songs are being read, once the list is complete.
+    reading: Option<usize>,
+    tracks: Vec<Track>,
+}
+
+const ARTIST_QUEUE_GROUPS: &str = "album,single";
+
 struct PendingAlbumQueue {
     id: String,
     label: String,
@@ -799,6 +816,7 @@ pub struct App {
     /// Queue additions shown before Spotify confirms them, with request time.
     pending_queue_adds: Vec<PendingQueueAdd>,
     pending_album_queues: HashMap<u64, PendingAlbumQueue>,
+    artist_queue: Option<ArtistQueueJob>,
     pending_queue_batches: HashMap<u64, Target>,
     album_queue_serial: u64,
     last_album_queue: Option<(String, Instant)>,
@@ -1380,6 +1398,7 @@ impl App {
             manual_queue: Vec::new(),
             pending_queue_adds: Vec::new(),
             pending_album_queues: HashMap::new(),
+            artist_queue: None,
             pending_queue_batches: HashMap::new(),
             album_queue_serial: 0,
             last_album_queue: None,
@@ -7909,6 +7928,14 @@ impl App {
                 if let Ok(albums) = &result {
                     self.request_album_types(albums.items.iter());
                 }
+                if groups == ARTIST_QUEUE_GROUPS
+                    && self
+                        .artist_queue
+                        .as_ref()
+                        .is_some_and(|job| job.id == id && job.reading.is_none())
+                {
+                    self.receive_artist_queue_albums(offset, &result);
+                }
                 if let Some(page) = self.artist_pages.get_mut(&id) {
                     let list = page.albums.entry(groups).or_default();
                     match result {
@@ -9697,6 +9724,10 @@ impl App {
         offset: u32,
         result: crate::api::client::Result<crate::api::models::Page<Track>>,
     ) {
+        if self.artist_queue.as_ref().is_some_and(|job| job.request == request) {
+            self.receive_artist_queue_tracks(offset, result);
+            return;
+        }
         let Some(pending) = self.pending_album_queues.get(&request) else {
             return;
         };
@@ -9757,6 +9788,152 @@ impl App {
         } else {
             self.queue_album_tracks(pending.tracks, pending.label);
         }
+    }
+
+    fn queue_artist_songs(&mut self, id: String, name: String) {
+        if self.artist_queue.is_some() {
+            return;
+        }
+        self.album_queue_serial = self.album_queue_serial.wrapping_add(1);
+        self.artist_queue = Some(ArtistQueueJob {
+            id: id.clone(),
+            name: name.clone(),
+            target: self.target(),
+            request: self.album_queue_serial,
+            albums: Vec::new(),
+            reading: None,
+            tracks: Vec::new(),
+        });
+        self.backend.api(ApiRequest::ArtistAlbums {
+            id,
+            groups: ARTIST_QUEUE_GROUPS.to_string(),
+            offset: 0,
+        });
+        // Translators: {name} is an artist's name.
+        self.toast(gettext(self.locale, "Loading all of {name}'s songs…").replace("{name}", &name));
+    }
+
+    fn fail_artist_queue(&mut self, error: impl std::fmt::Display) {
+        let Some(job) = self.artist_queue.take() else {
+            return;
+        };
+        self.toast_error(
+            // Translators: {name} is an artist's name and {error} an error message.
+            gettext(self.locale, "Couldn't queue {name}'s songs: {error}")
+                .replace("{name}", &job.name)
+                .replace("{error}", &error.to_string()),
+        );
+    }
+
+    /// A page of the artist's albums and singles arrived: ask for the next
+    /// page, or, with the list complete, start reading each one's songs.
+    fn receive_artist_queue_albums(
+        &mut self,
+        offset: u32,
+        result: &crate::api::client::Result<crate::api::models::Page<crate::api::models::Album>>,
+    ) {
+        let page = match result {
+            Ok(page) => page,
+            Err(error) => {
+                self.fail_artist_queue(error);
+                return;
+            }
+        };
+        let Some(job) = self.artist_queue.as_mut() else {
+            return;
+        };
+        job.albums.extend(page.items.iter().cloned());
+        if let Some(next) = page.next_offset().filter(|next| *next > offset) {
+            let id = job.id.clone();
+            self.backend.api(ApiRequest::ArtistAlbums {
+                id,
+                groups: ARTIST_QUEUE_GROUPS.to_string(),
+                offset: next,
+            });
+            return;
+        }
+        // Oldest release first; a single and the album it came from both
+        // stay in the list, and the song is queued once below.
+        job.albums
+            .sort_by(|a, b| a.release_date.cmp(&b.release_date));
+        job.reading = Some(0);
+        self.read_artist_queue_album(0);
+    }
+
+    fn read_artist_queue_album(&mut self, index: usize) {
+        let Some(job) = self.artist_queue.as_mut() else {
+            return;
+        };
+        let Some(album) = job.albums.get(index) else {
+            self.finish_artist_queue();
+            return;
+        };
+        job.reading = Some(index);
+        let (id, request) = (album.id.clone(), job.request);
+        self.backend.api(ApiRequest::AlbumQueueTracks {
+            id,
+            offset: 0,
+            request,
+        });
+    }
+
+    fn receive_artist_queue_tracks(
+        &mut self,
+        offset: u32,
+        result: crate::api::client::Result<crate::api::models::Page<Track>>,
+    ) {
+        let page = match result {
+            Ok(page) => page,
+            Err(error) => {
+                self.fail_artist_queue(error);
+                return;
+            }
+        };
+        let Some(job) = self.artist_queue.as_mut() else {
+            return;
+        };
+        let Some(index) = job.reading else {
+            return;
+        };
+        let (id, request) = (job.albums[index].id.clone(), job.request);
+        let next = page.next_offset();
+        job.tracks.extend(page.items);
+        match next {
+            Some(next) if next > offset => {
+                self.backend.api(ApiRequest::AlbumQueueTracks {
+                    id,
+                    offset: next,
+                    request,
+                });
+            }
+            _ => self.read_artist_queue_album(index + 1),
+        }
+    }
+
+    fn finish_artist_queue(&mut self) {
+        let Some(job) = self.artist_queue.take() else {
+            return;
+        };
+        if job.target != self.target() {
+            self.toast_error(gettext(
+                self.locale,
+                "Playback device changed. Queue the songs again",
+            ));
+            return;
+        }
+        // Each song once: by recording when Spotify names one, else by title.
+        let mut seen = std::collections::HashSet::new();
+        let tracks: Vec<Track> = job
+            .tracks
+            .into_iter()
+            .filter(|track| {
+                let key = track
+                    .recording_key()
+                    .unwrap_or_else(|| track.name.trim().to_lowercase());
+                seen.insert(key)
+            })
+            .collect();
+        self.queue_album_tracks(tracks, job.name);
     }
 
     fn queue_album_tracks(&mut self, tracks: Vec<Track>, label: String) {
@@ -10931,6 +11108,7 @@ impl App {
             Action::SetRepeat(mode) => self.set_repeat(mode),
             Action::AddToQueue { uri, label } => self.add_to_queue(uri, label),
             Action::QueueMany { songs } => self.queue_many(songs),
+            Action::QueueArtistSongs { id, name } => self.queue_artist_songs(id, name),
             Action::MoveInQueue { from, to } => {
                 if !self.queue_locally_reorderable() {
                     return;
