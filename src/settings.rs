@@ -1303,6 +1303,8 @@ pub struct Settings {
     pub queue_show_icons: bool,
     /// Whether queue rows show the cover.
     pub queue_show_cover: bool,
+    /// The full Queue and Recent page: tiles (true) or a list.
+    pub queue_page_grid: bool,
     /// The Recent tab keeps its own look, apart from the queue's, so each
     /// can be set up the way its reader wants it.
     pub recents_show_numbers: bool,
@@ -1711,6 +1713,7 @@ impl Default for Settings {
             queue_show_artist: true,
             queue_show_icons: true,
             queue_show_cover: true,
+            queue_page_grid: true,
             recents_show_numbers: true,
             recents_show_artist: true,
             recents_show_icons: true,

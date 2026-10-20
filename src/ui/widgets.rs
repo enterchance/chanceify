@@ -2442,6 +2442,16 @@ fn track_row_contents(
             })
             .flatten();
         let preview = items.first().unwrap_or(row.item);
+        // Several picked queue rows are dragged as one: remember which rows,
+        // so dropping them in the queue moves them together.
+        if matches!(row.context, RowContext::Queue)
+            && row.picked
+            && items.len() > 1
+            && let Some(rows) = app.picked_rows(&Page::Queue)
+        {
+            let rows: Vec<usize> = rows.iter().copied().collect();
+            ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("queue-drag-rows"), rows));
+        }
         egui::DragAndDrop::set_payload(
             ui.ctx(),
             DragTrack {

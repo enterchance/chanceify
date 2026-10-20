@@ -1229,6 +1229,12 @@ pub enum Action {
     QueueMany {
         songs: Vec<(String, String)>,
     },
+    /// Move several rows of "Playing next" together, keeping their order, to
+    /// before the row at `to` (as numbered before any of them moved).
+    MoveManyInQueue {
+        froms: Vec<usize>,
+        to: usize,
+    },
     /// Move a row within the manually queued "Playing next" section, from a
     /// drag dropped back on the queue. Only applied while the local player
     /// is the active target; see [`crate::app::App::queue_locally_reorderable`].

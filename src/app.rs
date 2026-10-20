@@ -10515,6 +10515,53 @@ impl App {
         }
     }
 
+    /// Moving or removing rows renumbers the queue, so a selection of its
+    /// rows by number would name other songs.
+    fn forget_queue_selection(&mut self) {
+        if self.picked_rows(&Page::Queue).is_some() {
+            self.selection = None;
+        }
+    }
+
+    /// Moves several rows of "Playing next" together, in their own order, to
+    /// before the row at `to`.
+    fn move_many_in_queue(&mut self, mut froms: Vec<usize>, to: usize) {
+        if !self.queue_locally_reorderable() {
+            return;
+        }
+        let queued_len = self.queued_rows_len();
+        froms.sort_unstable();
+        froms.dedup();
+        if froms.is_empty()
+            || to > queued_len
+            || froms.iter().any(|from| *from >= queued_len || *from >= self.manual_queue.len())
+        {
+            return;
+        }
+        let order: Vec<usize> = (0..self.manual_queue.len()).collect();
+        let mut rest: Vec<usize> = order.iter().copied().filter(|row| !froms.contains(row)).collect();
+        let at = (to - froms.iter().filter(|from| **from < to).count()).min(rest.len());
+        rest.splice(at..at, froms.iter().copied());
+        if rest == order {
+            return;
+        }
+        let mut new_index = vec![0; rest.len()];
+        for (position, old) in rest.iter().enumerate() {
+            new_index[*old] = position;
+        }
+        let reordered: Vec<String> = rest.iter().map(|old| self.manual_queue[*old].clone()).collect();
+        self.manual_queue = reordered;
+        for addition in &mut self.pending_queue_adds {
+            if let Some(moved) = new_index.get(addition.manual_index) {
+                addition.manual_index = *moved;
+            }
+        }
+        self.forget_queue_selection();
+        self.show_manual_queue_order(queued_len);
+        self.session_dirty = true;
+        self.resync_local_queue();
+    }
+
     /// Records in the membership index that these songs are now in a
     /// playlist, and keeps the saved copy in step.
     fn note_membership_added(&mut self, playlist_id: &str, uris: Vec<String>) {
@@ -11130,10 +11177,12 @@ impl App {
             Action::AddToQueue { uri, label } => self.add_to_queue(uri, label),
             Action::QueueMany { songs } => self.queue_many(songs),
             Action::QueueArtistSongs { id, name } => self.queue_artist_songs(id, name),
+            Action::MoveManyInQueue { froms, to } => self.move_many_in_queue(froms, to),
             Action::MoveInQueue { from, to } => {
                 if !self.queue_locally_reorderable() {
                     return;
                 }
+                self.forget_queue_selection();
                 let queued_len = self.queued_rows_len();
                 if from >= queued_len || to > queued_len || from == to || to == from + 1 {
                     return;
@@ -11159,7 +11208,10 @@ impl App {
                 self.session_dirty = true;
                 self.resync_local_queue();
             }
-            Action::RemoveFromQueue { rows } => self.remove_from_queue(rows),
+            Action::RemoveFromQueue { rows } => {
+                self.forget_queue_selection();
+                self.remove_from_queue(rows);
+            }
             Action::InsertInQueue { items, position } => {
                 if !self.queue_locally_reorderable() {
                     let songs = items
