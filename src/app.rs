@@ -9921,17 +9921,38 @@ impl App {
             ));
             return;
         }
-        // Each song once: by recording when Spotify names one, else by title.
+        // Each song once. A slowed, sped up or reverb version stands in for
+        // the song only when the plain one is missing or cannot be played.
+        let mut order: Vec<String> = Vec::new();
+        let mut chosen: std::collections::HashMap<String, (Track, bool)> = std::collections::HashMap::new();
         let mut seen = std::collections::HashSet::new();
-        let tracks: Vec<Track> = job
-            .tracks
+        for track in job.tracks {
+            let recording = track.recording_key();
+            if let Some(key) = &recording
+                && !seen.insert(key.clone())
+            {
+                continue;
+            }
+            let (base, is_version) = util::split_version(&track.name);
+            let playable = track.is_playable != Some(false);
+            match chosen.get_mut(&base) {
+                None => {
+                    order.push(base.clone());
+                    chosen.insert(base, (track, is_version));
+                }
+                Some((held, held_version)) => {
+                    let held_playable = held.is_playable != Some(false);
+                    let better = playable && (!held_playable || (*held_version && !is_version));
+                    if better {
+                        *held = track;
+                        *held_version = is_version;
+                    }
+                }
+            }
+        }
+        let tracks: Vec<Track> = order
             .into_iter()
-            .filter(|track| {
-                let key = track
-                    .recording_key()
-                    .unwrap_or_else(|| track.name.trim().to_lowercase());
-                seen.insert(key)
-            })
+            .filter_map(|base| chosen.remove(&base).map(|(track, _)| track))
             .collect();
         self.queue_album_tracks(tracks, job.name);
     }

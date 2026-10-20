@@ -394,8 +394,72 @@ pub(crate) fn replace_file(
     }
 }
 
+/// Words that mark a re-edit of a song: its slowed, sped up or reverb
+/// version, not another song.
+const VERSION_WORDS: [&str; 9] = [
+    "slowed",
+    "sped up",
+    "speed up",
+    "sped-up",
+    "reverb",
+    "nightcore",
+    "daycore",
+    "8d audio",
+    "slow ver",
+];
+
+fn names_a_version(text: &str) -> bool {
+    VERSION_WORDS.iter().any(|word| text.contains(word))
+}
+
+/// A song's title without a trailing version mark ("(Sped Up)", "[Slowed +
+/// Reverb]", "- Slowed"), in lower case, and whether it had one. A title that
+/// is only a version word is a song's own name and stays whole.
+pub fn split_version(title: &str) -> (String, bool) {
+    let mut base = title.trim().to_lowercase();
+    let mut version = false;
+    loop {
+        let trimmed = base.trim_end();
+        let closing = trimmed.chars().last().filter(|c| matches!(c, ')' | ']'));
+        let opening = closing.map(|c| if c == ')' { '(' } else { '[' });
+        let cut = if let (Some(_), Some(open)) = (closing, opening)
+            && let Some(at) = trimmed.rfind(open)
+            && names_a_version(&trimmed[at..])
+            && !trimmed[..at].trim().is_empty()
+        {
+            Some(at)
+        } else if let Some((left, right)) = trimmed.rsplit_once(" - ")
+            && names_a_version(right)
+            && !left.trim().is_empty()
+        {
+            Some(left.len())
+        } else {
+            None
+        };
+        match cut {
+            Some(at) => {
+                base = trimmed[..at].trim_end().to_string();
+                version = true;
+            }
+            None => return (base, version),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn version_marks_are_split_off_a_title() {
+        use super::split_version;
+        assert_eq!(split_version("Broken Angel Hardtekk - SLOWED"), ("broken angel hardtekk".into(), true));
+        assert_eq!(split_version("DEATHTEKK (SPED UP)"), ("deathtekk".into(), true));
+        assert_eq!(split_version("Song [Slowed + Reverb]"), ("song".into(), true));
+        assert_eq!(split_version("Song (Sped Up) - Slowed"), ("song".into(), true));
+        assert_eq!(split_version("Monster (Hardstyle)"), ("monster (hardstyle)".into(), false));
+        assert_eq!(split_version("Slowed Down"), ("slowed down".into(), false));
+        assert_eq!(split_version("Song - Remastered"), ("song - remastered".into(), false));
+    }
+
     use super::*;
 
     fn pixel(rgba: &[u8], size: usize, x: usize, y: usize) -> [u8; 4] {
