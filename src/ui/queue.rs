@@ -1151,6 +1151,14 @@ fn song_tile(
             palette.surface_hover,
         );
     }
+    // The hotkeys that act on the song under the pointer work on tiles too.
+    if ui.rect_contains_pointer(rect) && item.is_track() {
+        app.hovered_track = Some(item.uri().to_string());
+        app.hovered_playable = Some(item.clone());
+        if view == "queue" {
+            app.hovered_queue_row = Some(index);
+        }
+    }
     let side = rect.width() - 2.0 * TILE_PAD;
     let cover = egui::Rect::from_min_size(rect.min + egui::vec2(TILE_PAD, TILE_PAD), egui::Vec2::splat(side));
     widgets::paint_shadow(ui, &palette, cover, 6.0);

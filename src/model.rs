@@ -1484,6 +1484,9 @@ pub enum Action {
     MoveViewsDisc(Option<[f32; 2]>),
     /// Queues the song under the pointer; `true` puts it at the top of the queue.
     QueueHovered(bool),
+    /// Takes the queued song under the pointer (or every picked one, when it
+    /// is one of them) out of the queue.
+    RemoveHoveredFromQueue,
     /// Likes or unlikes the playing song.
     LikePlaying,
     /// -1 smaller, 1 bigger, 0 back to 100%.

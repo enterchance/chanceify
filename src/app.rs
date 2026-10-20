@@ -388,6 +388,9 @@ pub struct App {
     pub hover_playable_snapshot: Option<PlayableItem>,
     /// What `hovered_track` held at the start of this frame.
     pub hover_snapshot: Option<String>,
+    /// The queue row under the pointer, now and as the last pass saw it.
+    pub hovered_queue_row: Option<usize>,
+    pub hover_queue_snapshot: Option<usize>,
     pub palette: Palette,
     /// The language the interface is drawn in: [`Settings::language`]
     /// resolved against the operating system's preferred languages.
@@ -1140,6 +1143,8 @@ impl App {
             hovered_playable: None,
             hover_playable_snapshot: None,
             hover_snapshot: None,
+            hovered_queue_row: None,
+            hover_queue_snapshot: None,
             palette,
             locale,
             window_level_supported: true,
@@ -12412,6 +12417,32 @@ impl App {
                 }
                 None => self.toast("Point at a song, then press the key."),
             },
+            Action::RemoveHoveredFromQueue => {
+                let row = self.hover_queue_snapshot;
+                let uris: Vec<String> = self
+                    .queue
+                    .get()
+                    .map(|queue| queue.queue.iter().map(|item| item.uri().to_string()).collect())
+                    .unwrap_or_default();
+                let rows: Vec<usize> = match row {
+                    // Over one of several picked songs: all of them go.
+                    Some(row) if self.picked_rows(&Page::Queue).is_some_and(|picked| picked.contains(&row)) => {
+                        self.picked_rows(&Page::Queue).map(|picked| picked.iter().copied().collect()).unwrap_or_default()
+                    }
+                    Some(row) => vec![row],
+                    None => Vec::new(),
+                };
+                let rows: Vec<(usize, String)> = rows
+                    .into_iter()
+                    .filter(|row| self.can_remove_from_queue(*row))
+                    .filter_map(|row| uris.get(row).map(|uri| (row, uri.clone())))
+                    .collect();
+                if rows.is_empty() {
+                    self.toast("Point at a song in Playing next, then press the key.");
+                } else {
+                    self.actions.push(Action::RemoveFromQueue { rows });
+                }
+            }
             Action::LikeHovered => match self.hover_snapshot.clone() {
                 Some(uri) => self.actions.push(Action::ToggleSaved(uri)),
                 None => self.toast("Point at a song, then press the key."),

@@ -2482,6 +2482,9 @@ fn track_row_contents(
         app.hovered_track = Some(row.item.uri().to_string());
         app.hovered_playable = Some(row.item.clone());
     }
+    if ui.rect_contains_pointer(rect) && matches!(row.context, RowContext::Queue) {
+        app.hovered_queue_row = Some(row.index);
+    }
     if row.picked {
         // Keep the existing translucent selection, using a neutral palette
         // color so selecting a song does not mark it as playing.
