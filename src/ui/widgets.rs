@@ -3375,6 +3375,30 @@ fn track_row_contents(
                     _ => None,
                 };
                 picked_menu(ui, app, row.picked_songs, editable);
+                // In the queue the picked songs can be taken out of it, as
+                // far as the queue lets any song leave.
+                if matches!(row.context, RowContext::Queue)
+                    && let Some(rows) = app.picked_rows(&Page::Queue)
+                {
+                    let removable: Vec<(usize, String)> = rows
+                        .iter()
+                        .copied()
+                        .zip(row.picked_songs)
+                        .filter(|(index, _)| app.can_remove_from_queue(*index))
+                        .map(|(index, item)| (index, item.uri().to_string()))
+                        .collect();
+                    if !removable.is_empty() {
+                        menu_separator(ui, &palette);
+                        if menu_item(
+                            ui,
+                            &palette,
+                            Some(Icon::Minus),
+                            &gettext(app.locale, "Remove from queue"),
+                        ) {
+                            app.actions.push(Action::RemoveFromQueue { rows: removable });
+                        }
+                    }
+                }
             } else {
                 item_menu(ui, app, row.item, Some(row.context), Some(row.index));
             }
