@@ -328,6 +328,8 @@ pub struct App {
     /// every frame, so the answer is kept until the artwork changes.
     media_art: Option<(String, PathBuf)>,
     tray: Option<fastframe_tray::Tray>,
+    /// Wakes the UI loop; kept so the tray can be created on first use.
+    tray_waker: Waker,
     /// Whether the tray menu last offered Pause rather than Play.
     tray_playing: bool,
     pub window_hidden: bool,
@@ -1114,6 +1116,7 @@ impl App {
             system_appearance,
             media_art: None,
             tray,
+            tray_waker: waker.clone(),
             tray_playing: false,
             window_hidden: false,
             hide_intent: false,
@@ -13479,7 +13482,21 @@ impl App {
             }
             // The same request the window's own close button makes, so the
             // close-to-tray setting decides what follows.
-            Action::CloseWindow => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Action::CloseWindow => {
+                // The only way to the tray: the item is created on first
+                // use, so nothing sits in the notification area otherwise.
+                if self.tray.is_none() {
+                    let wake = self.tray_waker.clone();
+                    self.tray =
+                        fastframe_tray::Tray::spawn(tray_config(), move || wake.wake());
+                }
+                if self.tray.is_some() {
+                    self.hide_intent = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                } else {
+                    self.toast_error("Couldn't create the tray item, so the window stays open");
+                }
+            }
             Action::CyclePlayerBarVis => {
                 self.settings.player_bar_vis = self.settings.player_bar_vis.next();
                 self.settings.vis_shapes_set = false;
@@ -14158,6 +14175,7 @@ impl App {
         }
         if ctx.input(|input| input.viewport().close_requested())
             && !self.quit_requested
+            && !self.hide_intent
         {
             // X closes the app. Upstream hid to the tray here and left the
             // process playing in the background, which reads as a failed
