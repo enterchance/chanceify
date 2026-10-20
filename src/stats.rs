@@ -269,18 +269,7 @@ impl Stats {
             return;
         }
         self.dirty = false;
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let Ok(text) = serde_json::to_string(&self.plays) else {
-            return;
-        };
-        // Written beside, then moved into place, so a power cut never leaves
-        // half a file.
-        let scratch = path.with_extension("json.tmp");
-        if std::fs::write(&scratch, text).is_ok() && std::fs::rename(&scratch, path).is_err() {
-            log::warn!("could not write the listening statistics");
-        }
+        crate::util::save_json_in_background(self.plays.clone(), path.to_path_buf());
     }
 
     /// The artists and the songs heard most within `range`, most first.

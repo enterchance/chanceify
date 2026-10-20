@@ -207,6 +207,30 @@ pub async fn sample(
     rows_page(session, id, offset, limit, false).await
 }
 
+/// Every song URI in a playlist, paged over the session with no song
+/// details asked for. The "already in this playlist" index needs nothing
+/// more, and the session has no per-app quota to spend.
+pub async fn uris(session: &Session, id: &str) -> Result<Vec<String>, Failure> {
+    const PAGE: u32 = 100;
+    let mut found = Vec::new();
+    let mut offset = 0;
+    loop {
+        let list = window(session, id, offset, PAGE).await?;
+        let rows = rows(&list, offset, PAGE);
+        let total = total(&list);
+        complete(rows.len(), offset, PAGE, total)?;
+        found.extend(
+            rows.iter()
+                .filter(|row| !matches!(row.id, SpotifyUri::Local { .. }))
+                .map(|row| row.id.to_uri()),
+        );
+        offset = offset.saturating_add(rows.len() as u32);
+        if rows.is_empty() || offset >= total {
+            return Ok(found);
+        }
+    }
+}
+
 async fn rows_page(
     session: &Session,
     id: &str,

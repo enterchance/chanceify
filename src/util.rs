@@ -694,3 +694,36 @@ pub fn memory_used_mb() -> Option<u64> {
         None
     }
 }
+
+/// Writes `value` as JSON to `path` on a background thread, through a
+/// scratch file moved into place. The caller hands over a copy, so a
+/// large file never holds up a frame. One writer at a time, so two saves
+/// of the same file cannot collide on the scratch name; the newest copy is
+/// always the last to be written.
+pub(crate) fn save_json_in_background<T>(value: T, path: std::path::PathBuf)
+where
+    T: serde::Serialize + Send + 'static,
+{
+    static WRITER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let write = move || {
+        let Ok(text) = serde_json::to_string(&value) else {
+            return;
+        };
+        let _guard = WRITER.lock().unwrap_or_else(|lock| lock.into_inner());
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let scratch = path.with_extension("json.tmp");
+        if std::fs::write(&scratch, text).is_ok()
+            && replace_file(&scratch, &path).is_err()
+        {
+            log::warn!("could not write {}", path.display());
+        }
+    };
+    // Tests read the file straight back.
+    if cfg!(test) {
+        write();
+    } else {
+        std::thread::spawn(write);
+    }
+}

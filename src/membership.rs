@@ -196,13 +196,7 @@ impl Index {
     /// mid-write leaves the last good index rather than a half-written one.
     /// The index is a cache: a failure here is not worth reporting.
     pub fn save(&self, path: &std::path::Path) {
-        let Ok(text) = serde_json::to_string(self) else {
-            return;
-        };
-        let temporary = path.with_extension("json.tmp");
-        if std::fs::write(&temporary, text).is_ok() {
-            let _ = crate::util::replace_file(&temporary, path);
-        }
+        crate::util::save_json_in_background(self.clone(), path.to_path_buf());
     }
 }
 

@@ -4261,6 +4261,24 @@ async fn handle(
                     );
                 }
             }
+            // The streaming session answers this without touching any
+            // app's quota, so it goes first; the Web API is the fallback.
+            if let Some(engine) = engine.filter(|engine| {
+                same_account(&engine.session().username(), api.account().as_ref())
+            }) && let Ok(Ok(uris)) = tokio::time::timeout(
+                SESSION_READ_TIMEOUT * 2,
+                session_reads::uris(engine.session(), &playlist.id),
+            )
+            .await
+            {
+                return (
+                    ApiResponse::MembershipPlaylist {
+                        playlist,
+                        result: Ok(uris),
+                    },
+                    None,
+                );
+            }
             // Stand down while Spotify is throttling this session.
             //
             // Without this the walk asks for a playlist, parks inside the
