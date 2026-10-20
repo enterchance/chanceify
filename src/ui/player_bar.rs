@@ -1523,6 +1523,9 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
     // bigger than the window has room for.
     let user = if app.settings.vis_panel_w > 0.0 { app.settings.vis_panel_w.clamp(0.4, 1.4) } else { 1.0 };
     let fit = (room.clamp(0.35, 1.0) * user).min(room.max(0.35)).clamp(0.3, 1.4);
+    // A scale of nearly one is exactly one: the text is drawn at the
+    // screen's own pixels, which is the only way it stays sharp.
+    let fit = if (fit - 1.0).abs() < 0.04 { 1.0 } else { fit };
     ctx.data_mut(|data| data.insert_temp(egui::Id::new("vis-panel-fit"), fit));
     // Where the reader left it (dragged by the strip along its top edge);
     // until then, the old place.
@@ -1538,6 +1541,13 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
     let max_y = (screen.bottom() - natural_h * fit - 2.0).max(screen.top());
     let keep_inside = |at: egui::Pos2| egui::pos2(at.x.clamp(screen.left(), max_x), at.y.clamp(screen.top(), max_y));
     let fixed_pos = keep_inside(stored.unwrap_or(default_pos));
+    // On whole screen pixels: a panel dragged to a fractional spot drew its
+    // text between pixels, which looked grainy.
+    let pixels = ctx.pixels_per_point();
+    let fixed_pos = egui::pos2(
+        (fixed_pos.x * pixels).round() / pixels,
+        (fixed_pos.y * pixels).round() / pixels,
+    );
     let panel = egui::Window::new("visualizer-panel")
         .id(win_id)
         .title_bar(false)
@@ -1607,7 +1617,7 @@ pub(super) fn vis_panel_window(app: &mut App, ctx: &egui::Context) {
                     ui.painter().circle_filled(egui::pos2(rect.center().x + dx, rect.top() + 5.0), 1.2, colour);
                 }
                 if response.dragged() {
-                    let moved = keep_inside(fixed_pos + response.drag_delta());
+                    let moved = keep_inside(stored.unwrap_or(fixed_pos) + response.drag_delta());
                     ui.ctx().data_mut(|data| data.insert_temp(pos_id, moved));
                 }
                 response.on_hover_text("Drag to move");

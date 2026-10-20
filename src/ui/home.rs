@@ -1,6 +1,5 @@
 //! The Home page.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use egui::{CornerRadius, Rect, Sense, Vec2, pos2, vec2};
@@ -61,22 +60,11 @@ fn new_releases(app: &mut App, ui: &mut egui::Ui) {
         .as_ref()
         .map(|scan| (scan.total.saturating_sub(scan.queue.len()), scan.total));
     // Releases already heard drop out when the reader asks for that.
-    let mut hidden = 0;
     let releases: Vec<Release> = if app.releases.user == user {
-        let heard = if app.settings.home.releases_hide_heard {
-            heard_albums(app)
-        } else {
-            HashSet::new()
-        };
         app.releases
             .found
             .iter()
             .filter(|release| !app.releases.dismissed.contains(&release.album_id))
-            .filter(|release| {
-                let seen = heard.contains(release.album_id.as_str());
-                hidden += usize::from(seen);
-                !seen
-            })
             .cloned()
             .collect()
     } else {
@@ -110,8 +98,8 @@ fn new_releases(app: &mut App, ui: &mut egui::Ui) {
         }
         {
             let mut only = app.settings.releases_spotify_only;
-            if widgets::switch_labeled(ui, &palette, "Spotify only", &mut only)
-                .on_hover_text("Look for new releases on Spotify alone (slower and can hit Spotify's limits) instead of finding them on Deezer first.")
+            if widgets::switch_labeled(ui, &palette, "Skip Deezer", &mut only)
+                .on_hover_text("Check for new releases on Spotify alone. Slower, and it can use up Spotify's limits. Off finds them through Deezer first.")
                 .changed()
             {
                 app.settings.releases_spotify_only = only;
@@ -145,12 +133,14 @@ fn new_releases(app: &mut App, ui: &mut egui::Ui) {
     }
     if releases.is_empty() {
         if scanning.is_none() {
-            let message = if hidden > 0 {
-                "You have heard everything new. Turn off Hide after I listen to see it again."
-            } else {
-                "Nothing new in the last 3 months. Press Check now to look at the artists in your playlists."
-            };
-            theme::subtle(ui, &palette, &gettext(app.locale, message));
+            theme::subtle(
+                ui,
+                &palette,
+                &gettext(
+                    app.locale,
+                    "Nothing new in the last 3 months. Press Check now to look at the artists in your playlists.",
+                ),
+            );
         }
         ui.add_space(14.0);
         return;
@@ -173,6 +163,60 @@ fn new_releases(app: &mut App, ui: &mut egui::Ui) {
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
             let mut index = 0;
+            if grid && app.settings.home.releases_by_artist {
+                // Artists sit side by side, as many as fit the width, each
+                // with its own cards under its name.
+                let spacing = widgets::CARD_GAP / 2.0;
+                let unit = widgets::CARD_WIDTH + spacing;
+                let total_cols = (((ui.available_width() + spacing) / unit).floor() as usize).max(1);
+                let mut rows: Vec<Vec<(usize, usize)>> = Vec::new();
+                let mut used = total_cols;
+                for (i, (_, group)) in groups.iter().enumerate() {
+                    let want = group.len().clamp(1, 3).min(total_cols);
+                    let left = total_cols - used.min(total_cols);
+                    let cols = if want <= left {
+                        want
+                    } else if left >= 2 && group.len() > 1 {
+                        left
+                    } else {
+                        0
+                    };
+                    match rows.last_mut() {
+                        Some(row) if cols > 0 => {
+                            row.push((i, cols));
+                            used += cols;
+                        }
+                        _ => {
+                            rows.push(vec![(i, want)]);
+                            used = want;
+                        }
+                    }
+                }
+                for row in rows {
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = spacing;
+                        for (i, cols) in row {
+                            let (artist, group) = &groups[i];
+                            let width = cols as f32 * unit - spacing;
+                            ui.allocate_ui_with_layout(
+                                vec2(width, 0.0),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    ui.set_width(width);
+                                    theme::text(ui, artist, theme::bold(theme::BODY_TEXT), palette.text);
+                                    widgets::grid(ui, |ui| {
+                                        for release in group {
+                                            release_card(app, ui, release);
+                                        }
+                                    });
+                                },
+                            );
+                        }
+                    });
+                    ui.add_space(6.0);
+                }
+                return;
+            }
             for (artist, group) in &groups {
                 if !artist.is_empty() {
                     if index > 0 {
@@ -213,39 +257,6 @@ fn release_controls(app: &mut App, ui: &mut egui::Ui) {
         app.settings.home.releases_by_artist = picked == 1;
         app.mark_settings_dirty();
     }
-    if theme::soft_button(
-        ui,
-        &palette,
-        home.releases_hide_heard.then_some(Icon::Check),
-        &gettext(app.locale, "Hide after I listen"),
-        home.releases_hide_heard,
-    )
-    .on_hover_text("Leave out a release once you have played one of its songs.")
-    .clicked()
-    {
-        app.settings.home.releases_hide_heard = !home.releases_hide_heard;
-        app.mark_settings_dirty();
-    }
-}
-
-/// The albums played lately: from the listening log, the recent plays made
-/// here, and Spotify's recently played (which covers other devices).
-fn heard_albums(app: &App) -> HashSet<&str> {
-    // New releases reach back about three months; half a year is plenty.
-    let since = jiff::Timestamp::now().as_second() - 183 * 86_400;
-    let mut heard = app.stats.albums_heard_since(since);
-    let spotify = match &app.home.recently_played {
-        Loadable::Loaded(history) => history.as_slice(),
-        _ => &[],
-    };
-    for play in app.plays.plays().iter().chain(spotify) {
-        if let Some(album) = &play.track.album
-            && !album.id.is_empty()
-        {
-            heard.insert(album.id.as_str());
-        }
-    }
-    heard
 }
 
 /// Releases under the name of each one's first artist, the artists in
@@ -396,6 +407,10 @@ fn release_row(app: &mut App, ui: &mut egui::Ui, release: &Release, index: usize
     if response.clicked() && !used_button {
         app.actions.push(Action::Open(Page::Album(release.album_id.clone())));
     }
+    egui::Popup::context_menu(&response)
+        .id(ui.make_persistent_id(("release-row-menu", &release.album_id)))
+        .frame(widgets::menu_frame(&palette))
+        .show(|ui| release_menu(ui, app, release));
 }
 
 /// One release as a cover card. Its right-click menu removes it from the
@@ -430,12 +445,25 @@ fn release_card(app: &mut App, ui: &mut egui::Ui, release: &Release) {
         .id(ui.make_persistent_id(("release-card-menu", &release.album_id)))
         .frame(widgets::menu_frame(&palette))
         .show(|ui| {
-            if widgets::menu_item(ui, &palette, Some(Icon::X), "Remove from this list") {
-                app.actions.push(Action::DismissRelease(release.album_id.clone()));
-            }
-            widgets::menu_separator(ui, &palette);
-            widgets::context_menu_items(ui, app, &release.album_uri, &release.name, None);
+            release_menu(ui, app, release);
         });
+}
+
+/// The right-click menu of a release, in a grid or a list: add it to the
+/// queue, take it off the list, then the usual album choices.
+fn release_menu(ui: &mut egui::Ui, app: &mut App, release: &Release) {
+    let palette = app.palette;
+    if widgets::menu_item(ui, &palette, Some(Icon::ListEnd), "Add to queue") {
+        app.actions.push(Action::AddToQueue {
+            uri: release.album_uri.clone(),
+            label: release.name.clone(),
+        });
+    }
+    if widgets::menu_item(ui, &palette, Some(Icon::X), "Remove from this list") {
+        app.actions.push(Action::DismissRelease(release.album_id.clone()));
+    }
+    widgets::menu_separator(ui, &palette);
+    widgets::context_menu_items_no_queue(ui, app, &release.album_uri, &release.name);
 }
 
 /// One chip that switches between a grid of tiles and a list. It names

@@ -7529,6 +7529,7 @@ impl App {
                             }
                         }
                         self.checkpoint_playlist_cache(&id);
+                        self.complete_added_rows(&id);
                         // Reconcile metadata in the background. The mutation
                         // response and local rows are enough to keep the page;
                         // no item page is discarded or downloaded again.
@@ -8042,6 +8043,7 @@ impl App {
                             &format!("spotify:track:{id}"),
                             Some(PlayableItem::Track(track.clone())),
                         );
+                        self.fill_rows_with(&track);
                         self.track_cache.insert(id.clone(), track);
                         self.track_used.insert(id, Instant::now());
                     }
@@ -10258,6 +10260,61 @@ impl App {
             uris: items.iter().map(|item| item.uri().to_string()).collect(),
             position,
         });
+    }
+
+    /// A song added from somewhere that knew only its name shows in the
+    /// playlist without album or cover, and cannot be opened. Ask Spotify for
+    /// the whole song; [`Self::fill_rows_with`] puts it in the row.
+    fn complete_added_rows(&mut self, playlist_id: &str) {
+        let Some(page) = self.playlist_pages.get(playlist_id) else {
+            return;
+        };
+        let ids: Vec<String> = page
+            .items
+            .items
+            .iter()
+            .filter_map(PlaylistItem::playable)
+            .filter_map(|item| match item {
+                PlayableItem::Track(track)
+                    if !track.is_local
+                        && page.local_additions.contains(&track.uri)
+                        && track.album.as_ref().is_none_or(|album| album.images.is_empty()) =>
+                {
+                    util::uri_id(&track.uri).map(str::to_owned)
+                }
+                _ => None,
+            })
+            .collect();
+        for id in ids {
+            if self.track_requests.insert(id.clone()) {
+                self.backend.api(ApiRequest::Track { id });
+            }
+        }
+    }
+
+    /// Gives every playlist row for this song, still without a cover, the
+    /// song's full details.
+    fn fill_rows_with(&mut self, track: &Track) {
+        if track.album.as_ref().is_none_or(|album| album.images.is_empty()) {
+            return;
+        }
+        let bare = |held: &Track| {
+            held.uri == track.uri && held.album.as_ref().is_none_or(|album| album.images.is_empty())
+        };
+        for page in self.playlist_pages.values_mut() {
+            let mut changed = false;
+            for row in &mut page.items.items {
+                for slot in [&mut row.item, &mut row.track] {
+                    if matches!(slot, Some(PlayableItem::Track(held)) if bare(held)) {
+                        *slot = Some(PlayableItem::Track(track.clone()));
+                        changed = true;
+                    }
+                }
+            }
+            if changed {
+                page.items.revision = page.items.revision.wrapping_add(1);
+            }
+        }
     }
 
     /// Records in the membership index that these songs are now in a

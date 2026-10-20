@@ -1771,6 +1771,23 @@ pub fn context_menu_items(
     name: &str,
     owned_playlist: Option<&Playlist>,
 ) {
+    context_menu_rows(ui, app, uri, name, owned_playlist, true);
+}
+
+/// The usual choices for a list that already offers "Add to queue" itself,
+/// at its top.
+pub fn context_menu_items_no_queue(ui: &mut Ui, app: &mut App, uri: &str, name: &str) {
+    context_menu_rows(ui, app, uri, name, None, false);
+}
+
+fn context_menu_rows(
+    ui: &mut Ui,
+    app: &mut App,
+    uri: &str,
+    name: &str,
+    owned_playlist: Option<&Playlist>,
+    with_queue: bool,
+) {
     let palette = app.palette;
     let locale = app.locale;
     fit_menu(ui, 300.0);
@@ -1813,7 +1830,8 @@ pub fn context_menu_items(
     {
         app.actions.push(Action::CheckNewReleases(Some(id.to_string())));
     }
-    if kind == "album"
+    if with_queue
+        && kind == "album"
         && menu_item(
             ui,
             &palette,
@@ -4515,9 +4533,8 @@ pub fn shelf(
     ui.add_space(8.0);
     theme::section_title(ui, palette, title);
     ui.add_space(4.0);
-    let wheel = egui::Id::new(("shelf-wheel", id));
-    wheel_sideways(ui, wheel);
-    let output = crate::autoscroll::show(
+    // The wheel scrolls the page; Shift+wheel moves the row.
+    let _output = crate::autoscroll::show(
         ui,
         egui::ScrollArea::horizontal().id_salt(id),
         egui::Vec2b::new(true, false),
@@ -4528,7 +4545,6 @@ pub fn shelf(
             });
         },
     );
-    note_sideways(ui, wheel, &output);
     ui.add_space(12.0);
 }
 
