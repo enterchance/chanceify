@@ -81,6 +81,11 @@ impl Index {
         self.scanned.iter().any(|scanned| scanned == id)
     }
 
+    /// Whether this playlist was walked and holds `uri`.
+    pub fn holds(&self, playlist_id: &str, uri: &str) -> bool {
+        self.get(uri).iter().any(|found| found.id == playlist_id)
+    }
+
     /// Record the songs in one playlist. A playlist already recorded is
     /// skipped, so a repeated page adds nothing.
     ///

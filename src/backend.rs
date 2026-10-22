@@ -4415,8 +4415,38 @@ async fn handle(
             position,
         } => {
             let uris: Vec<String> = items.iter().map(|item| item.uri().to_string()).collect();
+            // The streaming session reads the playlist without any app's
+            // quota; the Web API pages through it only if that fails.
+            let over_session = match engine.filter(|engine| {
+                same_account(&engine.session().username(), api.account().as_ref())
+            }) {
+                Some(engine) => {
+                    match tokio::time::timeout(
+                        SESSION_READ_TIMEOUT * 2,
+                        session_reads::uris(engine.session(), &playlist_id),
+                    )
+                    .await
+                    {
+                        Ok(Ok(held)) => {
+                            let held: std::collections::HashSet<String> =
+                                held.into_iter().collect();
+                            Some(
+                                uris.iter()
+                                    .filter(|uri| held.contains(uri.as_str()))
+                                    .cloned()
+                                    .collect::<Vec<_>>(),
+                            )
+                        }
+                        _ => None,
+                    }
+                }
+                None => None,
+            };
             ApiResponse::PlaylistDuplicatesChecked {
-                result: routed!(playlist_duplicates(&playlist_id, &uris)),
+                result: match over_session {
+                    Some(found) => Ok(found),
+                    None => routed!(playlist_duplicates(&playlist_id, &uris)),
+                },
                 playlist_id,
                 playlist_name,
                 items,

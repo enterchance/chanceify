@@ -7195,7 +7195,7 @@ impl App {
                 });
                 if stale_write_snapshot {
                     let page = self.playlist_pages.get_mut(&id).unwrap();
-                    if page.snapshot_rechecks <= 3 {
+                    if page.snapshot_rechecks <= 1 {
                         self.backend.api(ApiRequest::Playlist { id, generation });
                     } else {
                         // Spotify is slow to show the change. No error: the list
@@ -10310,6 +10310,19 @@ impl App {
     /// definitive even for a partial playlist; an empty answer is definitive
     /// only when the whole playlist is present.
     fn local_playlist_duplicates(&self, id: &str, items: &[PlayableItem]) -> Option<Vec<String>> {
+        // A playlist that is not open but has been walked is already
+        // indexed song by song, so asking Spotify to page through it again
+        // would spend a request per fifty songs to learn what is known.
+        if !self.playlist_pages.contains_key(id) && self.library.membership.has(id) {
+            return Some(
+                items
+                    .iter()
+                    .map(PlayableItem::uri)
+                    .filter(|uri| self.library.membership.holds(id, uri))
+                    .map(str::to_string)
+                    .collect(),
+            );
+        }
         let page = self.playlist_pages.get(id)?;
         let existing: HashSet<&str> = page
             .items
