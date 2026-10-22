@@ -207,6 +207,18 @@ pub async fn sample(
     rows_page(session, id, offset, limit, false).await
 }
 
+/// One song's details, with its ISRC, read over the session.
+pub async fn track_details(session: &Session, id: &str) -> Result<Track, Failure> {
+    let uri = SpotifyUri::Track {
+        id: SpotifyId::from_base62(id)?,
+    };
+    let mut found = metadata(session, std::iter::once(&uri)).await?;
+    match found.remove(&uri.to_uri()) {
+        Some(PlayableItem::Track(track)) => Ok(track),
+        _ => Err(Failure::Retry(anyhow::anyhow!("no details for {id}"))),
+    }
+}
+
 /// Every song URI in a playlist, paged over the session with no song
 /// details asked for. The "already in this playlist" index needs nothing
 /// more, and the session has no per-app quota to spend.

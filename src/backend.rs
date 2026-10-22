@@ -4715,10 +4715,34 @@ async fn handle(
                 },
             }
         }
-        ApiRequest::Track { id } => ApiResponse::Track {
-            result: routed!(track(&id)),
-            id,
-        },
+        ApiRequest::Track { id } => {
+            // A song's details come over the streaming session first: it
+            // has no per-app quota, and a song starting is the commonest
+            // reason this request is made at all.
+            let over_session = match engine.filter(|engine| {
+                same_account(&engine.session().username(), api.account().as_ref())
+            }) {
+                Some(engine) => {
+                    match tokio::time::timeout(
+                        SESSION_READ_TIMEOUT,
+                        session_reads::track_details(engine.session(), &id),
+                    )
+                    .await
+                    {
+                        Ok(Ok(track)) => Some(track),
+                        _ => None,
+                    }
+                }
+                None => None,
+            };
+            ApiResponse::Track {
+                result: match over_session {
+                    Some(track) => Ok(track),
+                    None => routed!(track(&id)),
+                },
+                id,
+            }
+        }
         ApiRequest::Episode { id } => ApiResponse::Episode {
             result: routed!(episode(&id)),
             id,

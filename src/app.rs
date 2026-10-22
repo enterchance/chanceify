@@ -779,6 +779,12 @@ pub struct App {
     /// Context loads keep it; explicit skips consume their rows immediately.
     queue_start_pending: Option<Target>,
     pub playlist_busy: bool,
+    /// A playlist header to read again once Spotify has had a moment to show
+    /// an edit: the playlist, the generation that asked, and when.
+    playlist_recheck: Option<(String, u64, Instant)>,
+    /// Details sent with a playlist edit, applied to the library list in
+    /// place when Spotify confirms, so the whole list is not read again.
+    pending_playlist_details: HashMap<String, (Option<String>, Option<String>, Option<bool>)>,
     pub quit_requested: bool,
     /// The axis a scroll gesture settled on, and when it last moved.
     scroll_lock: Option<(ScrollAxis, Instant)>,
@@ -1381,6 +1387,8 @@ impl App {
             last_now_playing_sequence: 0,
             queue_start_pending: None,
             playlist_busy: false,
+            playlist_recheck: None,
+            pending_playlist_details: HashMap::new(),
             quit_requested: false,
             scroll_lock: None,
             scroll_from_trackpad: false,
@@ -3211,6 +3219,7 @@ impl App {
                 self.sign_in_url = None;
                 self.reset_data();
                 self.load_playlists();
+                self.show_remembered_playlists();
                 self.ensure_loaded(self.page().clone());
                 self.poll_remote(true);
             }
@@ -3880,9 +3889,22 @@ impl App {
         if let Some(url) = now.art_small.or(now.art_url) {
             self.tint_for(Some(&url));
         }
-        if matches!(self.page(), Page::Queue)
-            || self.show_queue_panel
-        {
+        // The queue on show was just advanced from what the player knows: the
+        // song now playing is the one it already named, and plenty of rows
+        // remain. Asking Spotify again would cost a request per song and
+        // often return its copy from before the change. It is read when the
+        // rows run low, when the song is not the one expected, or when it
+        // has gone stale.
+        let advanced_locally = now.local
+            && self.pending_queue_batches.is_empty()
+            && self.queue.get().is_some_and(|queue| {
+                queue.queue.len() >= 5
+                    && queue
+                        .currently_playing
+                        .as_ref()
+                        .is_some_and(|item| item.uri() == now.uri)
+            });
+        if (matches!(self.page(), Page::Queue) || self.show_queue_panel) && !advanced_locally {
             self.refresh_queue(true);
         }
         if self.show_lyrics_panel || self.lyrics_panel_auto_off || ((self.fullscreen_vis || self.extra_vis) && self.settings.vis_lyrics) {
@@ -4371,6 +4393,18 @@ impl App {
                     );
                 }
             }
+            if let Some((_, _, due)) = &self.playlist_recheck {
+                let due = *due;
+                if Instant::now() >= due {
+                    if let Some((id, generation, _)) = self.playlist_recheck.take() {
+                        self.backend.api(ApiRequest::Playlist { id, generation });
+                    }
+                } else {
+                    ctx.request_repaint_after(
+                        (due - Instant::now()).max(Duration::from_millis(100)),
+                    );
+                }
+            }
             if let Some(due) = self.queue_recheck_at {
                 if Instant::now() >= due {
                     self.queue_recheck_at = None;
@@ -4553,6 +4587,42 @@ impl App {
     /// Where the membership index is kept between runs. It is a cache of
     /// Spotify's own answers, so it belongs in the cache directory and can be
     /// deleted at any time without consequence.
+    /// Where the library's playlist list is kept between launches, filed
+    /// under the account, or `None` before the account is known.
+    fn playlist_list_path(&self) -> Option<std::path::PathBuf> {
+        let account = self
+            .user_id()
+            .or_else(|| self.optimistic_user.as_ref().map(|user| user.id.as_str()))
+            .filter(|id| !id.is_empty())?;
+        let safe: String = account
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+            .collect();
+        Some(self.dirs.cache.join(format!("playlist-list-{safe}.json")))
+    }
+
+    /// Shows the list kept from the last launch while the real one loads,
+    /// so the sidebar is not empty and no page waits on Spotify to draw it.
+    fn show_remembered_playlists(&mut self) {
+        if !matches!(self.library.playlists, Loadable::Loading) {
+            return;
+        }
+        let Some(path) = self.playlist_list_path() else {
+            return;
+        };
+        let Some(list) = std::fs::read(path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Vec<Playlist>>(&bytes).ok())
+            .filter(|list| !list.is_empty())
+        else {
+            return;
+        };
+        for listed in &list {
+            self.saved.insert(listed.uri.clone(), true);
+        }
+        self.library.playlists = Loadable::Loaded(list);
+    }
+
     fn membership_path(&self) -> std::path::PathBuf {
         self.dirs.cache.join("membership.json")
     }
@@ -7125,6 +7195,12 @@ impl App {
                     } else {
                         // Load folder order after all playlists arrive.
                         self.read_rootlist();
+                        if !self.offline
+                            && let Some(path) = self.playlist_list_path()
+                            && let Some(list) = self.library.playlists.get()
+                        {
+                            crate::util::save_json_in_background(list.clone(), path);
+                        }
                     }
                     if let Some(playlists) = self.library.playlists.get() {
                         for listed in playlists {
@@ -7196,7 +7272,10 @@ impl App {
                 if stale_write_snapshot {
                     let page = self.playlist_pages.get_mut(&id).unwrap();
                     if page.snapshot_rechecks <= 1 {
-                        self.backend.api(ApiRequest::Playlist { id, generation });
+                        // Spotify has not shown the edit yet; asking again
+                        // at once only gets the same answer.
+                        self.playlist_recheck =
+                            Some((id, generation, Instant::now() + Duration::from_secs(2)));
                     } else {
                         // Spotify is slow to show the change. No error: the list
                         // keeps what it already shows (the change is made), and
@@ -7484,7 +7563,28 @@ impl App {
                     Ok(()) => {
                         self.toast(gettext(self.locale, "Playlist updated"));
                         self.playlist_pages.remove(&id);
-                        self.load_playlists();
+                        // The edit is applied to the list entry in place:
+                        // reading the whole library again costs a request
+                        // for every fifty playlists.
+                        match (
+                            self.pending_playlist_details.remove(&id),
+                            self.library.playlists.get_mut(),
+                        ) {
+                            (Some((name, description, public)), Some(playlists)) => {
+                                for playlist in playlists.iter_mut().filter(|p| p.id == id) {
+                                    if let Some(name) = &name {
+                                        playlist.name.clone_from(name);
+                                    }
+                                    if let Some(description) = &description {
+                                        playlist.description = Some(description.clone());
+                                    }
+                                    if public.is_some() {
+                                        playlist.public = public;
+                                    }
+                                }
+                            }
+                            _ => self.load_playlists(),
+                        }
                         if matches!(self.page(), Page::Playlist(current) if *current == id) {
                             self.ensure_loaded(Page::Playlist(id));
                         }
@@ -7597,7 +7697,22 @@ impl App {
                     } else {
                         gettext(self.locale, "Removed from Your Library")
                     });
-                    self.load_playlists();
+                    // Edit the list in place: reading the whole library
+                    // again costs a request for every fifty playlists.
+                    let known = self
+                        .playlist_pages
+                        .get(&id)
+                        .and_then(|page| page.playlist.get().cloned());
+                    match self.library.playlists.get_mut() {
+                        Some(playlists) if !followed => playlists.retain(|p| p.id != id),
+                        Some(playlists) if playlists.iter().any(|p| p.id == id) => {}
+                        Some(playlists) if known.is_some() => {
+                            if let Some(playlist) = known {
+                                playlists.insert(0, playlist);
+                            }
+                        }
+                        _ => self.load_playlists(),
+                    }
                     if !followed && matches!(self.page(), Page::Playlist(current) if *current == id)
                     {
                         self.open(Page::Home);
@@ -11549,6 +11664,14 @@ impl App {
                     || changes.public.is_some()
                 {
                     self.playlist_busy = true;
+                    self.pending_playlist_details.insert(
+                        id.clone(),
+                        (
+                            changes.name.clone(),
+                            changes.description.clone(),
+                            changes.public,
+                        ),
+                    );
                     self.backend.api(ApiRequest::UpdatePlaylist {
                         id,
                         name: changes.name,
