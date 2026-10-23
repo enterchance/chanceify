@@ -4335,7 +4335,17 @@ async fn handle(
         },
         ApiRequest::Queue { seq } => ApiResponse::Queue {
             seq,
-            result: routed!(queue()),
+            // A queue read that waits out a rate limit would leave the
+            // queue on "Loading" for as long as Spotify asks; it is
+            // answered with a failure instead, and asked for again.
+            result: match tokio::time::timeout(Duration::from_secs(8), async { routed!(queue()) })
+                .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(ApiError::Network(
+                    "Spotify is slow to answer, trying again shortly".into(),
+                )),
+            },
         },
         ApiRequest::RecentlyPlayed {
             who,

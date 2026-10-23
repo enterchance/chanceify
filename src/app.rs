@@ -7193,6 +7193,12 @@ impl App {
                 let idle_empty = result.as_ref().is_ok_and(|fetched| fetched.queue.is_empty())
                     && self.resume_only()
                     && self.queue.get().is_some_and(|held| !held.queue.is_empty());
+                if result.is_err() && !matches!(self.queue, Loadable::Loaded(_)) {
+                    // Nothing to show yet and Spotify did not answer: ask
+                    // again shortly rather than waiting for the next
+                    // refresh, which is a quarter of an hour away.
+                    self.queue_recheck_at = Some(Instant::now() + Duration::from_secs(10));
+                }
                 if !idle_empty && (result.is_ok() || !matches!(self.queue, Loadable::Loaded(_))) {
                     self.queue = Loadable::from_result(result);
                 }
