@@ -374,6 +374,214 @@ impl ProtectedStore for NativeStore {
     }
 }
 
+/// Credential Manager first, and a copy sealed for this Windows user in the
+/// state directory. On some machines Credential Manager refuses the write
+/// (#748) or drops the entries during a restart (#815); the sealed copy then
+/// serves instead. Every save writes both, and sign-out deletes both.
+#[cfg(windows)]
+struct WithSealedCopy<P, C> {
+    primary: P,
+    copy: C,
+}
+
+#[cfg(windows)]
+impl<P: ProtectedStore, C: ProtectedStore> ProtectedStore for WithSealedCopy<P, C> {
+    fn read(&mut self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+        let primary = self.primary.read(key);
+        if let Ok(Some(secret)) = &primary {
+            // A grant saved before the copy existed gains one here, so it
+            // survives the next time the native store loses it.
+            if !matches!(self.copy.read(key), Ok(Some(copy)) if copy == *secret)
+                && let Err(error) = self.copy.write(key, secret)
+            {
+                log::warn!("could not keep a sealed copy of the grant: {error:?}");
+            }
+            return primary;
+        }
+        match self.copy.read(key) {
+            Ok(Some(secret)) => {
+                log::info!(
+                    "credential store {}; using the sealed copy",
+                    if primary.is_ok() {
+                        "no longer has the grant"
+                    } else {
+                        "is unavailable"
+                    }
+                );
+                Ok(Some(secret))
+            }
+            Ok(None) => primary,
+            // The native store's own error says more, when it has one.
+            Err(error) => primary.and(Err(error)),
+        }
+    }
+
+    fn write(&mut self, key: &str, secret: &[u8]) -> Result<(), Error> {
+        let primary = self.primary.write(key, secret);
+        if primary.is_err() {
+            // An older grant left there must not shadow the new copy.
+            let _ = self.primary.delete(key);
+        }
+        let copy = self.copy.write(key, secret);
+        if let Err(error) = copy {
+            log::warn!("could not write the sealed copy of the grant: {error:?}");
+            // Nor may an older copy outlive the grant that replaced it.
+            let _ = self.copy.delete(key);
+        }
+        match (primary, copy) {
+            (Err(error), Err(_)) => Err(error),
+            _ => Ok(()),
+        }
+    }
+
+    fn delete(&mut self, key: &str) -> Result<(), Error> {
+        let primary = self.primary.delete(key);
+        let copy = self.copy.delete(key);
+        primary.and(copy)
+    }
+}
+
+/// Encrypts a secret so only the current user can decrypt it. `context` is
+/// bound to the result: a sealed grant opens only under its own key.
+#[cfg(windows)]
+trait Sealer: Send {
+    fn seal(&self, secret: &[u8], context: &[u8]) -> Result<Vec<u8>, Error>;
+    fn open(&self, sealed: &[u8], context: &[u8]) -> Result<Vec<u8>, Error>;
+}
+
+/// Sealed grants, one file per key, replaced whole on every write.
+#[cfg(windows)]
+struct SealedFiles<S> {
+    dir: PathBuf,
+    sealer: S,
+}
+
+#[cfg(windows)]
+impl<S> SealedFiles<S> {
+    const MAGIC: &'static [u8] = b"chanceify-sealed-grant-1\n";
+
+    fn path(&self, key: &str) -> PathBuf {
+        // Keys are "<hex profile>:<slot name>"; ':' cannot name a Windows file.
+        self.dir.join(format!("{}.sealed", key.replace(':', ".")))
+    }
+
+    fn context(key: &str) -> Vec<u8> {
+        format!("{SERVICE}\n{key}").into_bytes()
+    }
+}
+
+#[cfg(windows)]
+impl<S: Sealer> ProtectedStore for SealedFiles<S> {
+    fn read(&mut self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+        let bytes = match std::fs::read(self.path(key)) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err(Error::Filesystem),
+        };
+        let sealed = bytes.strip_prefix(Self::MAGIC).ok_or(Error::Invalid)?;
+        self.sealer.open(sealed, &Self::context(key)).map(Some)
+    }
+
+    fn write(&mut self, key: &str, secret: &[u8]) -> Result<(), Error> {
+        let mut bytes = Self::MAGIC.to_vec();
+        bytes.extend(self.sealer.seal(secret, &Self::context(key))?);
+        std::fs::create_dir_all(&self.dir).map_err(|_| Error::Filesystem)?;
+        let path = self.path(key);
+        let temporary = path.with_extension("sealed.tmp");
+        std::fs::write(&temporary, bytes).map_err(|_| Error::Filesystem)?;
+        crate::util::replace_file(&temporary, &path).map_err(|_| {
+            let _ = std::fs::remove_file(&temporary);
+            Error::Filesystem
+        })
+    }
+
+    fn delete(&mut self, key: &str) -> Result<(), Error> {
+        let path = self.path(key);
+        let _ = remove_file(&path.with_extension("sealed.tmp"));
+        remove_file(&path)
+    }
+}
+
+/// DPAPI with the user's own key: the copy opens only for this Windows user.
+#[cfg(windows)]
+struct Dpapi;
+
+#[cfg(windows)]
+impl Dpapi {
+    fn transform(input: &[u8], context: &[u8], seal: bool) -> Result<Vec<u8>, Error> {
+        use windows_sys::Win32::Foundation::{GetLastError, LocalFree};
+        use windows_sys::Win32::Security::Cryptography::{
+            CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
+        };
+        let blob = |bytes: &[u8]| -> Result<CRYPT_INTEGER_BLOB, Error> {
+            Ok(CRYPT_INTEGER_BLOB {
+                cbData: u32::try_from(bytes.len()).map_err(|_| Error::Invalid)?,
+                pbData: bytes.as_ptr().cast_mut(),
+            })
+        };
+        let input = blob(input)?;
+        let entropy = blob(context)?;
+        let mut output = CRYPT_INTEGER_BLOB {
+            cbData: 0,
+            pbData: std::ptr::null_mut(),
+        };
+        // SAFETY: the input blobs borrow live slices that DPAPI only reads,
+        // and on success `output` is a LocalAlloc buffer of `cbData` bytes
+        // that is copied and then freed exactly once.
+        unsafe {
+            let ok = if seal {
+                CryptProtectData(
+                    &input,
+                    std::ptr::null(),
+                    &entropy,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    CRYPTPROTECT_UI_FORBIDDEN,
+                    &mut output,
+                )
+            } else {
+                CryptUnprotectData(
+                    &input,
+                    std::ptr::null_mut(),
+                    &entropy,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    CRYPTPROTECT_UI_FORBIDDEN,
+                    &mut output,
+                )
+            };
+            if ok == 0 || output.pbData.is_null() {
+                let code = GetLastError();
+                log::warn!(
+                    "sealed grant {} failed (Windows error code {code})",
+                    if seal { "encryption" } else { "decryption" }
+                );
+                return Err(if seal {
+                    Error::Unavailable
+                } else {
+                    Error::Invalid
+                });
+            }
+            let length = output.cbData as usize;
+            let bytes = std::slice::from_raw_parts(output.pbData, length).to_vec();
+            // Do not leave a decrypted grant behind in freed memory.
+            std::ptr::write_bytes(output.pbData, 0, length);
+            LocalFree(output.pbData.cast());
+            Ok(bytes)
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Sealer for Dpapi {
+    fn seal(&self, secret: &[u8], context: &[u8]) -> Result<Vec<u8>, Error> {
+        Self::transform(secret, context, true)
+    }
+    fn open(&self, sealed: &[u8], context: &[u8]) -> Result<Vec<u8>, Error> {
+        Self::transform(sealed, context, false)
+    }
+}
+
 type Job = Box<dyn FnOnce(&mut dyn ProtectedStore) + Send>;
 
 struct Inner {
@@ -414,6 +622,14 @@ impl Store {
         let backend = NativeStore {
             legacy_profile: dirs.is_legacy_profile(),
             ..Default::default()
+        };
+        #[cfg(windows)]
+        let backend = WithSealedCopy {
+            primary: backend,
+            copy: SealedFiles {
+                dir: dirs.state.join("credential-storage"),
+                sealer: Dpapi,
+            },
         };
         Self::with_backend(dirs, Box::new(backend))
     }

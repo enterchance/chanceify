@@ -510,6 +510,9 @@ impl RodioSink {
 
     /// Opens the output if it is not open, or if it died since.
     fn open_if_needed(&mut self) -> Result<(), OpenError> {
+        // Sound can arrive without a Play; ask for the priority here too
+        // (once per thread, then a thread-local check; upstream #785).
+        take_precedence();
         if self.output.as_ref().is_some_and(Output::failed) {
             log::warn!("the audio output stopped working; reopening it");
             self.output = None;
@@ -856,9 +859,16 @@ fn open_stream(
 /// Linux requires rtkit; CoreAudio owns its real-time callback on macOS.
 #[cfg(windows)]
 fn take_precedence() {
+    use std::cell::Cell;
     use windows_sys::Win32::System::Threading::{
         GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
     };
+    thread_local! {
+        static RAISED: Cell<bool> = const { Cell::new(false) };
+    }
+    if RAISED.with(|raised| raised.replace(true)) {
+        return;
+    }
     // SAFETY: the current thread's pseudo-handle needs no closing, and the
     // call takes nothing else.
     unsafe {
