@@ -727,3 +727,80 @@ where
         std::thread::spawn(write);
     }
 }
+
+/// Holds the computer awake while music plays on it, or lets it sleep
+/// again. Only the sleep the system takes on its own is blocked: the
+/// display still turns off, the screen still locks, and a sleep the person
+/// asks for still happens. Windows ties the hold to the calling thread, so
+/// this is always called from the interface thread.
+#[cfg(windows)]
+pub fn keep_system_awake(on: bool) {
+    use windows_sys::Win32::System::Power::{
+        ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState,
+    };
+    let state = if on {
+        ES_CONTINUOUS | ES_SYSTEM_REQUIRED
+    } else {
+        ES_CONTINUOUS
+    };
+    // SAFETY: a plain call with a flags value; no pointers are involved.
+    unsafe {
+        SetThreadExecutionState(state);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn keep_system_awake(_on: bool) {}
+
+/// Adds or removes the app's entry in the current user's startup list, so
+/// Windows starts it when the person signs in. Returns whether the list now
+/// holds what was asked for.
+#[cfg(windows)]
+pub fn set_start_with_computer(on: bool) -> bool {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::System::Registry::{
+        HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ, RegCloseKey, RegDeleteValueW,
+        RegOpenKeyExW, RegSetValueExW,
+    };
+    const NOT_FOUND: u32 = 2;
+    fn wide(text: &OsStr) -> Vec<u16> {
+        text.encode_wide().chain(Some(0)).collect()
+    }
+    let subkey = wide(OsStr::new("Software\\Microsoft\\Windows\\CurrentVersion\\Run"));
+    let name = wide(OsStr::new("Chanceify"));
+    let mut key: HKEY = std::ptr::null_mut();
+    // SAFETY: the strings are NUL-terminated and outlive the calls, and the
+    // key is closed before returning.
+    unsafe {
+        if RegOpenKeyExW(HKEY_CURRENT_USER, subkey.as_ptr(), 0, KEY_SET_VALUE, &mut key) != 0 {
+            return false;
+        }
+        let ok = if on {
+            match std::env::current_exe() {
+                Ok(exe) => {
+                    let command = wide(OsStr::new(&format!("\"{}\"", exe.display())));
+                    RegSetValueExW(
+                        key,
+                        name.as_ptr(),
+                        0,
+                        REG_SZ,
+                        command.as_ptr().cast(),
+                        (command.len() * 2) as u32,
+                    ) == 0
+                }
+                Err(_) => false,
+            }
+        } else {
+            let status = RegDeleteValueW(key, name.as_ptr());
+            status == 0 || status == NOT_FOUND
+        };
+        RegCloseKey(key);
+        ok
+    }
+}
+
+#[cfg(not(windows))]
+pub fn set_start_with_computer(_on: bool) -> bool {
+    false
+}

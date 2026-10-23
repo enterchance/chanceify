@@ -893,6 +893,20 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                 );
             }
             ui.add_space(4.0);
+            if cfg!(windows)
+                && (needle.is_empty() || "start with your computer startup login".contains(needle.as_str()))
+            {
+                let mut on = app.settings.start_with_computer;
+                if widgets::switch_labeled(ui, &palette, "Start with your computer", &mut on).changed() {
+                    if crate::util::set_start_with_computer(on) {
+                        app.settings.start_with_computer = on;
+                        app.mark_settings_dirty();
+                    } else {
+                        app.toast_error("Couldn't change the startup entry");
+                    }
+                }
+                ui.add_space(4.0);
+            }
             if playback_dirty
                 || playback_rows[11].matches(&needle, &playback)
                 || playback_rows[12].matches(&needle, &playback)

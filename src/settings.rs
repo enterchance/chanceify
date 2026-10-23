@@ -1439,6 +1439,8 @@ pub struct Settings {
     /// its tray menu stay, so the old behaviour is one toggle away in
     /// Settings → Playback.
     pub keep_playing_in_background: bool,
+    /// Whether Windows starts the app when the person signs in.
+    pub start_with_computer: bool,
     /// Ask GitHub once a day whether a newer release exists.
     pub check_for_updates: bool,
     pub download_updates_automatically: bool,
@@ -1772,6 +1774,7 @@ impl Default for Settings {
             personal_app_intro_seen: false,
             playback_authorized: false,
             keep_playing_in_background: false,
+            start_with_computer: false,
             check_for_updates: true,
             download_updates_automatically: false,
             pinned_contexts: Vec::new(),
@@ -3826,6 +3829,9 @@ pub struct SessionState {
     pub rootlist: Option<CachedRootlist>,
     /// Shuffle mode saved across contexts and restarts.
     pub shuffle_on: bool,
+    /// Local repeat mode ("off", "context" or "track") saved across
+    /// restarts. Sessions saved before it existed read as off.
+    pub repeat: String,
     /// Each table's chosen sort, by encoded page, restored at start.
     pub sorts: Vec<(String, crate::model::TableSort)>,
     /// Last window inner size, to restore on next launch.
@@ -3889,6 +3895,25 @@ mod session_tests {
         let state: SessionState = serde_json::from_str(r#"{"last_page":"home"}"#).unwrap();
         assert_eq!(state.last_page.as_deref(), Some("home"));
         assert_eq!(state.rootlist, None);
+        assert_eq!(
+            crate::player::RepeatMode::from_api(&state.repeat),
+            crate::player::RepeatMode::Off,
+            "no saved repeat mode is off"
+        );
+    }
+
+    #[test]
+    fn the_repeat_mode_round_trips() {
+        let state = SessionState {
+            repeat: crate::player::RepeatMode::Track.api_name().into(),
+            ..SessionState::default()
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        let read = serde_json::from_str::<SessionState>(&json).unwrap();
+        assert_eq!(
+            crate::player::RepeatMode::from_api(&read.repeat),
+            crate::player::RepeatMode::Track
+        );
     }
 
     #[test]
