@@ -137,6 +137,21 @@ fn guarded<R: Default>(what: &str, draw: impl FnOnce() -> R) -> R {
     }
 }
 
+/// What the visualizer is drawn over when the bar has no background of its
+/// own. A solid window already paints an opaque ground there, so nothing is
+/// added. A see-through window (Frosted Glass, or Transparency below 100%)
+/// paints no ground at all, so the bar gets the window's own colour, which
+/// is see-through by just as much as the rest of the window. Without it the
+/// visualizer showed the desktop straight through, however solid the window
+/// had been asked to be.
+fn vis_ground(app: &App) -> Color32 {
+    if app.settings.window_see_through() {
+        app.palette.window
+    } else {
+        Color32::TRANSPARENT
+    }
+}
+
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     eq_preview_watchdog(app, &ui.ctx().clone());
@@ -172,7 +187,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             .exact_size(area.height())
             .resizable(false)
             .show_separator_line(false)
-            .frame(Frame::new().fill(Color32::TRANSPARENT))
+            .frame(Frame::new().fill(vis_ground(app)))
             .show(ui, |ui| {
                 let now = app.now_playing();
                 ui.ctx()
@@ -233,7 +248,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let popped_out = app.float_slot(super::views_panel::default_float(ui.ctx())).is_some() && !app.mini_active;
     let fill = if popped_out {
         // The controls are out on their own panel: the bar's background goes.
-        Color32::TRANSPARENT
+        vis_ground(app)
     } else if palette.dark {
         Color32::from_rgb(0x11, 0x12, 0x13)
     } else {

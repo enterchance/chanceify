@@ -2074,10 +2074,17 @@ impl Settings {
         SwayPreset { name: "Shake", lean: 1.0, speed: 3.0, bass: 3.0, bob: 0.0, stalk: 0.0, kind: 4, amp: 0.07 },
     ];
 
-    /// How solid the window is: 1 is opaque, down to 0.3.
+    /// How solid the window is: 1 is opaque, down to 0.3. It goes in whole
+    /// percents, the way the slider shows it: a drag that stops a hair short
+    /// of the end reads "100%" and must be solid, not 99.6% see-through
+    /// (which left the visualizer showing the desktop with no way back).
     pub fn window_solidity(&self) -> f32 {
         let value = self.window_opacity;
-        if value.is_finite() && value > 0.0 { value.clamp(0.3, 1.0) } else { 1.0 }
+        if value.is_finite() && value > 0.0 {
+            ((value * 100.0).round() / 100.0).clamp(0.3, 1.0)
+        } else {
+            1.0
+        }
     }
 
     /// Whether the window lets the desktop show through at all.
@@ -3033,6 +3040,12 @@ mod tests {
         assert!(!settings.window_see_through());
         settings.window_opacity = 0.01;
         assert!((settings.window_solidity() - 0.3).abs() < 1e-6);
+        assert!(settings.window_see_through());
+        // The slider shows whole percents; "100%" is solid whatever the drag left.
+        settings.window_opacity = 0.996;
+        assert!((settings.window_solidity() - 1.0).abs() < 1e-6);
+        assert!(!settings.window_see_through());
+        settings.window_opacity = 0.99;
         assert!(settings.window_see_through());
     }
 
