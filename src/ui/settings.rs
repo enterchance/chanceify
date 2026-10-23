@@ -520,19 +520,64 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
             }
             if needle.is_empty() && !in_use {
                 ui.add_space(8.0);
-                theme::text(ui, "How to connect your own Spotify app (Premium)", theme::semibold(theme::BODY_TEXT), palette.text);
-                for line in [
-                    "1. Open developer.spotify.com/dashboard and log in with your Spotify account.",
-                    "2. Press Create app. Any name and description will do.",
-                    "3. Under Redirect URIs add exactly: http://127.0.0.1:8989/login",
-                    "4. Tick Web API, accept the terms and press Save.",
-                    "5. Open the app's Settings and copy the Client ID. Paste it in the box above, then press Authorize.",
-                ] {
-                    note(ui, &palette, line);
-                }
-                if theme::soft_button(ui, &palette, Some(Icon::ExternalLink), "Open the Spotify dashboard", false).clicked() {
-                    app.actions.push(Action::OpenUrl("https://developer.spotify.com/dashboard".into()));
-                }
+                // Word for word the setup on the chanceify site, with the
+                // dashboard a link and the redirect address copied on a click.
+                theme::text(ui, "setup", theme::semibold(theme::BODY_TEXT), palette.text);
+                let body = |text: &str| {
+                    egui::RichText::new(text)
+                        .font(theme::regular(theme::BODY_TEXT))
+                        .color(palette.secondary)
+                };
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.label(body("1. open the "));
+                    let link = ui
+                        .add(
+                            egui::Label::new(
+                                egui::RichText::new("spotify developer dashboard")
+                                    .font(theme::regular(theme::BODY_TEXT))
+                                    .color(palette.accent)
+                                    .underline(),
+                            )
+                            .sense(egui::Sense::click()),
+                        )
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text("developer.spotify.com/dashboard");
+                    if link.clicked() {
+                        app.actions.push(Action::OpenUrl(
+                            "https://developer.spotify.com/dashboard".into(),
+                        ));
+                    }
+                    ui.label(body(" and sign in."));
+                });
+                note(ui, &palette, "2. create an app. any name.");
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.label(body("3. redirect uri: "));
+                    const REDIRECT: &str = "http://127.0.0.1:8989/login";
+                    let copy = ui
+                        .add(
+                            egui::Label::new(
+                                egui::RichText::new(REDIRECT)
+                                    .font(theme::regular(theme::BODY_TEXT))
+                                    .color(palette.text)
+                                    .background_color(palette.surface),
+                            )
+                            .sense(egui::Sense::click()),
+                        )
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text("click to copy");
+                    if copy.clicked() {
+                        ui.ctx().copy_text(REDIRECT.to_owned());
+                        app.toast("Copied");
+                    }
+                });
+                note(ui, &palette, "4. tick web api, save, copy the client id.");
+                note(
+                    ui,
+                    &palette,
+                    "5. in chanceify: settings, personal spotify app. paste it and authorize.",
+                );
             }
         });
     }
