@@ -289,7 +289,7 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
             if (lyrics_page || app.fullscreen_vis || !app.settings.art_expanded)
                 && let Some(now) = app.now_playing()
             {
-                let side = if lyrics_page { 44.0 } else { (outer.width() * 0.26).clamp(64.0, 120.0) };
+                let side = if lyrics_page { 44.0 } else { (outer.width() * 0.34).clamp(80.0, 170.0) };
                 let pad = 8.0;
                 // Above the controls; where that would be cut off by the top of
                 // the window, below them instead.
