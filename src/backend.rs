@@ -136,9 +136,13 @@ pub enum ApiRequest {
     TopArtists {
         generation: u64,
     },
-    /// Songs like these (artist, title), from Last.fm, found on Spotify.
+    /// Songs like these (artist, title), from Spotify's radio for the seed
+    /// songs over the streaming session when there is one, otherwise from
+    /// Last.fm, found on Spotify.
     Recommendations {
         seeds: Vec<(String, String)>,
+        /// The seed songs' links, for their radio stations.
+        seed_uris: Vec<String>,
         lastfm_key: String,
         generation: u64,
     },
@@ -413,6 +417,10 @@ pub enum ApiResponse {
     Recommendations {
         generation: u64,
         result: ApiResult<Vec<Track>>,
+        /// False when a request failed part way (Spotify's rate limit, say),
+        /// so the songs are only some of those there would be. Such a list
+        /// is shown but not kept, and asked for again later.
+        complete: bool,
     },
     Discover {
         term: String,
@@ -4440,6 +4448,53 @@ async fn scan_unavailable(
     }
 }
 
+/// How many songs "Recommended for you" asks for.
+const RECOMMENDED_SONGS: usize = 24;
+
+/// Songs like the seeds, from Spotify's radio station for each seed song,
+/// read over the streaming session. The seeds themselves are left out and
+/// each song comes once. More are gathered than are shown, since Home leaves
+/// out the songs the listener already has.
+async fn station_recommendations(
+    session: &librespot_core::session::Session,
+    seed_uris: &[String],
+) -> Vec<Track> {
+    const PER_SEED: usize = 15;
+    let mut tracks: Vec<Track> = Vec::new();
+    for seed in seed_uris.iter().take(5) {
+        let Some(station) = crate::util::station_uri(seed) else {
+            continue;
+        };
+        let found = match tokio::time::timeout(
+            RADIO_TIMEOUT,
+            session_reads::station(session, &station),
+        )
+        .await
+        {
+            Ok(Ok(found)) => found,
+            Ok(Err(error)) => {
+                log::debug!("recommendations: radio {station} failed: {error:#}");
+                continue;
+            }
+            Err(_) => {
+                log::debug!("recommendations: radio {station} timed out");
+                continue;
+            }
+        };
+        let fresh: Vec<Track> = found
+            .into_iter()
+            .filter(|track| {
+                !track.uri.is_empty()
+                    && !seed_uris.contains(&track.uri)
+                    && !tracks.iter().any(|held| held.uri == track.uri)
+            })
+            .take(PER_SEED)
+            .collect();
+        tracks.extend(fresh);
+    }
+    tracks
+}
+
 /// The playback session of the signed-in account, for what only it can do.
 fn playback_session<'a>(
     api: &ApiGateway,
@@ -4687,6 +4742,29 @@ async fn handle(
             None,
         );
     }
+    // Recommendations come from the seed songs' radio over the session
+    // first: it spends none of the Web API's quota, which Last.fm's way
+    // spends one search per song.
+    if let ApiRequest::Recommendations {
+        seed_uris,
+        generation,
+        ..
+    } = &request
+        && !seed_uris.is_empty()
+        && let Ok(session) = playback_session(api, engine)
+    {
+        let tracks = station_recommendations(session, seed_uris).await;
+        if tracks.len() >= RECOMMENDED_SONGS {
+            return (
+                ApiResponse::Recommendations {
+                    generation: *generation,
+                    result: Ok(tracks),
+                    complete: true,
+                },
+                None,
+            );
+        }
+    }
     let operation = operation_for(api, &request);
     // A session whose long-lived connection has dropped still answers over
     // its HTTP client, so the engine's presence is the only liveness test;
@@ -4772,23 +4850,27 @@ async fn handle(
         },
         ApiRequest::Recommendations {
             seeds,
+            seed_uris: _,
             lastfm_key,
             generation,
         } => {
             use crate::open_sources::same_name;
             // Spotify's own recommendations are closed to apps like this one.
             // Last.fm names the songs; Spotify is only asked to find them.
+            let mut complete = false;
             let result = match crate::open_sources::client() {
                 None => Err(ApiError::Network("no network client".into())),
                 Some(http) => {
                     let pairs = crate::open_sources::similar_tracks(&http, &lastfm_key, &seeds).await;
                     if pairs.is_empty() {
+                        // A whole answer, not one to ask again for.
+                        complete = true;
                         Err(ApiError::Network("Last.fm had no suggestions".into()))
                     } else {
                         let mut tracks: Vec<crate::api::models::Track> = Vec::new();
                         let mut failure = None;
-                        for (artist, title) in pairs.iter().take(30) {
-                            if tracks.len() >= 24 {
+                        for (artist, title) in pairs.iter().take(RECOMMENDED_SONGS + 6) {
+                            if tracks.len() >= RECOMMENDED_SONGS {
                                 break;
                             }
                             let query = format!("track:\"{title}\" artist:\"{artist}\"");
@@ -4815,6 +4897,7 @@ async fn handle(
                                 }
                             }
                         }
+                        complete = failure.is_none();
                         match failure {
                             Some(error) if tracks.is_empty() => Err(error),
                             _ => Ok(tracks),
@@ -4822,7 +4905,11 @@ async fn handle(
                     }
                 }
             };
-            ApiResponse::Recommendations { generation, result }
+            ApiResponse::Recommendations {
+                generation,
+                result,
+                complete,
+            }
         }
         ApiRequest::Discover { term, generation } => {
             let result = routed!(search(&term, &["playlist"]))

@@ -4670,11 +4670,39 @@ pub fn shelf(
     title: &str,
     add_contents: impl FnOnce(&mut Ui),
 ) {
+    shelf_scrolled(ui, palette, id, title, false, add_contents);
+}
+
+/// Like [`shelf`], but the plain mouse wheel over the row moves it sideways
+/// while it has room that way, then scrolls the page at either end.
+pub fn wheel_shelf(
+    ui: &mut Ui,
+    palette: &Palette,
+    id: &str,
+    title: &str,
+    add_contents: impl FnOnce(&mut Ui),
+) {
+    shelf_scrolled(ui, palette, id, title, true, add_contents);
+}
+
+fn shelf_scrolled(
+    ui: &mut Ui,
+    palette: &Palette,
+    id: &str,
+    title: &str,
+    wheel: bool,
+    add_contents: impl FnOnce(&mut Ui),
+) {
     ui.add_space(8.0);
     theme::section_title(ui, palette, title);
     ui.add_space(4.0);
-    // The wheel scrolls the page; Shift+wheel moves the row.
-    let _output = crate::autoscroll::show(
+    // The wheel scrolls the page; Shift+wheel moves the row. A wheel shelf
+    // also takes the plain wheel while the pointer is over it.
+    let wheel_id = egui::Id::new(("shelf-wheel", id));
+    if wheel {
+        wheel_sideways(ui, wheel_id);
+    }
+    let output = crate::autoscroll::show(
         ui,
         egui::ScrollArea::horizontal().id_salt(id),
         egui::Vec2b::new(true, false),
@@ -4685,6 +4713,9 @@ pub fn shelf(
             });
         },
     );
+    if wheel {
+        note_sideways(ui, wheel_id, &output);
+    }
     ui.add_space(12.0);
 }
 

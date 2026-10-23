@@ -999,7 +999,7 @@ fn made_for_you(app: &mut App, ui: &mut egui::Ui) {
     if playlists.is_empty() && !loading && !failed {
         return;
     }
-    widgets::shelf(
+    widgets::wheel_shelf(
         ui,
         &palette,
         "made-for-you",
@@ -1529,8 +1529,9 @@ fn recommendations(app: &mut App, ui: &mut egui::Ui) {
         tracks = Loadable::Loaded(kept);
     }
     let title = gettext(app.locale, "Recommended for you");
-    // Always the whole list.
-    track_list(app, ui, &title, tracks, usize::MAX, None, None);
+    // More songs are fetched than shown, since those you already have drop
+    // out above; the rest show up to a full set.
+    track_list(app, ui, &title, tracks, 24, None, None);
     ui.add_space(14.0);
 }
 

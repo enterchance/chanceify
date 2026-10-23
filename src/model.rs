@@ -607,6 +607,12 @@ pub struct HomeData {
     pub top_songs_loading: bool,
     pub top_songs_complete: bool,
     pub recommendations: Loadable<Vec<Track>>,
+    /// The seeds (artist and title, then the songs' links) the
+    /// recommendations were last asked for with, to ask again with.
+    pub recs_seeds: (Vec<(String, String)>, Vec<String>),
+    /// When to ask for the recommendations again, after an answer that
+    /// failed or came back cut short.
+    pub recs_retry_at: Option<Instant>,
     pub discover: HashMap<String, Loadable<Vec<Playlist>>>,
     pub discover_pending: HashMap<String, Loadable<Vec<Playlist>>>,
     /// Saved podcasts with their newest episodes, in library order, for the

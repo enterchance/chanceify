@@ -401,8 +401,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let index = app.dirs.index_dir();
     if let Some(library) = app.local_scan.take_finished() {
-        app.local_songs = library;
-        app.local_sync.forget_genres();
+        app.adopt_local_songs(library);
     }
     app.refresh_local_genres();
     app.request_local_saved();
@@ -1200,7 +1199,7 @@ fn toolbar(
     let matching = app.local_sync.progress();
     let match_label = match matching {
         Some((done, total)) => format!("Matching with Spotify… {done}/{total}"),
-        None => match app.local_matches.matched() {
+        None => match app.local_found() {
             0 => "Match with Spotify".to_string(),
             found => format!("Match with Spotify ({found} found)"),
         },

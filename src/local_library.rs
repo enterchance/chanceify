@@ -462,12 +462,18 @@ impl Scan {
         let file = library_file(index);
         std::thread::spawn(move || {
             std::fs::create_dir_all(&root).ok();
-            let mut files = find_files(&root);
-            for folder in &extra {
-                for found in find_files(folder) {
-                    if !files.contains(&found) {
-                        files.push(found);
-                    }
+            // Each file once, even when two folders in the list overlap or
+            // name the same place differently (case or separators on
+            // Windows), so no song is counted twice.
+            let mut files: Vec<PathBuf> = Vec::new();
+            let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+            for found in std::iter::once(&root)
+                .chain(extra.iter())
+                .flat_map(|folder| find_files(folder))
+            {
+                let key = std::fs::canonicalize(&found).unwrap_or_else(|_| found.clone());
+                if seen.insert(key) {
+                    files.push(found);
                 }
             }
             shared.lock().view.total = files.len();

@@ -65,6 +65,9 @@ const TOAST_FRAME: Duration = Duration::from_millis(33);
 /// How long the membership walk waits after Spotify throttles it. Long
 /// enough to be off the back of the refusal rather than asking into it.
 const MEMBERSHIP_RETRY: Duration = Duration::from_secs(120);
+/// How long "Recommended for you" waits before asking again after a failed
+/// or cut-short answer, long enough for Spotify's rate limit to pass.
+const RECS_RETRY: Duration = Duration::from_secs(90);
 /// How long nothing is asked of Deezer after a lookup it could not answer.
 const BPM_RETRY: Duration = Duration::from_secs(30);
 /// The least time between writes of the tempo cache.
@@ -2767,14 +2770,18 @@ impl App {
         self.dirs.cache.join("home-recommendations.json")
     }
 
-    /// The songs suggested earlier, if they are less than six hours old and
-    /// for this account.
+    /// The songs suggested earlier, if they are less than six hours old, for
+    /// this account, and a whole answer. A list cut short by Spotify's rate
+    /// limit is never reused.
     fn recs_cache_load(&self) -> Option<Vec<crate::api::models::Track>> {
         let value: serde_json::Value = serde_json::from_slice(&std::fs::read(self.recs_cache_path()).ok()?).ok()?;
         let user = self.user.as_ref().map(|user| user.id.clone()).unwrap_or_default();
         let at = value.get("at")?.as_u64()?;
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
-        if value.get("user")?.as_str()? != user || now.saturating_sub(at) > 6 * 3600 {
+        if value.get("user")?.as_str()? != user
+            || now.saturating_sub(at) > 6 * 3600
+            || value.get("complete").and_then(serde_json::Value::as_bool) != Some(true)
+        {
             return None;
         }
         let tracks: Vec<crate::api::models::Track> = serde_json::from_value(value.get("tracks")?.clone()).ok()?;
@@ -2786,7 +2793,7 @@ impl App {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
-        let body = serde_json::json!({ "at": now, "user": user, "tracks": tracks });
+        let body = serde_json::json!({ "at": now, "user": user, "complete": true, "tracks": tracks });
         let path = self.recs_cache_path();
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -4477,11 +4484,15 @@ impl App {
         } else if let Some(at) = self.lyrics_retry_at {
             ctx.request_repaint_after(at.saturating_duration_since(std::time::Instant::now()).max(std::time::Duration::from_millis(500)));
         }
+        self.retry_recommendations(ctx);
         self.poll_deck();
         self.poll_folder_pick();
         self.poll_files_pick();
         self.drive_lastfm();
         self.drive_matches();
+        if let Some(wait) = self.match_wake() {
+            ctx.request_repaint_after(wait);
+        }
         self.poll_custom_themes(ctx);
         if let Some(wait) = self.window_focus(ctx.input(|input| {
             // A minimised window is away even where it keeps focus.
@@ -5688,10 +5699,17 @@ impl App {
         }
     }
 
-    /// Starts "Recommended for you" from these seeds (artist, title). With
-    /// none, the songs played on this computer, then the recently played
-    /// ones, stand in; with nothing at all the shelf says what to do.
-    fn begin_recommendations(&mut self, generation: u64, mut seeds: Vec<(String, String)>) {
+    /// Starts "Recommended for you" from these seeds (artist, title) and
+    /// the seed songs' links. With none, the songs played on this computer,
+    /// then the recently played ones, stand in; with nothing at all the
+    /// shelf says what to do.
+    fn begin_recommendations(
+        &mut self,
+        generation: u64,
+        mut seeds: Vec<(String, String)>,
+        mut seed_uris: Vec<String>,
+    ) {
+        self.home.recs_retry_at = None;
         // A recent answer is reused: it costs Spotify searches.
         if let Some(cached) = self.recs_cache_load() {
             self.home.recommendations = Loadable::Loaded(cached);
@@ -5700,17 +5718,26 @@ impl App {
         if seeds.is_empty() {
             let now = jiff::Timestamp::now().as_second();
             let (_, songs) = self.stats.ranking(now, crate::stats::local_offset(), crate::stats::Range::Ever);
-            seeds = songs
+            let rows: Vec<_> = songs.iter().filter(|row| !row.sub.is_empty()).take(5).collect();
+            seeds = rows
                 .iter()
-                .filter(|row| !row.sub.is_empty())
-                .take(5)
                 .map(|row| (row.sub.clone(), row.name.clone()))
+                .collect();
+            seed_uris = rows
+                .iter()
+                .filter(|row| row.uri.starts_with("spotify:track:"))
+                .map(|row| row.uri.clone())
                 .collect();
         }
         if seeds.is_empty()
             && let Loadable::Loaded(history) = &self.home.recently_played
         {
-            seeds = history
+            let entries: Vec<_> = history
+                .iter()
+                .filter(|entry| !entry.track.artists.is_empty())
+                .take(5)
+                .collect();
+            seeds = entries
                 .iter()
                 .filter_map(|entry| {
                     entry
@@ -5719,7 +5746,11 @@ impl App {
                         .first()
                         .map(|artist| (artist.name.clone(), entry.track.name.clone()))
                 })
-                .take(5)
+                .collect();
+            seed_uris = entries
+                .iter()
+                .filter(|entry| entry.track.uri.starts_with("spotify:track:"))
+                .map(|entry| entry.track.uri.clone())
                 .collect();
         }
         if seeds.is_empty() {
@@ -5732,12 +5763,29 @@ impl App {
         if self.home.recommendations.get().is_none() {
             self.home.recommendations = Loadable::Loading;
         }
+        self.home.recs_seeds = (seeds.clone(), seed_uris.clone());
         let lastfm_key = self.art_key();
         self.backend.api(ApiRequest::Recommendations {
             seeds,
+            seed_uris,
             lastfm_key,
             generation,
         });
+    }
+
+    /// Asks for the recommendations again once the wait after a failed or
+    /// cut-short answer is over, with the seeds asked with before.
+    fn retry_recommendations(&mut self, ctx: &egui::Context) {
+        let Some(at) = self.home.recs_retry_at else {
+            return;
+        };
+        let now = Instant::now();
+        if now < at {
+            ctx.request_repaint_after(at - now);
+            return;
+        }
+        let (seeds, seed_uris) = self.home.recs_seeds.clone();
+        self.begin_recommendations(self.home.generation, seeds, seed_uris);
     }
 
     fn load_home(&mut self, force: bool) {
@@ -7378,7 +7426,14 @@ impl App {
                         })
                         .take(5)
                         .collect();
-                    self.begin_recommendations(generation, seeds);
+                    let seed_uris: Vec<String> = tracks
+                        .iter()
+                        .filter(|track| !track.name.is_empty() && !track.artists.is_empty())
+                        .filter(|track| track.uri.starts_with("spotify:track:"))
+                        .take(5)
+                        .map(|track| track.uri.clone())
+                        .collect();
+                    self.begin_recommendations(generation, seeds, seed_uris);
                     let uris: Vec<String> = tracks.iter().map(|track| track.uri.clone()).collect();
                     self.request_contains(uris);
                     self.home.top_tracks = Loadable::Loaded(tracks);
@@ -7390,7 +7445,7 @@ impl App {
                     self.home.top_tracks = Loadable::Failed(error.to_string());
                     // Spotify's top songs failing must not leave the
                     // recommendations loading for ever.
-                    self.begin_recommendations(generation, Vec::new());
+                    self.begin_recommendations(generation, Vec::new(), Vec::new());
                 }
             }
             ApiResponse::HiddenSongs { generation, result } => {
@@ -7429,18 +7484,35 @@ impl App {
                 }
                 self.home.top_artists.refresh(result);
             }
-            ApiResponse::Recommendations { generation, result } => {
+            ApiResponse::Recommendations {
+                generation,
+                result,
+                complete,
+            } => {
                 if generation != self.home.generation {
                     return;
                 }
                 if let Ok(tracks) = &result {
                     let uris: Vec<String> = tracks.iter().map(|track| track.uri.clone()).collect();
                     self.request_contains(uris);
-                    if !tracks.is_empty() {
+                    if complete && !tracks.is_empty() {
                         self.recs_cache_save(tracks);
                     }
                 }
-                self.home.recommendations.refresh(result);
+                // A failed or cut-short answer (Spotify's rate limit, most
+                // often) is asked for again once the limit has had time to
+                // pass, instead of standing as the final list.
+                if !complete {
+                    self.home.recs_retry_at = Some(Instant::now() + RECS_RETRY);
+                }
+                // A cut-short list never replaces a longer one already shown.
+                let shorter = match (&result, self.home.recommendations.get()) {
+                    (Ok(tracks), Some(shown)) => !complete && tracks.len() < shown.len(),
+                    _ => false,
+                };
+                if !shorter {
+                    self.home.recommendations.refresh(result);
+                }
             }
             ApiResponse::Discover {
                 term,
@@ -15945,6 +16017,59 @@ mod tests {
             }
         }
         assert!(shelf_left < initial_left, "Shift+wheel must move the shelf");
+        assert_eq!(page_offset, 0.0, "the enclosing page must stay put");
+    }
+
+    #[test]
+    fn plain_wheel_moves_a_wheel_shelf_without_scrolling_the_page() {
+        let mut app = headless_app();
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut shelf_left = 0.0;
+        let mut initial_left = 0.0;
+        let mut page_offset = 0.0;
+        for frame in 0..6 {
+            let mut input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600.0, 400.0),
+                )),
+                time: Some(frame as f64 / 60.0),
+                ..Default::default()
+            };
+            input
+                .events
+                .push(egui::Event::PointerMoved(egui::pos2(100.0, 70.0)));
+            if frame == 2 {
+                input.events.push(egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: egui::vec2(0.0, -3.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            let mut output = ctx.run_ui(input, |ui| {
+                app.lock_scroll_axis(ui.ctx());
+                let page = egui::ScrollArea::vertical().show(ui, |ui| {
+                    crate::ui::widgets::wheel_shelf(
+                        ui,
+                        &app.palette,
+                        "wheel-test-wheel-shelf",
+                        "Shelf",
+                        |ui| {
+                            shelf_left = ui.allocate_space(egui::vec2(1600.0, 100.0)).1.left();
+                        },
+                    );
+                    ui.allocate_space(egui::vec2(100.0, 1200.0));
+                });
+                page_offset = page.state.offset.y;
+            });
+            output.textures_delta.clear();
+            if frame == 0 {
+                initial_left = shelf_left;
+            }
+        }
+        assert!(shelf_left < initial_left, "the plain wheel must move a wheel shelf, as Made for you is");
         assert_eq!(page_offset, 0.0, "the enclosing page must stay put");
     }
 
