@@ -91,7 +91,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     theme::subtle(ui, &palette, &gettext(locale, "No popular songs to show."));
                 }
                 Loadable::Loading | Loadable::NotLoaded => {
-                    widgets::loading_row(ui, &palette, app.locale)
+                    widgets::skeleton_rows(ui, &palette, app.locale, 5)
                 }
                 Loadable::Failed(error) => {
                     let error = error.clone();
@@ -196,7 +196,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                         }
                     }
                 }
-                None => widgets::loading_row(ui, &palette, app.locale),
+                None => widgets::grid(ui, |ui| {
+                    widgets::skeleton_cards(ui, &palette, app.locale, 6, false)
+                }),
             }
             ui.add_space(20.0);
 

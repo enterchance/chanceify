@@ -1291,8 +1291,12 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
         }
     }
     if finite.is_none() && table.loading {
-        ui.add_space(8.0);
-        widgets::loading_row(ui, &palette, app.locale);
+        if table.items.is_empty() {
+            widgets::skeleton_rows(ui, &palette, app.locale, 8);
+        } else {
+            ui.add_space(8.0);
+            widgets::loading_row(ui, &palette, app.locale);
+        }
     }
     if finite.is_none()
         && let Some(error) = table.error
@@ -1955,7 +1959,7 @@ pub fn top_songs(app: &mut App, ui: &mut egui::Ui) {
     let tracks = match &app.home.top_songs {
         Loadable::Loaded(tracks) => tracks,
         Loadable::Loading | Loadable::NotLoaded => {
-            widgets::loading_row(ui, &palette, app.locale);
+            widgets::skeleton_rows(ui, &palette, app.locale, 10);
             return;
         }
         Loadable::Failed(error) => {
@@ -2156,7 +2160,7 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
             } else {
                 ui.add_space(40.0);
             }
-            widgets::loading_row(ui, &app.palette, app.locale);
+            widgets::skeleton_rows(ui, &app.palette, app.locale, 8);
         }
         Loadable::Failed(error) => {
             let error = error.clone();
@@ -2313,7 +2317,7 @@ pub fn album(app: &mut App, ui: &mut egui::Ui, id: &str) {
             } else {
                 ui.add_space(40.0);
             }
-            widgets::loading_row(ui, &app.palette, app.locale);
+            widgets::skeleton_rows(ui, &app.palette, app.locale, 8);
         }
         Loadable::Failed(error) => {
             let error = error.clone();

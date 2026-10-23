@@ -76,7 +76,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
             } else {
                 ui.add_space(40.0);
             }
-            widgets::loading_row(ui, &palette, app.locale);
+            widgets::skeleton_rows(ui, &palette, app.locale, 6);
         }
         Loadable::Failed(error) => {
             let error = error.clone();

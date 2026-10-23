@@ -2129,6 +2129,7 @@ fn flag_picture(locale: crate::i18n::Locale) -> (&'static str, &'static [u8]) {
         L::Russian => ("bytes://flag-ru.png", include_bytes!("../../assets/flags/ru.png")),
         L::Italian => ("bytes://flag-it.png", include_bytes!("../../assets/flags/it.png")),
         L::Japanese => ("bytes://flag-jp.png", include_bytes!("../../assets/flags/jp.png")),
+        L::Korean => ("bytes://flag-kr.png", include_bytes!("../../assets/flags/kr.png")),
         L::ChineseSimplified => ("bytes://flag-cn.png", include_bytes!("../../assets/flags/cn.png")),
         L::ChineseTraditional => ("bytes://flag-tw.png", include_bytes!("../../assets/flags/tw.png")),
         L::Turkish => ("bytes://flag-tr.png", include_bytes!("../../assets/flags/tr.png")),

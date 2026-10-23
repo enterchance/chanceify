@@ -795,7 +795,32 @@ fn first_ranks<'a>(
 fn order_entries(app: &App, shelf: Filter, sort: LibrarySort, entries: &mut [Entry]) {
     match sort {
         LibrarySort::Name => {
-            entries.sort_by_cached_key(|entry| (entry.name.to_lowercase(), entry.uri.clone()))
+            // Each row sorts under the folders that hold it: its key is the
+            // path of names down to it, so a folder's rows follow the folder
+            // in name order and the folders sort among their siblings.
+            let mut folders: Vec<(String, String)> = Vec::new();
+            let paths: Vec<Vec<(String, String)>> = entries
+                .iter()
+                .map(|entry| {
+                    folders.truncate(entry.depth as usize);
+                    let key = (
+                        entry.name.to_lowercase(),
+                        match &entry.folder {
+                            Some((id, _, _)) => id.clone(),
+                            None => entry.uri.clone(),
+                        },
+                    );
+                    let mut path = folders.clone();
+                    path.push(key.clone());
+                    if entry.folder.is_some() {
+                        folders.push(key);
+                    }
+                    path
+                })
+                .collect();
+            let mut order: Vec<usize> = (0..entries.len()).collect();
+            order.sort_by(|a, b| paths[*a].cmp(&paths[*b]));
+            permute(entries, &order);
         }
         LibrarySort::RecentlyPlayed => {
             let ranks = first_ranks(app.recent_contexts.iter().map(String::as_str));
@@ -850,6 +875,21 @@ fn order_entries(app: &App, shelf: Filter, sort: LibrarySort, entries: &mut [Ent
             if app.settings.pinned_contexts.contains(&entry.uri) {
                 entry.depth = 0;
             }
+        }
+    }
+}
+
+/// Puts `entries[order[i]]` at position `i`.
+fn permute<T>(entries: &mut [T], order: &[usize]) {
+    let mut place: Vec<usize> = vec![0; order.len()];
+    for (to, &from) in order.iter().enumerate() {
+        place[from] = to;
+    }
+    for start in 0..entries.len() {
+        while place[start] != start {
+            let to = place[start];
+            entries.swap(start, to);
+            place.swap(start, to);
         }
     }
 }
@@ -1460,7 +1500,17 @@ fn contents(app: &mut App, ui: &mut egui::Ui, grid_art: Option<Rect>) {
             if needle.is_empty() || liked.name.to_lowercase().contains(&needle) {
                 entries.push(liked);
             }
-            let show_folders = sort == LibrarySort::Spotify && needle.is_empty();
+            // Name keeps playlists inside their folders, as Spotify does, and
+            // sorts each folder on its own.
+            let show_folders = needle.is_empty()
+                && match sort {
+                    LibrarySort::Spotify => true,
+                    LibrarySort::Name => app
+                        .rootlist
+                        .iter()
+                        .any(|row| matches!(row, crate::player::RootlistEntry::FolderStart { .. })),
+                    _ => false,
+                };
             if show_folders {
                 folder_rows(app, &user_id, &mut entries);
             }

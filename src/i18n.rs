@@ -135,6 +135,8 @@ pub enum Locale {
     Italian,
     #[value(name = "ja")]
     Japanese,
+    #[value(name = "ko")]
+    Korean,
     #[value(name = "zh-Hans")]
     ChineseSimplified,
     #[value(name = "zh-Hant")]
@@ -160,6 +162,7 @@ impl fastframe_i18n::Locale for Locale {
             Self::Russian => Some(&ru::Translator),
             Self::Italian => Some(&it::Translator),
             Self::Japanese => Some(&ja::Translator),
+            Self::Korean => Some(&ko::Translator),
             Self::ChineseSimplified => Some(&zh_hans::Translator),
             Self::ChineseTraditional => Some(&zh_hant::Translator),
             Self::Turkish => Some(&tr::Translator),
@@ -185,6 +188,7 @@ impl Locale {
             Self::Russian => "ru",
             Self::Italian => "it",
             Self::Japanese => "ja",
+            Self::Korean => "ko",
             Self::ChineseSimplified => "zh-Hans",
             Self::ChineseTraditional => "zh-Hant",
             Self::Turkish => "tr",
@@ -215,6 +219,7 @@ impl Locale {
             Self::Russian => "Русский",
             Self::Italian => "Italiano",
             Self::Japanese => "日本語",
+            Self::Korean => "한국어",
             Self::ChineseSimplified => "简体中文",
             Self::ChineseTraditional => "繁體中文",
             Self::Turkish => "Türkçe",
@@ -255,6 +260,7 @@ impl Locale {
             "ru" => Self::Russian,
             "it" => Self::Italian,
             "ja" => Self::Japanese,
+            "ko" => Self::Korean,
             "tr" => Self::Turkish,
             "uk" => Self::Ukrainian,
             // Portuguese outside Brazil follows the European standard. A bare
@@ -351,6 +357,7 @@ pub const LOCALES: &[Locale] = &[
     Locale::Russian,
     Locale::Ukrainian,
     Locale::Japanese,
+    Locale::Korean,
     Locale::ChineseSimplified,
     Locale::ChineseTraditional,
 ];
@@ -388,6 +395,9 @@ mod tests {
             ("ru_UA.UTF-8", Locale::Russian),
             ("it-CH", Locale::Italian),
             ("ja-JP", Locale::Japanese),
+            ("ko", Locale::Korean),
+            ("ko-KR", Locale::Korean),
+            ("ko_KR.UTF-8", Locale::Korean),
             ("tr", Locale::Turkish),
             ("tr-TR", Locale::Turkish),
             ("tr_TR.UTF-8", Locale::Turkish),
@@ -419,7 +429,7 @@ mod tests {
         ] {
             assert_eq!(Locale::from_language_tag(tag), Some(expected), "{tag}");
         }
-        for tag in ["nb-NO", "ko-KR", "ar", "C", "POSIX", "", "-", "und"] {
+        for tag in ["nb-NO", "fi-FI", "ar", "C", "POSIX", "", "-", "und"] {
             assert_eq!(Locale::from_language_tag(tag), None, "{tag}");
         }
     }
@@ -432,7 +442,8 @@ mod tests {
         };
         assert_eq!(preferred(&["nb-NO", "de-DE", "en-US"]), Locale::German);
         assert_eq!(preferred(&["es-MX", "en-US"]), Locale::Spanish);
-        assert_eq!(preferred(&["ko-KR"]), Locale::English);
+        assert_eq!(preferred(&["fi-FI"]), Locale::English);
+        assert_eq!(preferred(&["nb-NO", "ko-KR"]), Locale::Korean);
         assert_eq!(preferred(&[]), Locale::English);
     }
 

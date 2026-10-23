@@ -495,7 +495,7 @@ pub struct App {
     /// The Recent tab's rows: what was played here and what
     /// Spotify knows of the other devices, as one list. Rebuilt when
     /// either side changes rather than every frame.
-    pub recents_view: Vec<crate::api::models::PlayHistory>,
+    pub recents_view: std::sync::Arc<Vec<crate::api::models::PlayHistory>>,
     pub recents_generation: u64,
     pub queue_tab: QueueTab,
     pub search: SearchState,
@@ -1236,7 +1236,7 @@ impl App {
             releases_after_scan: None,
             listening: None,
             recents: crate::model::CursorList::default(),
-            recents_view: Vec::new(),
+            recents_view: Default::default(),
             recents_generation: 0,
             queue_tab: session
                 .queue_tab
@@ -8998,7 +8998,7 @@ impl App {
 
     /// Merges local and Spotify history for the Recent tab.
     fn rebuild_recents(&mut self) {
-        self.recents_view = crate::history::merged(self.plays.plays(), &self.recents.items);
+        self.recents_view = std::sync::Arc::new(crate::history::merged(self.plays.plays(), &self.recents.items));
     }
 
     /// Adds a page of play history to the Recents tab.

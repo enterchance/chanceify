@@ -47,7 +47,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         Loadable::Loaded(results) => results.clone(),
         Loadable::Loading | Loadable::NotLoaded => {
             if !pending {
-                widgets::loading_row(ui, &palette, app.locale);
+                widgets::skeleton_rows(ui, &palette, app.locale, 6);
             }
             return;
         }
