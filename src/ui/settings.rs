@@ -1592,7 +1592,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
     let about = gettext(locale, "About");
     let source_code = gettext(locale, "Source code");
     let about_rows = [RowText::new(
-        format!("{} {}", crate::build_info::DISPLAY_NAME, crate::build_info::version()),
+        format!("{} {}", crate::build_info::DISPLAY_NAME, crate::build_info::DISPLAY_VERSION),
         source_code.clone(),
     )];
     if section_matches(&needle, &about, &about_rows) {
@@ -1607,11 +1607,19 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                         format!(
                             "{} {}",
                             crate::build_info::DISPLAY_NAME,
-                            crate::build_info::version()
+                            crate::build_info::DISPLAY_VERSION
                         ),
                         theme::semibold(theme::BODY_TEXT),
                         palette.text,
                     );
+                    if let Some(built) = crate::build_info::built_at() {
+                        theme::text(
+                            ui,
+                            format!("built {built} UTC"),
+                            theme::regular(theme::SMALL_TEXT),
+                            palette.dim,
+                        );
+                    }
                     if let Some(mb) = crate::util::memory_used_mb() {
                         theme::text(
                             ui,

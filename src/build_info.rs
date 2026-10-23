@@ -33,6 +33,10 @@ pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// The version shown to the person in About. Held where it is until the
+/// maintainer asks for another; the crate version keeps counting builds.
+pub const DISPLAY_VERSION: &str = "0.9.9";
+
 /// Whether this build came from a working tree with uncommitted changes.
 pub fn is_dirty() -> bool {
     REVISION.ends_with("+dirty")
