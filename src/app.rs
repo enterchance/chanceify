@@ -43,6 +43,10 @@ const REMOTE_FRESH: Duration = Duration::from_secs(45);
 /// Spotify Connect counts as answering for this long after its last view;
 /// it sends one every few seconds while the session is up.
 const CONNECT_LIVE: Duration = Duration::from_secs(15);
+/// After Spotify refuses an audio key, the session is renewed and the song
+/// tried again at most once in this long: asking again sooner only gets
+/// more keys refused.
+const KEY_REFUSAL_REST: Duration = Duration::from_secs(120);
 const DEVICES_FRESH: Duration = Duration::from_secs(12);
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(280);
 
@@ -3677,7 +3681,16 @@ impl App {
         if let Some(error) = &state.error
             && self.local.error.as_deref() != Some(error.as_str())
         {
-            self.toast_error(engine_error_text(self.locale, error));
+            let key_refused = error.starts_with("Spotify refused the audio key");
+            // A refused key is said once; the refusals that follow while
+            // Spotify keeps refusing add nothing but noise.
+            if !key_refused
+                || self
+                    .last_unavailable_reconnect
+                    .is_none_or(|at| at.elapsed() > KEY_REFUSAL_REST)
+            {
+                self.toast_error(engine_error_text(self.locale, error));
+            }
             // One unavailable track is Spotify's catalogue; several in a
             // row is the session's audio-key service gone bad, which
             // leaves librespot feeding the decoder encrypted bytes and
@@ -3685,7 +3698,6 @@ impl App {
             // A refused audio key is the same sickness, so it gets a fresh
             // session at once (one refusal, not three) and the song is
             // picked up again after it.
-            let key_refused = error.starts_with("Spotify refused the audio key");
             if error.starts_with("This item isn't available") || key_refused {
                 let now = Instant::now();
                 self.unavailable_at
@@ -3694,7 +3706,7 @@ impl App {
                 if self.unavailable_at.len() >= if key_refused { 1 } else { 3 }
                     && self
                         .last_unavailable_reconnect
-                        .is_none_or(|at| at.elapsed() > Duration::from_secs(if key_refused { 8 } else { 60 }))
+                        .is_none_or(|at| at.elapsed() > if key_refused { KEY_REFUSAL_REST } else { Duration::from_secs(60) })
                 {
                     // The song that was refused is started again, once, as
                     // soon as the fresh session is up: no waiting, and no
@@ -6694,8 +6706,12 @@ impl App {
             return true;
         }
         // For local playback, reject a fetched current row that differs from
-        // the engine's current track.
+        // the engine's current track. Only while this computer is the one
+        // playing: a song left paused here says nothing about a queue that
+        // another device is playing, and holding to it made the queue flick
+        // between the two.
         if self.local.is_active()
+            && matches!(self.target(), Target::Local)
             && let Some(track) = &self.local.track
             && fetched
                 .currently_playing
