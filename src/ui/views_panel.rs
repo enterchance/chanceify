@@ -321,11 +321,10 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                     1,
                     Some(crate::bidi::ELLIPSIS),
                 );
-                // The card is only as wide as its words need (the cover, the name,
-                // the heart), never wider than the controls under it; a name
-                // too long for that goes onto two lines and then ends in "…".
-                let need = text_left + (title.size().x + 34.0).max(artist.size().x) + pad + 4.0;
-                let card_right = need.clamp(outer.left() + 160.0_f32.min(outer.width()), outer.right());
+                // The card is as wide as the controls under it, whatever the
+                // name's length; a name too long for it goes onto two lines
+                // and then ends in "…".
+                let card_right = outer.right();
                 let card = Rect::from_min_max(cover.min - egui::vec2(pad, pad), egui::pos2(card_right, cover.bottom() + pad));
                 ui.ctx().data_mut(|data| data.insert_temp(Id::new(("pop-out-card-last", vp)), card));
                 let song = app.now_playing_item();
