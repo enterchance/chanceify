@@ -1753,6 +1753,16 @@ impl App {
 
     /// Where playback commands go: this computer's player or a remote device.
     pub fn target(&self) -> Target {
+        // Spotify Connect knows which device is playing right now: when it
+        // is another one, commands go there, whatever this computer's
+        // player still holds from before (a paused song is not playing).
+        if self.connect_live()
+            && let Some(remote) = &self.remote
+            && let Some(id) = remote.state.device.as_ref().and_then(|device| device.id.clone())
+            && Some(id.as_str()) != self.local_device_id.as_deref()
+        {
+            return Target::Remote(Some(id));
+        }
         if self.local_ready && self.local.is_active() {
             return Target::Local;
         }
