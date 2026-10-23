@@ -1446,6 +1446,18 @@ pub fn item_menu(
 ) {
     let palette = app.palette;
     let locale = app.locale;
+    // Spotify's own mixes hide a song for this listener without removing
+    // it from anyone's copy.
+    let hide_in = match context {
+        Some(RowContext::Context { uri: playlist, .. }) => Some(playlist),
+        Some(RowContext::View {
+            context_uri: playlist,
+            ..
+        }) => Some(playlist),
+        _ => None,
+    }
+    .filter(|playlist| item.is_track() && app.can_hide_in(playlist))
+    .cloned();
     // The menu is exactly as wide as its widest row: no empty space.
     {
         let mut labels: Vec<(String, f32)> = vec![
@@ -1485,6 +1497,10 @@ pub fn item_menu(
         ) {
             labels.push((gettext(locale, "Remove from this playlist").into_owned(), 0.0));
             labels.push((gettext(locale, "Move down").into_owned(), 0.0));
+        }
+        if hide_in.is_some() {
+            labels.push((gettext(locale, "Show in this playlist").into_owned(), 0.0));
+            labels.push((gettext(locale, "Hide in this playlist").into_owned(), 0.0));
         }
         let widest = labels
             .iter()
@@ -1634,6 +1650,21 @@ pub fn item_menu(
             app.actions.push(Action::RemoveFromPlaylist {
                 playlist_id: playlist_id.clone(),
                 uris: vec![uri.clone()],
+            });
+        }
+    }
+    if let Some(playlist_uri) = hide_in {
+        let hidden = app.hidden_in(&playlist_uri, &uri);
+        let (icon, text) = if hidden {
+            (Icon::Eye, gettext(locale, "Show in this playlist"))
+        } else {
+            (Icon::EyeOff, gettext(locale, "Hide in this playlist"))
+        };
+        if menu_item(ui, &palette, Some(icon), &text) {
+            app.actions.push(Action::SetHiddenInPlaylist {
+                playlist_uri,
+                track_uri: uri.clone(),
+                hidden: !hidden,
             });
         }
     }

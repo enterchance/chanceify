@@ -343,8 +343,13 @@ pub fn actions_row(
             let is_filtered = filter.as_ref().is_some_and(|f| !f.trim().is_empty());
             // A radio is mixed afresh each time Spotify is asked, so it
             // always plays the songs on screen.
+            // A playlist with hidden songs plays the songs on screen too.
+            let plays_shown_rows = app.has_hidden_in(uri);
             let play_view = actions.view.is_some()
-                && (!app.playing_context_shuffle() || is_filtered || actions.save_radio.is_some());
+                && (!app.playing_context_shuffle()
+                    || is_filtered
+                    || actions.save_radio.is_some()
+                    || plays_shown_rows);
             let can_start = actions.view.as_ref().is_none_or(|uris| !uris.is_empty());
             let icon = if now_playing_here {
                 Icon::PauseFilled
@@ -712,6 +717,12 @@ pub fn prepare_table_view(
     let cache_id = egui::Id::new("table-view-cache").with(page);
     let cached = ui.data(|d| d.get_temp::<Arc<TableCache>>(cache_id));
     let membership = Some(&app.library.membership);
+    // Some of the playlist's songs are hidden here: playback follows the
+    // rows on screen, which leave them out.
+    let plays_shown_rows = match page {
+        Page::Playlist(id) => app.has_hidden_in(&format!("spotify:playlist:{id}")),
+        _ => false,
+    };
     // The playlist being read is in every one of its songs, so it is left
     // out of the playlist sort: as a key it would be the same for all of
     // them and say nothing.
@@ -741,8 +752,10 @@ pub fn prepare_table_view(
     } else {
         let visible = view_indices(items, needle, sort, membership, own, &app.bpms);
         let mut view_positions = Vec::new();
-        let view_uris =
-            (sort.is_some_and(|sort| !sort.is_empty()) || !needle.is_empty()).then(|| {
+        let view_uris = (sort.is_some_and(|sort| !sort.is_empty())
+            || !needle.is_empty()
+            || plays_shown_rows)
+            .then(|| {
                 let mut uris = Vec::new();
                 for &index in &visible {
                     let item = &items[index].0;
@@ -1877,6 +1890,46 @@ pub(crate) fn playlist_cached_table_items(
     (items, positions, duration_ms)
 }
 
+/// A playlist's rows with the songs hidden in it marked unplayable, kept
+/// until the rows or the hidden songs change.
+fn hidden_rows(
+    ui: &egui::Ui,
+    app: &App,
+    id: &str,
+    playlist_uri: &str,
+    items: &Arc<Vec<TableItem>>,
+) -> Arc<Vec<TableItem>> {
+    type Marked = (usize, u64, Arc<Vec<TableItem>>);
+    let key = egui::Id::new("hidden-rows").with(id);
+    let source = Arc::as_ptr(items) as usize;
+    let revision = app.hidden_songs_revision;
+    if let Some((cached_source, cached_revision, rows)) = ui.data(|d| d.get_temp::<Marked>(key))
+        && cached_source == source
+        && cached_revision == revision
+    {
+        return rows;
+    }
+    let rows: Arc<Vec<TableItem>> = Arc::new(
+        items
+            .iter()
+            .map(|(item, added_at, added_by)| {
+                let item = match item {
+                    PlayableItem::Track(track) if app.hidden_in(playlist_uri, &track.uri) => {
+                        PlayableItem::Track(crate::api::models::Track {
+                            is_playable: Some(false),
+                            ..track.clone()
+                        })
+                    }
+                    other => other.clone(),
+                };
+                (item, added_at.clone(), added_by.clone())
+            })
+            .collect(),
+    );
+    ui.data_mut(|d| d.insert_temp::<Marked>(key, (source, revision, Arc::clone(&rows))));
+    rows
+}
+
 /// A complete, ranked view of the listener's current top tracks.
 pub fn top_songs(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
@@ -1972,6 +2025,15 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 playlist.owner.id.as_deref(),
                 playlist.owner_name(),
             );
+            // Songs hidden here are greyed out and left out of playback,
+            // which then plays the rows on screen.
+            let hides = app.has_hidden_in(&playlist.uri);
+            let items = if hides {
+                hidden_rows(ui, app, id, &playlist.uri, &items)
+            } else {
+                items
+            };
+            let items_revision = page.items.revision.wrapping_add(app.hidden_songs_revision);
             let count = page
                 .items
                 .total
@@ -2030,7 +2092,7 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 &items,
                 &needle,
                 sort.as_ref(),
-                page.items.revision,
+                items_revision,
             );
             let view_play = table_view.view_uris.as_ref().map(Arc::clone);
             actions_row(
@@ -2083,7 +2145,7 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     error: page.items.error.as_deref(),
                     can_load_more: page.items.can_load_more(),
                     filter: &page.filter,
-                    items_revision: page.items.revision,
+                    items_revision,
                 },
             );
         }

@@ -590,6 +590,8 @@ fastframe_icons::icons! {
         Disc => "disc-3",
         Ellipsis => lucide "ellipsis",
         Expand => "expand",
+        Eye => lucide "eye",
+        EyeOff => lucide "eye-off",
         ExternalLink => lucide "external-link",
         Gamepad => "gamepad-2",
         Globe => "globe",

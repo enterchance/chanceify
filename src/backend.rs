@@ -145,6 +145,16 @@ pub enum ApiRequest {
         term: String,
         generation: u64,
     },
+    /// The songs hidden in Spotify's playlists, over the playback session.
+    HiddenSongs {
+        generation: u64,
+    },
+    /// Hide a song in one of Spotify's playlists, or show it again.
+    SetHiddenInPlaylist {
+        playlist_uri: String,
+        track_uri: String,
+        hidden: bool,
+    },
     MyPlaylists {
         offset: u32,
         generation: u64,
@@ -360,6 +370,7 @@ impl ApiRequest {
                 | Self::ArtistRecent { .. }
                 | Self::Recommendations { .. }
                 | Self::Discover { .. }
+                | Self::HiddenSongs { .. }
                 | Self::PlaylistSample { .. }
                 | Self::Contains { .. }
         )
@@ -406,6 +417,16 @@ pub enum ApiResponse {
         term: String,
         generation: u64,
         result: ApiResult<Vec<Playlist>>,
+    },
+    HiddenSongs {
+        generation: u64,
+        result: ApiResult<Vec<(String, String)>>,
+    },
+    HiddenInPlaylistSet {
+        playlist_uri: String,
+        track_uri: String,
+        hidden: bool,
+        result: ApiResult<()>,
     },
     MyPlaylists {
         offset: u32,
@@ -3832,6 +3853,8 @@ fn operation_for(api: &ApiGateway, request: &ApiRequest) -> Operation {
         | ApiRequest::FollowedArtists { .. }
         | ApiRequest::SavedShows { .. }
         | ApiRequest::SavedEpisodes { .. }
+        | ApiRequest::HiddenSongs { .. }
+        | ApiRequest::SetHiddenInPlaylist { .. }
         | ApiRequest::SetSaved { .. } => Operation::UserData,
         // Development Mode cannot answer membership for playlists it omits.
         ApiRequest::Contains { uris } => {
@@ -4060,11 +4083,62 @@ async fn scan_unavailable(
     }
 }
 
+/// The playback session of the signed-in account, for what only it can do.
+fn playback_session<'a>(
+    api: &ApiGateway,
+    engine: Option<&'a Engine>,
+) -> ApiResult<&'a librespot_core::session::Session> {
+    engine
+        .filter(|engine| same_account(&engine.session().username(), api.account().as_ref()))
+        .map(Engine::session)
+        .ok_or_else(|| ApiError::Status {
+            status: 503,
+            message: "Hiding songs needs playback on this computer.".into(),
+        })
+}
+
 async fn handle(
     api: &ApiGateway,
     engine: Option<&Engine>,
     request: ApiRequest,
 ) -> (ApiResponse, Option<ApiSource>) {
+    if let ApiRequest::HiddenSongs { generation } = request {
+        let result = match playback_session(api, engine) {
+            Ok(session) => session_reads::hidden_songs(session)
+                .await
+                .map_err(|error| ApiError::Network(format!("{error:#}"))),
+            Err(error) => Err(error),
+        };
+        return (ApiResponse::HiddenSongs { generation, result }, None);
+    }
+    if let ApiRequest::SetHiddenInPlaylist {
+        playlist_uri,
+        track_uri,
+        hidden,
+    } = request
+    {
+        let result = match playback_session(api, engine) {
+            Ok(session) => session_reads::set_hidden(
+                session,
+                &playlist_uri,
+                &track_uri,
+                hidden,
+                jiff::Timestamp::now().as_second(),
+            )
+            .await
+            .map_err(|error| ApiError::Network(format!("{error:#}"))),
+            Err(error) => Err(error),
+        };
+        return (
+            ApiResponse::HiddenInPlaylistSet {
+                playlist_uri,
+                track_uri,
+                hidden,
+                result,
+            },
+            None,
+        );
+    }
     let operation = operation_for(api, &request);
     // A session whose long-lived connection has dropped still answers over
     // its HTTP client, so the engine's presence is the only liveness test;
@@ -4094,6 +4168,9 @@ async fn handle(
     }
 
     let response = match request {
+        ApiRequest::HiddenSongs { .. } | ApiRequest::SetHiddenInPlaylist { .. } => {
+            unreachable!("handled before Web API routing")
+        }
         ApiRequest::Me => ApiResponse::Me(routed!(me())),
         ApiRequest::Devices => ApiResponse::Devices(routed!(devices())),
         ApiRequest::PlaybackState { seq } => ApiResponse::PlaybackState {

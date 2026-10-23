@@ -511,6 +511,14 @@ pub struct App {
     pub show_pages: HashMap<String, ShowPage>,
     /// Radio pages by the seed's URI.
     pub radio_pages: HashMap<String, RadioPage>,
+    /// Songs the account hid in Spotify's playlists, by playlist URI, as
+    /// Spotify's apps hide them with "Hide in this playlist".
+    pub hidden_songs: HashMap<String, HashSet<String>>,
+    /// Changes whenever `hidden_songs` does, so playlist tables mark their
+    /// rows again.
+    pub hidden_songs_revision: u64,
+    hidden_songs_generation: u64,
+    hidden_songs_requested: bool,
     pub track_cache: HashMap<String, Track>,
     track_requests: HashSet<String>,
     /// Pictures of the artists on the Home page's ranked shelf, by Spotify
@@ -1247,6 +1255,10 @@ impl App {
             artist_pages: HashMap::new(),
             show_pages: HashMap::new(),
             radio_pages: HashMap::new(),
+            hidden_songs: HashMap::new(),
+            hidden_songs_revision: 0,
+            hidden_songs_generation: 0,
+            hidden_songs_requested: false,
             track_cache: HashMap::new(),
             track_requests: HashSet::new(),
             artist_images: HashMap::new(),
@@ -2255,6 +2267,79 @@ impl App {
             });
         }
         None
+    }
+
+    /// Reads the songs hidden in Spotify's playlists, once per playback
+    /// session.
+    fn load_hidden_songs(&mut self) {
+        if self.hidden_songs_requested || !self.local_ready {
+            return;
+        }
+        self.hidden_songs_requested = true;
+        self.hidden_songs_generation += 1;
+        self.backend.api(ApiRequest::HiddenSongs {
+            generation: self.hidden_songs_generation,
+        });
+    }
+
+    /// Whether `playlist_uri` offers "Hide in this playlist": Spotify offers
+    /// it on its own playlists, Discover Weekly and the other mixes made for
+    /// the listener, and only the playback session can change it.
+    pub fn can_hide_in(&self, playlist_uri: &str) -> bool {
+        if !self.local_ready || !playlist_uri.starts_with("spotify:playlist:") {
+            return false;
+        }
+        let Some(id) = crate::util::uri_id(playlist_uri) else {
+            return false;
+        };
+        let owner = self
+            .known_playlist(id)
+            .or_else(|| {
+                self.playlist_pages
+                    .get(id)
+                    .and_then(|page| page.playlist.get())
+            })
+            .and_then(|playlist| playlist.owner.id.as_deref());
+        owner == Some("spotify")
+    }
+
+    /// Whether any song is hidden in `playlist_uri`.
+    pub fn has_hidden_in(&self, playlist_uri: &str) -> bool {
+        self.hidden_songs
+            .get(playlist_uri)
+            .is_some_and(|songs| !songs.is_empty())
+    }
+
+    pub fn hidden_in(&self, playlist_uri: &str, track_uri: &str) -> bool {
+        self.hidden_songs
+            .get(playlist_uri)
+            .is_some_and(|songs| songs.contains(track_uri))
+    }
+
+    fn mark_hidden(&mut self, playlist_uri: &str, track_uri: &str, hidden: bool) {
+        let changed = if hidden {
+            self.hidden_songs
+                .entry(playlist_uri.to_owned())
+                .or_default()
+                .insert(track_uri.to_owned())
+        } else {
+            self.hidden_songs
+                .get_mut(playlist_uri)
+                .is_some_and(|songs| songs.remove(track_uri))
+        };
+        if changed {
+            self.hidden_songs_revision = self.hidden_songs_revision.wrapping_add(1);
+        }
+    }
+
+    /// Greys the row out at once and lets the session tell Spotify.
+    fn set_hidden_in_playlist(&mut self, playlist_uri: String, track_uri: String, hidden: bool) {
+        self.mark_hidden(&playlist_uri, &track_uri, hidden);
+        self.backend.api(ApiRequest::SetHiddenInPlaylist {
+            playlist_uri,
+            track_uri,
+            hidden,
+        });
     }
 
     pub fn known_playlist(&self, id: &str) -> Option<&Playlist> {
@@ -3270,6 +3355,7 @@ impl App {
             LocalPlayback::Ready { device_id } => {
                 self.local_device_id = Some(device_id.clone());
                 self.local_ready = true;
+                self.load_hidden_songs();
                 if let Some(request) = self.queued_play.take() {
                     self.play_request(request, false);
                 }
@@ -3320,6 +3406,9 @@ impl App {
         self.home = HomeData::default();
         self.playlist_pages.clear();
         self.album_pages.clear();
+        self.hidden_songs.clear();
+        self.hidden_songs_revision = self.hidden_songs_revision.wrapping_add(1);
+        self.hidden_songs_requested = false;
         self.prerelease_request = None;
         self.artist_pages.clear();
         self.show_pages.clear();
@@ -7089,6 +7178,36 @@ impl App {
                     self.begin_recommendations(generation, Vec::new());
                 }
             }
+            ApiResponse::HiddenSongs { generation, result } => {
+                if generation != self.hidden_songs_generation {
+                    return;
+                }
+                match result {
+                    Ok(pairs) => {
+                        let mut hidden: HashMap<String, HashSet<String>> = HashMap::new();
+                        for (playlist, track) in pairs {
+                            hidden.entry(playlist).or_default().insert(track);
+                        }
+                        self.hidden_songs = hidden;
+                        self.hidden_songs_revision = self.hidden_songs_revision.wrapping_add(1);
+                    }
+                    Err(error) => {
+                        log::warn!("could not read the hidden songs: {error}");
+                        self.hidden_songs_requested = false;
+                    }
+                }
+            }
+            ApiResponse::HiddenInPlaylistSet {
+                playlist_uri,
+                track_uri,
+                hidden,
+                result: Err(error),
+            } => {
+                // Spotify turned the change away: the row goes back.
+                self.mark_hidden(&playlist_uri, &track_uri, !hidden);
+                self.toast_error(error.to_string());
+            }
+            ApiResponse::HiddenInPlaylistSet { .. } => {}
             ApiResponse::TopArtists { generation, result } => {
                 if generation != self.home.generation {
                     return;
@@ -11737,6 +11856,11 @@ impl App {
             Action::ClearQueue => self.clear_queue(),
             Action::SaveQueueAsPlaylist => self.save_queue_as_playlist(),
             Action::SaveRadio(seed) => self.save_radio(&seed),
+            Action::SetHiddenInPlaylist {
+                playlist_uri,
+                track_uri,
+                hidden,
+            } => self.set_hidden_in_playlist(playlist_uri, track_uri, hidden),
             Action::RefreshQueue => self.refresh_queue(true),
             Action::ShareToDiscord => match self.now_playing().filter(|now| !now.resuming) {
                 Some(now) if crate::file_deck::is_file_uri(&now.uri) => {

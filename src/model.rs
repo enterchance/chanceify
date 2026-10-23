@@ -1313,6 +1313,12 @@ pub enum Action {
     SaveQueueAsPlaylist,
     /// Save a radio page's songs to a new playlist, by the seed's URI.
     SaveRadio(String),
+    /// Hide a song in one of Spotify's playlists, or show it again.
+    SetHiddenInPlaylist {
+        playlist_uri: String,
+        track_uri: String,
+        hidden: bool,
+    },
     RefreshQueue,
     CopyLink(String),
     /// Copy a line about the playing song, with its Spotify link, to paste in Discord.
