@@ -204,6 +204,11 @@ pub(super) fn default_float(ctx: &Context) -> [f32; 3] {
     ]
 }
 
+/// The cover on the card above the controls, before it is resized, and the
+/// smallest it may be made.
+const CARD_SIDE_DEFAULT: f32 = 96.0;
+const CARD_SIDE_MIN: f32 = 56.0;
+
 /// The controls (buttons and song bar) as a panel of their own that can be
 /// dragged anywhere by its top strip, widened from its right edge, snapped
 /// onto the library sidebar, or put away from the right-click menu.
@@ -289,8 +294,19 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
             if (lyrics_page || app.fullscreen_vis || !app.settings.art_expanded)
                 && let Some(now) = app.now_playing()
             {
-                let side = if lyrics_page { 44.0 } else { (outer.width() * 0.34).clamp(80.0, 170.0) };
                 let pad = 8.0;
+                // The cover is as tall as the reader dragged the card's edge,
+                // and never so big that the card would be wider than the
+                // controls under it with room left for the name.
+                let side_max = (outer.width() - pad * 2.0 - 12.0 - 140.0).max(CARD_SIDE_MIN);
+                let side = if lyrics_page {
+                    44.0
+                } else {
+                    app.settings
+                        .float_card_side
+                        .unwrap_or(CARD_SIDE_DEFAULT)
+                        .clamp(CARD_SIDE_MIN, side_max)
+                };
                 // Above the controls; where that would be cut off by the top of
                 // the window, below them instead.
                 let above_top = outer.top() - side - pad * 2.0 - 8.0;
@@ -321,10 +337,11 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                     1,
                     Some(crate::bidi::ELLIPSIS),
                 );
-                // The card is as wide as the controls under it, whatever the
-                // name's length; a name too long for it goes onto two lines
-                // and then ends in "…".
-                let card_right = outer.right();
+                // The card is only as wide as its words need (the cover, the
+                // name, the heart), never wider than the controls under it; a
+                // name too long for that goes onto two lines and then ends in "…".
+                let need = text_left + (title.size().x + 34.0).max(artist.size().x) + pad + 4.0;
+                let card_right = need.clamp(outer.left() + 160.0_f32.min(outer.width()), outer.right());
                 let card = Rect::from_min_max(cover.min - egui::vec2(pad, pad), egui::pos2(card_right, cover.bottom() + pad));
                 ui.ctx().data_mut(|data| data.insert_temp(Id::new(("pop-out-card-last", vp)), card));
                 let song = app.now_playing_item();
@@ -336,6 +353,28 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                 }
                 card_drag = handle.drag_delta();
                 card_dragging = handle.dragged();
+                // The edge away from the controls resizes the card on its own:
+                // a taller card has a bigger cover. Registered after the
+                // handle, so the edge wins over moving the panel.
+                if !lyrics_page {
+                    let above = card.bottom() <= outer.top();
+                    let edge = if above {
+                        Rect::from_min_max(card.left_top(), egui::pos2(card.right(), card.top() + 6.0))
+                    } else {
+                        Rect::from_min_max(egui::pos2(card.left(), card.bottom() - 6.0), card.right_bottom())
+                    };
+                    let resize = ui.interact(edge, Id::new("pop-out-card-resize"), egui::Sense::drag());
+                    if resize.hovered() || resize.dragged() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                    }
+                    if resize.dragged() {
+                        let grow = if above { -resize.drag_delta().y } else { resize.drag_delta().y };
+                        app.settings.float_card_side = Some((side + grow).clamp(CARD_SIDE_MIN, side_max));
+                    }
+                    if resize.drag_stopped() {
+                        app.mark_settings_dirty();
+                    }
+                }
                 // A backing, so the words read over any page.
                 ui.painter().rect(
                     card,

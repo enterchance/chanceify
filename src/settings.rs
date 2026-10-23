@@ -1136,6 +1136,9 @@ pub struct Settings {
     pub calm_look: u8,
     /// The pop-out controls: [x, y, width]. None = not shown.
     pub float_controls: Option<[f32; 3]>,
+    /// How tall the cover on the card above the controls is, once the
+    /// reader has resized it.
+    pub float_card_side: Option<f32>,
     /// Where the controls panel sits while the album art is big, and in full-screen lyrics.
     pub float_hide_bar: bool,
     /// The pop-out controls live in a window of their own, off the app.
@@ -1644,6 +1647,7 @@ impl Default for Settings {
             disc_dim: 0.2,
             calm_look: 1,
             float_controls: None,
+            float_card_side: None,
             float_hide_bar: false,
             views_width: 316.0,
             views_height: 0.0,
