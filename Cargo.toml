@@ -271,3 +271,8 @@ librespot-oauth = { git = "https://github.com/crmne/librespot", rev = "d04729018
 # key requests turned off (see PREFETCH_MAX_TRACKS in its player.rs).
 librespot-playback = { path = "vendor/librespot-playback" }
 librespot-protocol = { git = "https://github.com/crmne/librespot", rev = "d04729018248f11c954b50ff6a3405801ff5af08" }
+
+# librespot-connect takes librespot-playback from inside the fork itself,
+# so the vendored copy has to replace it there too.
+[patch."https://github.com/crmne/librespot"]
+librespot-playback = { path = "vendor/librespot-playback" }
