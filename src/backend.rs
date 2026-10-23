@@ -4333,20 +4333,26 @@ async fn handle(
             seq,
             result: routed!(playback_state()),
         },
-        ApiRequest::Queue { seq } => ApiResponse::Queue {
-            seq,
+        ApiRequest::Queue { seq } => {
             // A queue read that waits out a rate limit would leave the
             // queue on "Loading" for as long as Spotify asks; it is
             // answered with a failure instead, and asked for again.
-            result: match tokio::time::timeout(Duration::from_secs(8), async { routed!(queue()) })
-                .await
-            {
-                Ok(result) => result,
-                Err(_) => Err(ApiError::Network(
-                    "Spotify is slow to answer, trying again shortly".into(),
-                )),
-            },
-        },
+            let result = match &selected {
+                Ok(client) => {
+                    match tokio::time::timeout(Duration::from_secs(8), client.queue()).await {
+                        Ok(result) => result,
+                        Err(_) => Err(ApiError::Network(
+                            "Spotify is slow to answer, trying again shortly".into(),
+                        )),
+                    }
+                }
+                Err(error) => Err(error.clone()),
+            };
+            if let Err(ApiError::SignInExpired { api_source }) = &result {
+                expired.set(Some(*api_source));
+            }
+            ApiResponse::Queue { seq, result }
+        }
         ApiRequest::RecentlyPlayed {
             who,
             generation,
