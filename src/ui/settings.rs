@@ -674,11 +674,11 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
             audio_cache.clone(),
             gettext(
                 locale,
-                "Keeps songs you have played on this computer, so replaying one never downloads it again. The slider is the most disk space it may use (2 GB holds roughly 400 songs). When it is full, the oldest songs are deleted. It lives in the chanceify folder beside the program.",
+                "Keeps songs you have played on this computer, so replaying one never downloads it again. The slider is the most disk space it may use (2 GB holds roughly 400 songs). When it is full, the oldest songs are deleted.",
             ),
         ),
         RowText::new(apply_playback.clone(), apply_playback_note.clone()).when(playback_dirty),
-        RowText::new(gettext(locale, "Playback settings applied"), "").when(!playback_dirty),
+        RowText::new(gettext(locale, "Playback settings applied"), "").when(false),
         RowText::new(
             download_updates.clone(),
             gettext(
@@ -931,41 +931,16 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                         }
                     }
                 });
-                theme::subtle(
-                    ui,
-                    &palette,
-                    "Only for songs from your own files. It starts with the next list you play.",
-                );
+                theme::subtle(ui, &palette, "Starts with the next list you play.");
             }
             ui.add_space(4.0);
-            if cfg!(windows)
-                && (needle.is_empty() || "start with your computer startup login".contains(needle.as_str()))
-            {
-                let mut on = app.settings.start_with_computer;
-                if widgets::switch_labeled(ui, &palette, "Start with your computer", &mut on).changed() {
-                    if crate::util::set_start_with_computer(on) {
-                        app.settings.start_with_computer = on;
-                        app.mark_settings_dirty();
-                    } else {
-                        app.toast_error("Couldn't change the startup entry");
-                    }
-                }
-                ui.add_space(4.0);
-            }
-            if playback_dirty
-                || playback_rows[11].matches(&needle, &playback)
-                || playback_rows[12].matches(&needle, &playback)
-            {
+            if playback_dirty {
                 ui.horizontal(|ui| {
-                    if playback_dirty {
-                        if theme::pill_button(ui, &palette, &apply_playback, true).clicked() {
-                            app.actions.push(Action::RestartEngine);
-                            playback_dirty = false;
-                        }
-                        theme::subtle(ui, &palette, &apply_playback_note);
-                    } else {
-                        theme::subtle(ui, &palette, &gettext(locale, "Playback settings applied."));
+                    if theme::pill_button(ui, &palette, &apply_playback, true).clicked() {
+                        app.actions.push(Action::RestartEngine);
+                        playback_dirty = false;
                     }
+                    theme::subtle(ui, &palette, &apply_playback_note);
                 });
             }
         });
@@ -1331,7 +1306,6 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     app.actions.push(Action::ClearPlayHistory);
                 }
             });
-            note(ui, &palette, "Everything chanceify saves lives in the chanceify folder beside the program. Nothing is uploaded.");
         });
     }
 
@@ -1344,7 +1318,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
             ui.add(
                 egui::Label::new(
                     egui::RichText::new(
-                        "Songs in your playlists that Spotify has removed or that are not available where you are.\nFind them elsewhere before you remove them, so they are not lost.",
+                        "Find them elsewhere before you remove them, so they are not lost.",
                     )
                     .font(theme::regular(theme::BODY_TEXT))
                     .color(palette.secondary),
@@ -1636,10 +1610,13 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
 
     let about = gettext(locale, "About");
     let source_code = gettext(locale, "Source code");
-    let about_rows = [RowText::new(
-        format!("{} {}", crate::build_info::DISPLAY_NAME, crate::build_info::DISPLAY_VERSION),
-        source_code.clone(),
-    )];
+    let about_rows = [
+        RowText::new(
+            format!("{} {}", crate::build_info::DISPLAY_NAME, crate::build_info::DISPLAY_VERSION),
+            source_code.clone(),
+        ),
+        RowText::new("Start with your computer", "startup login automatically").when(cfg!(windows)),
+    ];
     if section_matches(&needle, &about, &about_rows) {
         any_visible = true;
         section(ui, &palette, &about, |ui| {
@@ -1677,6 +1654,18 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                 });
             });
             ui.add_space(8.0);
+            if cfg!(windows) {
+                let mut on = app.settings.start_with_computer;
+                if widgets::switch_labeled(ui, &palette, "Start with your computer", &mut on).changed() {
+                    if crate::util::set_start_with_computer(on) {
+                        app.settings.start_with_computer = on;
+                        app.settings.start_asked = true;
+                        app.mark_settings_dirty();
+                    } else {
+                        app.toast_error("Couldn't change the startup entry");
+                    }
+                }
+            }
             ui.add_space(8.0);
             ui.label(
                 egui::RichText::new(format!(

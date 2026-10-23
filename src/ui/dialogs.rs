@@ -46,6 +46,26 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         }
                     });
                 }
+                Dialog::StartWithComputer => {
+                    theme::text(ui, "Start chanceify with your computer?", theme::bold(theme::HEADING_TEXT), palette.text);
+                    ui.add_space(14.0);
+                    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 34.0), Layout::right_to_left(Align::Center), |ui| {
+                        if theme::pill_button(ui, &palette, "Start automatically", true).clicked() {
+                            if crate::util::set_start_with_computer(true) {
+                                app.settings.start_with_computer = true;
+                                app.mark_settings_dirty();
+                                app.toast("chanceify starts with your computer. Turn it off in Settings, About.");
+                            } else {
+                                app.toast_error("Couldn't change the startup entry");
+                            }
+                            app.actions.push(Action::CloseDialog);
+                        }
+                        if theme::pill_button(ui, &palette, "Don't start automatically", false).clicked() {
+                            app.toast("You can turn it on in Settings, About.");
+                            app.actions.push(Action::CloseDialog);
+                        }
+                    });
+                }
                 Dialog::CreatePlaylist { .. } => create_playlist(app, ui),
                 Dialog::EditPlaylist { .. } => edit_playlist(app, ui),
                 Dialog::ConfirmDeletePlaylist { id, name, owned } => {

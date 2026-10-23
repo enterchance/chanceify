@@ -1429,6 +1429,8 @@ pub struct Settings {
     pub personal_app_nudge_at: Option<String>,
     /// The listener has dismissed or followed the personal-app introduction.
     pub personal_app_intro_seen: bool,
+    /// Whether starting with the computer has been offered: it is asked once.
+    pub start_asked: bool,
     /// Local playback has been authorized at least once on this machine, so
     /// the app can resume it silently instead of prompting.
     pub playback_authorized: bool,
@@ -1772,6 +1774,7 @@ impl Default for Settings {
             web_client_id: None,
             personal_app_nudge_at: None,
             personal_app_intro_seen: false,
+            start_asked: false,
             playback_authorized: false,
             keep_playing_in_background: false,
             start_with_computer: false,

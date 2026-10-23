@@ -1085,6 +1085,8 @@ pub enum Dialog {
     PremiumNeeded,
     /// Introduce personal Spotify apps to eligible listeners once.
     PersonalAppIntro,
+    /// Offers, once, to start chanceify with the computer.
+    StartWithComputer,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

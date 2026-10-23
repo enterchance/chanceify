@@ -4561,6 +4561,7 @@ impl App {
             self.played_row = None;
         }
         self.maybe_suggest_personal_app();
+        self.maybe_offer_start_with_computer();
 
         // Chanceify never checks for or downloads updates by itself.
         if false
@@ -14337,6 +14338,24 @@ impl App {
             manual,
             source: self.update_source.clone(),
         });
+    }
+
+    /// Asks once whether chanceify should start with the computer. Either
+    /// answer is final; the switch in About changes it later.
+    fn maybe_offer_start_with_computer(&mut self) {
+        if !cfg!(windows)
+            || self.settings.start_asked
+            || self.settings.start_with_computer
+            || !self.is_connected()
+            || self.dialog.is_some()
+            || self.show_devices
+            || self.page() == &Page::Settings
+        {
+            return;
+        }
+        self.settings.start_asked = true;
+        self.mark_settings_dirty();
+        self.dialog = Some(Dialog::StartWithComputer);
     }
 
     fn maybe_suggest_personal_app(&mut self) {
