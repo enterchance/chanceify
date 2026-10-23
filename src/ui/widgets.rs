@@ -5383,8 +5383,7 @@ pub fn credit(ui: &mut Ui, palette: &Palette, locale: Locale) -> bool {
         if !after.is_empty() {
             theme::text(ui, after, theme::regular(theme::BODY_TEXT), palette.secondary);
         }
-        // One of chance's little pictures after the name, a different one
-        // each time chanceify starts.
+        // Chance's little picture after the name.
         let (uri, bytes) = credit_icon();
         ui.add_space(6.0);
         ui.add(egui::Image::from_bytes(uri, bytes).fit_to_exact_size(vec2(20.0, 20.0)));
@@ -5410,28 +5409,12 @@ pub fn credit(ui: &mut Ui, palette: &Palette, locale: Locale) -> bool {
     clicked
 }
 
-/// The little pictures that go beside "chance" in the credit line.
-const CREDIT_ICONS: [&[u8]; 8] = [
-    include_bytes!("../../assets/credit-icons/c0.png"),
-    include_bytes!("../../assets/credit-icons/c1.png"),
-    include_bytes!("../../assets/credit-icons/c2.png"),
-    include_bytes!("../../assets/credit-icons/c3.png"),
-    include_bytes!("../../assets/credit-icons/c4.png"),
-    include_bytes!("../../assets/credit-icons/c5.png"),
-    include_bytes!("../../assets/credit-icons/c6.png"),
-    include_bytes!("../../assets/credit-icons/c7.png"),
-];
-
-/// This run's credit picture: chosen once at random, so it does not flicker.
-fn credit_icon() -> (String, &'static [u8]) {
-    static PICK: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    let pick = *PICK.get_or_init(|| {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.subsec_nanos() as usize);
-        nanos % CREDIT_ICONS.len()
-    });
-    (format!("bytes://credit-icon-{pick}.png"), CREDIT_ICONS[pick])
+/// The little picture that goes beside "chance" in the credit line.
+fn credit_icon() -> (&'static str, &'static [u8]) {
+    (
+        "bytes://credit-icon.png",
+        include_bytes!("../../assets/credit-icon.png"),
+    )
 }
 
 /// The width a settings row keeps for its control: switches, fields and
