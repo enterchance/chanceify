@@ -63,6 +63,12 @@ clients. Spotifast uses its session for:
   account, and a newer Web API answer takes precedence over an older disk
   cache. A song the session reads first has unknown availability; if it cannot
   play, it is skipped when reached, as it would be anywhere else.
+- **Playlist edits and Liked Songs.** Adding songs, moving a row, removing
+  one copy of a repeated song, and saving or removing Liked Songs go through
+  Spotify's playlist and collection services, without the shared app's
+  quota. The Web API takes over only when the session cannot send the change.
+  A change the Web API turns away for a rate limit is sent again once the
+  limit passes.
 - **Lyrics** when Spotify has them.
 - **Display names** for the user IDs attached to songs in a playlist.
 - **Precise EP types** for releases that the Web API groups with singles.

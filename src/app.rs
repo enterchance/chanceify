@@ -7109,7 +7109,24 @@ impl App {
         }
     }
 
-    fn handle_api(&mut self, mut response: ApiResponse) {
+    fn handle_api(&mut self, response: ApiResponse) {
+        // A read Spotify turned away for its rate limit keeps what is on
+        // screen and is asked for again on its own, so it has no error to
+        // show. A change is sent again by the backend until it lands, and
+        // only a failure that is not the rate limit reaches the user.
+        let quiet = response.throttled_read();
+        let before = self.toasts.len();
+        self.apply_api(response);
+        if quiet {
+            let mut index = 0;
+            self.toasts.retain(|toast| {
+                index += 1;
+                index <= before || toast.kind != ToastKind::Error
+            });
+        }
+    }
+
+    fn apply_api(&mut self, mut response: ApiResponse) {
         match &mut response {
             ApiResponse::Playlist {
                 id,
@@ -21605,6 +21622,23 @@ mod tests {
             result: Err(crate::api::ApiError::RateLimited),
         });
         assert_eq!(app.home.podcasts, episodes(0), "a failure keeps the shelf");
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(app.dirs.config.parent().unwrap());
+    }
+
+    /// A read Spotify throttled shows no error: what is on screen stays and
+    /// the read is asked for again. A real failure of it still says so.
+    #[test]
+    fn a_throttled_read_is_not_an_error_to_show() {
+        let mut app = test_app("throttled-read");
+        let toasts = app.toasts.len();
+        app.handle_api(ApiResponse::Devices(Err(crate::api::ApiError::RateLimited)));
+        assert_eq!(app.toasts.len(), toasts, "a rate limit is not news");
+        app.handle_api(ApiResponse::Devices(Err(crate::api::ApiError::Status {
+            status: 403,
+            message: "Forbidden".into(),
+        })));
+        assert_eq!(app.toasts.len(), toasts + 1, "a refusal is");
         app.backend.shutdown();
         let _ = std::fs::remove_dir_all(app.dirs.config.parent().unwrap());
     }

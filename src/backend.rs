@@ -45,6 +45,9 @@ const MAX_PENDING_ALBUM_TYPES: usize = 50;
 const AUDIOBOOK_BATCH: usize = 50;
 /// How long resolving a radio station and its songs may take.
 const RADIO_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long a change the user made keeps being sent again while Spotify
+/// turns it away for a rate limit, before the failure is reported.
+const THROTTLED_WRITE_RETRY: Duration = Duration::from_secs(30 * 60);
 /// Newest episodes read from each saved podcast for Home's podcast shelf.
 const HOME_EPISODES_PER_SHOW: u32 = 5;
 pub const PLAYLIST_PAGE_SIZE: u32 = 50;
@@ -383,6 +386,79 @@ impl ApiRequest {
         // four background permits with the polling above, and it is the one
         // request the sidebar is visibly empty without, so it waits behind
         // polls that repeat anyway.
+    }
+
+    /// A change the user made, which the interface already shows. Spotify
+    /// refusing it for a rate limit means it was not made, so it is sent
+    /// again once the limit passes rather than reported. Playback commands
+    /// are not: acting on them later would act on a moment that has passed.
+    fn retried_when_throttled(&self) -> bool {
+        matches!(
+            self,
+            Self::AddToPlaylist { .. }
+                | Self::RemoveFromPlaylist { .. }
+                | Self::ReorderPlaylist { .. }
+                | Self::FollowPlaylist { .. }
+                | Self::SetSaved { .. }
+                | Self::CreatePlaylist { .. }
+                | Self::UpdatePlaylist { .. }
+                | Self::UploadPlaylistCover { .. }
+        )
+    }
+}
+
+impl ApiResponse {
+    /// Whether this is a change Spotify turned away only for a rate limit.
+    fn throttled(&self) -> bool {
+        let error = match self {
+            Self::PlaylistItemsChanged { result, .. } => result.as_ref().err(),
+            Self::PlaylistFollowChanged { result, .. }
+            | Self::SavedChanged { result, .. }
+            | Self::PlaylistUpdated { result, .. }
+            | Self::PlaylistCoverUploaded { result, .. } => result.as_ref().err(),
+            Self::PlaylistCreated(result) => result.as_ref().err(),
+            _ => None,
+        };
+        error.is_some_and(ApiError::is_rate_limited)
+    }
+
+    /// Whether this is a read that failed only because Spotify is rate
+    /// limiting: the app keeps what it shows and asks again on its own, so
+    /// there is nothing to tell the user. Changes are retried before they
+    /// are answered, and opening a link the user pasted still says why not.
+    pub fn throttled_read(&self) -> bool {
+        let error = match self {
+            Self::Me(result) => result.as_ref().err(),
+            Self::Devices(result) => result.as_ref().err(),
+            Self::Search { result, .. } => result.as_ref().err(),
+            Self::SearchPlaylists { result, .. } => result.as_ref().err(),
+            Self::Album { result, .. } => result.as_ref().err(),
+            Self::Artist { result, .. } => result.as_ref().err(),
+            Self::Playlist { result, .. } => result.as_ref().err(),
+            Self::PlaylistItems { result, .. } => result.as_ref().err(),
+            Self::SavedTracks { result, .. } => result.as_ref().err(),
+            Self::SavedAlbums { result, .. } => result.as_ref().err(),
+            Self::SavedShows { result, .. } => result.as_ref().err(),
+            Self::SavedEpisodes { result, .. } => result.as_ref().err(),
+            Self::FollowedArtists { result, .. } => result.as_ref().err(),
+            Self::RecentlyPlayed { result, .. } => result.as_ref().err(),
+            Self::Contains { result, .. } => result.as_ref().err(),
+            Self::Show { result, .. } => result.as_ref().err(),
+            Self::ShowEpisodes { result, .. } => result.as_ref().err(),
+            Self::AlbumTracks { result, .. } => result.as_ref().err(),
+            Self::AlbumQueueTracks { result, .. } => result.as_ref().err(),
+            Self::ArtistAlbums { result, .. } => result.as_ref().err(),
+            Self::ArtistTopTracks { result, .. } => result.as_ref().err(),
+            Self::PlaylistDuplicatesChecked { result, .. } => result.as_ref().err(),
+            Self::MyPlaylists { result, .. } => result.as_ref().err(),
+            Self::TopTracks { result, .. } => result.as_ref().err(),
+            Self::TopArtists { result, .. } => result.as_ref().err(),
+            Self::Discover { result, .. } => result.as_ref().err(),
+            Self::HomeEpisodes { result, .. } => result.as_ref().err(),
+            Self::MatchLocal { result, .. } => result.as_ref().err(),
+            _ => None,
+        };
+        error.is_some_and(ApiError::is_rate_limited)
     }
 }
 
@@ -4040,7 +4116,21 @@ impl Worker {
                     } else {
                         None
                     };
-                    handle(&api, engine.as_deref(), request).await
+                    let again = request.retried_when_throttled().then(|| request.clone());
+                    let mut answer = handle(&api, engine.as_deref(), request).await;
+                    // The client has already waited out Spotify's cooldowns
+                    // a few times over; a change still turned away is sent
+                    // again behind the next one, for as long as is sensible,
+                    // so the edit the interface shows is made after all.
+                    if let Some(again) = again {
+                        let until = Instant::now() + THROTTLED_WRITE_RETRY;
+                        while answer.0.throttled() && Instant::now() < until {
+                            log::info!("Spotify is rate limiting a change; sending it again shortly");
+                            tokio::time::sleep(Duration::from_secs(5)).await;
+                            answer = handle(&api, engine.as_deref(), again.clone()).await;
+                        }
+                    }
+                    answer
                 } => result,
             };
             // Apply completion on the command loop. A late response cannot
@@ -4509,6 +4599,109 @@ fn playback_session<'a>(
         })
 }
 
+/// A playlist edit or a Liked Songs change made over the playback session,
+/// answered as the Web API's would be. `None` when the session could not
+/// make it and nothing was changed, so the Web API should; a refusal that
+/// is final, or a change that may have gone through, is answered here.
+async fn write_over_session(
+    session: &librespot_core::session::Session,
+    request: &ApiRequest,
+) -> Option<ApiResponse> {
+    let settled = |result: Result<Option<String>, session_reads::Failure>| match result {
+        Ok(snapshot) => Some(Ok(snapshot)),
+        Err(session_reads::Failure::Definitive(error)) => Some(Err(error)),
+        Err(session_reads::Failure::Retry(error)) => {
+            log::debug!("playlist edit over the session failed ({error:#}); asking the Web API");
+            None
+        }
+    };
+    // The change is sent once; one that takes this long may have landed,
+    // so it is reported rather than made a second time.
+    let slow = || {
+        Some(Err(ApiError::Network(
+            "Spotify took too long to answer. Check the playlist and try again.".into(),
+        )))
+    };
+    match request {
+        ApiRequest::AddToPlaylist {
+            playlist_id,
+            playlist_name,
+            uris,
+            position,
+        } => {
+            let result = match tokio::time::timeout(
+                RADIO_TIMEOUT,
+                session_reads::add_playlist_items(session, playlist_id, uris, *position),
+            )
+            .await
+            {
+                Ok(result) => settled(result)?,
+                Err(_) => slow()?,
+            };
+            Some(ApiResponse::PlaylistItemsChanged {
+                id: playlist_id.clone(),
+                message: format!("Added to {playlist_name}"),
+                result,
+            })
+        }
+        ApiRequest::ReorderPlaylist {
+            playlist_id,
+            range_start,
+            insert_before,
+            snapshot_id,
+        } => {
+            let result = match tokio::time::timeout(
+                RADIO_TIMEOUT,
+                session_reads::move_playlist_row(
+                    session,
+                    playlist_id,
+                    *range_start,
+                    *insert_before,
+                    snapshot_id.as_deref(),
+                ),
+            )
+            .await
+            {
+                Ok(result) => settled(result)?,
+                Err(_) => slow()?,
+            };
+            Some(ApiResponse::PlaylistItemsChanged {
+                id: playlist_id.clone(),
+                message: String::new(),
+                result,
+            })
+        }
+        // Liked Songs is the collection set; albums, artists and the rest
+        // live in sets of their own, which stay with the Web API.
+        ApiRequest::SetSaved { uris, saved }
+            if !uris.is_empty() && uris.iter().all(|uri| uri.starts_with("spotify:track:")) =>
+        {
+            let written = tokio::time::timeout(
+                RADIO_TIMEOUT,
+                session_reads::set_liked(session, uris, *saved, jiff::Timestamp::now().as_second()),
+            )
+            .await;
+            match written {
+                Ok(Ok(())) => Some(ApiResponse::SavedChanged {
+                    uris: uris.clone(),
+                    saved: *saved,
+                    result: Ok(()),
+                }),
+                // Writing the same items again changes nothing, so the Web
+                // API may try whatever the session could not.
+                Ok(Err(error)) => {
+                    log::debug!(
+                        "Liked Songs over the session failed ({error:#}); asking the Web API"
+                    );
+                    None
+                }
+                Err(_) => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 /// A Connect "play" command for `play`: a context by its address, or a
 /// plain list of songs as one page of tracks with no address, the way
 /// Spotify's own apps send a list. `None` when there is nothing to play.
@@ -4753,6 +4946,13 @@ async fn handle(
             },
             None,
         );
+    }
+    // Playlist edits and Liked Songs go over the session first: it spends
+    // none of the shared app's quota, which a busy hour runs dry.
+    if let Ok(session) = playback_session(api, engine)
+        && let Some(response) = write_over_session(session, &request).await
+    {
+        return (response, None);
     }
     // Recommendations come from the seed songs' radio over the session
     // first: it spends none of the Web API's quota, which Last.fm's way
@@ -8244,6 +8444,51 @@ mod cover_routing_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A change turned away for the rate limit is sent again; one refused
+    /// for any other reason, and any playback command, is answered as is.
+    #[test]
+    fn only_a_throttled_change_is_sent_again() {
+        let saved = ApiRequest::SetSaved {
+            uris: vec!["spotify:track:a".into()],
+            saved: true,
+        };
+        assert!(saved.retried_when_throttled());
+        assert!(
+            !ApiRequest::Remote {
+                action: RemoteAction::Next,
+                device_id: None,
+                play: None,
+                position_ms: 0,
+                percent: 0,
+                flag: false,
+                repeat: String::new(),
+            }
+            .retried_when_throttled()
+        );
+        let changed = |result| ApiResponse::PlaylistItemsChanged {
+            id: "p".into(),
+            message: String::new(),
+            result,
+        };
+        assert!(changed(Err(ApiError::RateLimited)).throttled());
+        assert!(
+            !changed(Err(ApiError::Status {
+                status: 403,
+                message: "Forbidden".into(),
+            }))
+            .throttled()
+        );
+        assert!(!changed(Ok(None)).throttled());
+        assert!(!changed(Err(ApiError::RateLimited)).throttled_read());
+        assert!(
+            ApiResponse::Contains {
+                uris: Vec::new(),
+                result: Err(ApiError::RateLimited),
+            }
+            .throttled_read()
+        );
+    }
 
     #[test]
     fn six_session_drops_in_ten_minutes_give_up() {

@@ -287,7 +287,7 @@ fn removal_changes(
     timestamp_ms: i64,
     indices: &[(u32, String)],
 ) -> librespot_protocol::playlist4_external::ListChanges {
-    use librespot_protocol::playlist4_external::{ChangeInfo, Delta, ListChanges, Op, Rem, op};
+    use librespot_protocol::playlist4_external::{Op, Rem, op};
     let ops = indices
         .iter()
         .map(|(index, uri)| {
@@ -303,6 +303,161 @@ fn removal_changes(
             op
         })
         .collect();
+    list_changes(revision, user, timestamp_ms, ops)
+}
+
+/// The songs to add, as a change at `position` (the end when `None`),
+/// each row marked as added by `user` now, as Spotify's own apps add them.
+/// The Web API adds over the shared app's quota; the playlist service
+/// Spotify's apps edit has none.
+pub async fn add_playlist_items(
+    session: &Session,
+    id: &str,
+    uris: &[String],
+    position: Option<u32>,
+) -> Result<Option<String>, Failure> {
+    let revision = current_revision(session, id).await?;
+    let changes = addition_changes(
+        &revision,
+        &session.username(),
+        jiff::Timestamp::now().as_millisecond(),
+        uris,
+        position,
+    );
+    post_changes(session, id, &changes).await
+}
+
+/// Moves the row at `from` to before the row now at `insert_before`, the
+/// way the Web API's reorder counts. The change is based on `snapshot`,
+/// the revision the app saw, when there is one, so Spotify places the move
+/// against the list the user dragged in; else on the list as it is now.
+pub async fn move_playlist_row(
+    session: &Session,
+    id: &str,
+    from: u32,
+    insert_before: u32,
+    snapshot: Option<&str>,
+) -> Result<Option<String>, Failure> {
+    let revision = match snapshot.and_then(|snapshot| {
+        base64::engine::general_purpose::STANDARD_NO_PAD
+            .decode(snapshot)
+            .ok()
+            .filter(|revision| !revision.is_empty())
+    }) {
+        Some(revision) => revision,
+        None => current_revision(session, id).await?,
+    };
+    let changes = move_changes(
+        &revision,
+        &session.username(),
+        jiff::Timestamp::now().as_millisecond(),
+        from,
+        insert_before,
+    );
+    post_changes(session, id, &changes).await
+}
+
+/// The list's revision as it stands, for a change to be based on. A
+/// session slow to answer is a retry: nothing has been sent yet.
+async fn current_revision(session: &Session, id: &str) -> Result<Vec<u8>, Failure> {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        window(session, id, 0, 0),
+    )
+    .await
+    {
+        Ok(list) => Ok(list?.revision),
+        Err(_) => Err(Failure::Retry(anyhow::anyhow!(
+            "the session took too long to read the playlist"
+        ))),
+    }
+}
+
+/// Sends one change and reads the new snapshot from Spotify's answer.
+/// The playlist not being there, not being this account's to edit, or
+/// having changed in a way the move cannot be placed against, is final;
+/// anything else may go through the Web API instead.
+async fn post_changes(
+    session: &Session,
+    id: &str,
+    changes: &librespot_protocol::playlist4_external::ListChanges,
+) -> Result<Option<String>, Failure> {
+    // librespot sends a change once: it is not idempotent.
+    let bytes = session
+        .spclient()
+        .post_playlist_changes(&SpotifyId::from_base62(id)?, changes)
+        .await
+        .map_err(|error| match error.kind {
+            ErrorKind::Aborted => Failure::Definitive(ApiError::Status {
+                status: 409,
+                message: "The playlist changed meanwhile. Check it and try again.".into(),
+            }),
+            _ => refused(error),
+        })?;
+    Ok(SelectedListContent::parse_from_bytes(&bytes)
+        .ok()
+        .map(|answer| answer.revision().to_vec())
+        .filter(|revision| !revision.is_empty())
+        .map(|revision| snapshot(&revision)))
+}
+
+fn addition_changes(
+    revision: &[u8],
+    user: &str,
+    timestamp_ms: i64,
+    uris: &[String],
+    position: Option<u32>,
+) -> librespot_protocol::playlist4_external::ListChanges {
+    use librespot_protocol::playlist4_external::{Add, ItemAttributes, Op, op};
+    let mut add = Add::new();
+    add.items = uris
+        .iter()
+        .map(|uri| {
+            let mut attributes = ItemAttributes::new();
+            attributes.set_added_by(user.to_string());
+            attributes.set_timestamp(timestamp_ms);
+            let mut item = Item::new();
+            item.set_uri(uri.clone());
+            item.attributes = protobuf::MessageField::some(attributes);
+            item
+        })
+        .collect();
+    match position {
+        Some(position) => add.set_from_index(position as i32),
+        None => add.set_add_last(true),
+    }
+    let mut op = Op::new();
+    op.set_kind(op::Kind::ADD);
+    op.add = protobuf::MessageField::some(add);
+    list_changes(revision, user, timestamp_ms, vec![op])
+}
+
+fn move_changes(
+    revision: &[u8],
+    user: &str,
+    timestamp_ms: i64,
+    from: u32,
+    insert_before: u32,
+) -> librespot_protocol::playlist4_external::ListChanges {
+    use librespot_protocol::playlist4_external::{Mov, Op, op};
+    let mut mov = Mov::new();
+    mov.set_from_index(from as i32);
+    mov.set_length(1);
+    mov.set_to_index(insert_before as i32);
+    let mut op = Op::new();
+    op.set_kind(op::Kind::MOV);
+    op.mov = protobuf::MessageField::some(mov);
+    list_changes(revision, user, timestamp_ms, vec![op])
+}
+
+/// One delta of `ops` by `user`, based on `revision`.
+fn list_changes(
+    revision: &[u8],
+    user: &str,
+    timestamp_ms: i64,
+    ops: Vec<librespot_protocol::playlist4_external::Op>,
+) -> librespot_protocol::playlist4_external::ListChanges {
+    use librespot_protocol::playlist4_external::{ChangeInfo, Delta, ListChanges};
     let mut info = ChangeInfo::new();
     info.set_user(user.to_string());
     info.set_timestamp(timestamp_ms);
@@ -587,6 +742,39 @@ pub async fn set_hidden(
         )
         .await?;
     Ok(())
+}
+
+/// Saves songs to Liked Songs, or removes them, as Spotify's apps do: items
+/// of the account's collection set, written without the Web API's quota.
+/// Writing an item twice leaves it as once, so a failure may be retried.
+pub async fn set_liked(
+    session: &Session,
+    uris: &[String],
+    liked: bool,
+    now: i64,
+) -> anyhow::Result<()> {
+    session
+        .spclient()
+        .write_collection(LIKED_SONGS, liked_items(uris, liked, now))
+        .await?;
+    Ok(())
+}
+
+const LIKED_SONGS: &str = "collection";
+
+fn liked_items(
+    uris: &[String],
+    liked: bool,
+    now: i64,
+) -> Vec<librespot_protocol::collection2v2::CollectionItem> {
+    uris.iter()
+        .map(|uri| librespot_protocol::collection2v2::CollectionItem {
+            uri: uri.clone(),
+            added_at: if liked { now } else { 0 },
+            is_removed: !liked,
+            ..Default::default()
+        })
+        .collect()
 }
 
 fn hidden_item(
@@ -1403,6 +1591,57 @@ mod tests {
         assert!(complete(20, 150, 50, 170).is_ok(), "the last, short page");
         assert!(complete(0, 0, 50, 0).is_ok(), "an empty list");
         assert!(complete(0, 500, 50, 170).is_ok(), "past the end");
+    }
+
+    /// Songs added with a position go there; without one they go last.
+    /// Each row says who added it and when, based on the list's revision.
+    #[test]
+    fn an_addition_lands_where_asked_and_says_who_added_it() {
+        use librespot_protocol::playlist4_external::op;
+        let uris = vec![TRACK.to_string(), EPISODE.to_string()];
+        let at = addition_changes(b"rev", "me", 42, &uris, Some(3));
+        assert_eq!(at.base_revision(), b"rev");
+        let op = &at.deltas[0].ops[0];
+        assert_eq!(op.kind(), op::Kind::ADD);
+        assert_eq!(op.add.from_index(), 3);
+        assert!(!op.add.add_last());
+        assert_eq!(
+            op.add.items.iter().map(Item::uri).collect::<Vec<_>>(),
+            [TRACK, EPISODE]
+        );
+        assert_eq!(op.add.items[0].attributes.added_by(), "me");
+        assert_eq!(op.add.items[0].attributes.timestamp(), 42);
+
+        let last = addition_changes(b"rev", "me", 42, &uris, None);
+        let op = &last.deltas[0].ops[0];
+        assert!(op.add.add_last());
+        assert!(!op.add.has_from_index());
+    }
+
+    /// A move is one row, counted as the Web API's reorder counts it.
+    #[test]
+    fn a_move_takes_one_row_to_before_the_target() {
+        use librespot_protocol::playlist4_external::op;
+        let changes = move_changes(b"rev", "me", 42, 5, 1);
+        assert_eq!(changes.base_revision(), b"rev");
+        let op = &changes.deltas[0].ops[0];
+        assert_eq!(op.kind(), op::Kind::MOV);
+        assert_eq!(op.mov.from_index(), 5);
+        assert_eq!(op.mov.length(), 1);
+        assert_eq!(op.mov.to_index(), 1);
+    }
+
+    /// A removal from Liked Songs is the same item marked removed.
+    #[test]
+    fn liked_items_are_added_now_or_marked_removed() {
+        let uris = vec![TRACK.to_string()];
+        let saved = liked_items(&uris, true, 7);
+        assert_eq!(saved[0].uri, TRACK);
+        assert_eq!(saved[0].added_at, 7);
+        assert!(!saved[0].is_removed);
+        let removed = liked_items(&uris, false, 7);
+        assert_eq!(removed[0].added_at, 0);
+        assert!(removed[0].is_removed);
     }
 
     #[test]
