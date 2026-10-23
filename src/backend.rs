@@ -4509,13 +4509,36 @@ fn playback_session<'a>(
         })
 }
 
-/// A Connect "play" command for `play`, or `None` for a plain list of
-/// songs, which only the Web API can start.
+/// A Connect "play" command for `play`: a context by its address, or a
+/// plain list of songs as one page of tracks with no address, the way
+/// Spotify's own apps send a list. `None` when there is nothing to play.
 fn connect_play(play: &PlayRequest, shuffle: Option<bool>) -> Option<serde_json::Value> {
-    let context = play.context_uri.as_deref()?;
+    let context = match play.context_uri.as_deref() {
+        Some(context) => serde_json::json!({
+            "uri": context,
+            "url": format!("context://{context}"),
+            "metadata": {},
+        }),
+        None if !play.uris.is_empty() => serde_json::json!({
+            "pages": [{
+                "tracks": play
+                    .uris
+                    .iter()
+                    .map(|uri| serde_json::json!({ "uri": uri }))
+                    .collect::<Vec<_>>(),
+            }],
+            "metadata": {},
+        }),
+        None => return None,
+    };
     let mut skip_to = serde_json::Map::new();
-    if let Some(uri) = &play.offset_uri {
-        skip_to.insert("track_uri".into(), uri.clone().into());
+    let start_uri = play.offset_uri.clone().or_else(|| {
+        play.offset_position
+            .filter(|_| play.context_uri.is_none())
+            .and_then(|index| play.uris.get(index as usize).cloned())
+    });
+    if let Some(uri) = start_uri {
+        skip_to.insert("track_uri".into(), uri.into());
     }
     if let Some(index) = play.offset_position {
         skip_to.insert("track_index".into(), index.into());
@@ -4534,11 +4557,7 @@ fn connect_play(play: &PlayRequest, shuffle: Option<bool>) -> Option<serde_json:
     }
     Some(serde_json::json!({
         "endpoint": "play",
-        "context": {
-            "uri": context,
-            "url": format!("context://{context}"),
-            "metadata": {},
-        },
+        "context": context,
         "play_origin": {
             "feature_identifier": "chanceify",
             "feature_version": crate::build_info::version(),
@@ -4571,9 +4590,8 @@ fn connect_queue(uri: &str) -> serde_json::Value {
 /// Playback commands for another device go through Spotify Connect over
 /// the session, as Spotify's own apps send them: they cost no Web API
 /// quota, so a rate limit cannot stall them, and the device answers at
-/// once. `None` leaves the request to the Web API: no session, a device
-/// Connect does not list, a list of songs with no context, or Connect
-/// refusing the command.
+/// once. `None` leaves the request to the Web API: no session, or a device
+/// Connect does not list.
 async fn over_connect(
     api: &ApiGateway,
     engine: Option<&Engine>,
@@ -4581,14 +4599,17 @@ async fn over_connect(
 ) -> Option<ApiResponse> {
     let engine = engine
         .filter(|engine| same_account(&engine.session().username(), api.account().as_ref()))?;
+    // Once Connect knows the device, a refusal is reported rather than
+    // retried through the Web API: under a rate limit that request would
+    // wait half a minute and then act on a moment that has passed.
     let send = |target: String, commands: Vec<serde_json::Value>| async move {
         for command in commands {
             if let Err(error) = engine.command_device(&target, command).await {
-                log::info!("{error:#}; asking the Web API instead");
-                return false;
+                log::warn!("{error:#}");
+                return Err(ApiError::Network(format!("{error:#}")));
             }
         }
-        true
+        Ok(())
     };
     match request {
         ApiRequest::Remote {
@@ -4623,32 +4644,28 @@ async fn over_connect(
                     connect_value("set_repeating_track", (repeat == "track").into()),
                 ],
                 RemoteAction::Volume => {
-                    return match engine.set_device_volume(&target, *percent).await {
-                        Ok(()) => Some(ApiResponse::Remote {
-                            action: *action,
-                            result: Ok(()),
-                        }),
-                        Err(error) => {
-                            log::info!("{error:#}; asking the Web API instead");
-                            None
-                        }
-                    };
+                    let result = engine
+                        .set_device_volume(&target, *percent)
+                        .await
+                        .map_err(|error| ApiError::Network(format!("{error:#}")));
+                    return Some(ApiResponse::Remote {
+                        action: *action,
+                        result,
+                    });
                 }
             };
-            send(target, commands).await.then_some(ApiResponse::Remote {
+            Some(ApiResponse::Remote {
                 action: *action,
-                result: Ok(()),
+                result: send(target, commands).await,
             })
         }
         ApiRequest::ShufflePlay { device_id, play } => {
             let target = engine.connect_target(device_id.as_deref())?;
             let command = connect_play(play, Some(true))?;
-            send(target, vec![command])
-                .await
-                .then_some(ApiResponse::Remote {
-                    action: RemoteAction::Play,
-                    result: Ok(()),
-                })
+            Some(ApiResponse::Remote {
+                action: RemoteAction::Play,
+                result: send(target, vec![command]).await,
+            })
         }
         ApiRequest::AddToQueue {
             uri,
@@ -4656,12 +4673,10 @@ async fn over_connect(
             label,
         } => {
             let target = engine.connect_target(device_id.as_deref())?;
-            send(target, vec![connect_queue(uri)])
-                .await
-                .then(|| ApiResponse::QueueAdded {
-                    label: label.clone(),
-                    result: Ok(()),
-                })
+            Some(ApiResponse::QueueAdded {
+                label: label.clone(),
+                result: send(target, vec![connect_queue(uri)]).await,
+            })
         }
         ApiRequest::AddManyToQueue {
             request,
@@ -4675,10 +4690,7 @@ async fn over_connect(
             let mut added = 0;
             for uri in uris {
                 if let Err(error) = engine.command_device(&target, connect_queue(uri)).await {
-                    if added == 0 {
-                        log::info!("{error:#}; asking the Web API instead");
-                        return None;
-                    }
+                    log::warn!("{error:#}");
                     return Some(ApiResponse::QueueBatchAdded {
                         request: *request,
                         added,

@@ -485,15 +485,6 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     changed = true;
                 }
             });
-            filtered_row(ui, &palette, &needle, &account, &account_rows[1], |ui| {
-                if theme::pill_button(ui, &palette, &gettext(locale, "Setup guide"), false)
-                    .clicked()
-                {
-                    app.actions.push(Action::OpenUrl(
-                        "https://madlygeeked.github.io/chanceify/#setup".into(),
-                    ));
-                }
-            });
             if in_use {
                 filtered_row(ui, &palette, &needle, &account, &account_rows[2], |ui| {
                     if theme::pill_button(ui, &palette, &gettext(locale, "Remove"), false).clicked()
@@ -518,6 +509,15 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
             }
+            filtered_row(ui, &palette, &needle, &account, &account_rows[1], |ui| {
+                if theme::pill_button(ui, &palette, &gettext(locale, "Setup guide"), false)
+                    .clicked()
+                {
+                    app.actions.push(Action::OpenUrl(
+                        "https://madlygeeked.github.io/chanceify/#setup".into(),
+                    ));
+                }
+            });
             if needle.is_empty() && !in_use {
                 ui.add_space(8.0);
                 // Word for word the setup on the chanceify site, with the
@@ -832,6 +832,35 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
             });
+            if needle.is_empty() || "crossfade between my own song files fade".contains(needle.as_str()) {
+                widgets::setting_row_sized(
+                    ui,
+                    &palette,
+                    "Crossfade between my own song files",
+                    "",
+                    330.0,
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            let current = app.settings.crossfade_secs;
+                            for seconds in [12u8, 8, 6, 4, 2, 0] {
+                                let label = if seconds == 0 {
+                                    "Off".to_string()
+                                } else {
+                                    format!("{seconds} s")
+                                };
+                                if theme::soft_button(ui, &palette, None, &label, current == seconds)
+                                    .clicked()
+                                    && current != seconds
+                                {
+                                    app.settings.crossfade_secs = seconds;
+                                    changed = true;
+                                }
+                            }
+                        });
+                    },
+                );
+            }
             #[cfg(windows)]
             filtered_row(ui, &palette, &needle, &playback, &playback_rows[9], |ui| {
                 ui.horizontal(|ui| {
@@ -906,32 +935,6 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                         }
                     });
                 });
-            }
-            if needle.is_empty() {
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    theme::text(
-                        ui,
-                        "Crossfade between my own song files",
-                        theme::regular(theme::BODY_TEXT),
-                        palette.text,
-                    );
-                    let current = app.settings.crossfade_secs;
-                    for seconds in [0u8, 2, 4, 6, 8, 12] {
-                        let label = if seconds == 0 {
-                            "Off".to_string()
-                        } else {
-                            format!("{seconds} s")
-                        };
-                        if theme::soft_button(ui, &palette, None, &label, current == seconds).clicked()
-                            && current != seconds
-                        {
-                            app.settings.crossfade_secs = seconds;
-                            changed = true;
-                        }
-                    }
-                });
-                theme::subtle(ui, &palette, "Starts with the next list you play.");
             }
             ui.add_space(4.0);
             if playback_dirty {
@@ -1051,7 +1054,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                         }
                         let mut solid = app.settings.window_solidity() * 100.0;
                         ui.horizontal(|ui| {
-                            theme::text(ui, "See-through window (works with every theme: 100% solid, 50% like frosted glass)", theme::regular(theme::BODY_TEXT), palette.secondary);
+                            theme::text(ui, "Transparency", theme::regular(theme::BODY_TEXT), palette.secondary);
                             if setting_slider(
                                 ui,
                                 &palette,
