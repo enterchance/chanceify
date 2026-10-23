@@ -306,6 +306,134 @@ pub enum PlayerCommand {
 pub enum EngineEvent {
     State(LocalState),
     SessionEnded,
+    /// What Spotify Connect says is playing on the account, the moment it
+    /// changes and every few seconds while it plays.
+    Connect(Box<ConnectView>),
+}
+
+/// One device on the account, as Spotify Connect lists it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ConnectDevice {
+    pub id: String,
+    pub name: String,
+    /// The kind of device in the Web API's words: "Smartphone", "Computer".
+    pub kind: String,
+    pub volume_percent: u8,
+}
+
+/// The account's playback as Spotify Connect pushes it over the streaming
+/// session: no Web API request, so no rate limit, and no polling delay.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ConnectView {
+    /// The device playing, or `None` when nothing is active.
+    pub active_device: Option<String>,
+    pub devices: Vec<ConnectDevice>,
+    pub track_uri: Option<String>,
+    pub context_uri: Option<String>,
+    /// Where the song is now, worked out from when Spotify last placed it.
+    pub position_ms: u32,
+    pub duration_ms: u32,
+    pub playing: bool,
+    pub shuffle: bool,
+    pub repeat_context: bool,
+    pub repeat_track: bool,
+    /// The songs coming up, in the order they will play.
+    pub next_uris: Vec<String>,
+}
+
+/// How often the view is passed on while nothing changes, so the position
+/// shown stays right and a quiet device still counts as playing.
+const CONNECT_HEARTBEAT: Duration = Duration::from_secs(5);
+
+/// How many upcoming songs a view carries: more than the queue panel shows.
+const CONNECT_NEXT_KEPT: usize = 50;
+
+fn connect_view(
+    player: Option<&librespot_protocol::player::PlayerState>,
+    cluster: &librespot_connect::ClusterState,
+) -> ConnectView {
+    let mut devices: Vec<ConnectDevice> = cluster
+        .devices
+        .values()
+        .map(|device| ConnectDevice {
+            id: device.device_id.clone(),
+            name: device.device_alias.clone(),
+            kind: device_kind(&format!("{:?}", device.device_type)),
+            volume_percent: ((u64::from(device.volume) * 100 + 32_767) / 65_535).min(100) as u8,
+        })
+        .collect();
+    devices.sort_by(|left, right| left.name.cmp(&right.name));
+    let mut view = ConnectView {
+        active_device: cluster.active_device_id.clone(),
+        devices,
+        ..ConnectView::default()
+    };
+    let Some(state) = player else {
+        return view;
+    };
+    if view.active_device.is_none() {
+        return view;
+    }
+    view.track_uri = state
+        .track
+        .as_ref()
+        .map(|track| track.uri.clone())
+        .filter(|uri| !uri.is_empty());
+    view.context_uri = Some(state.context_uri.clone()).filter(|uri| !uri.is_empty());
+    view.playing = state.is_playing && !state.is_paused;
+    view.duration_ms = u32::try_from(state.duration.max(0)).unwrap_or(u32::MAX);
+    let mut position = state.position_as_of_timestamp.max(0);
+    if view.playing && state.timestamp > 0 {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_millis() as i64);
+        let speed = if state.playback_speed > 0.0 {
+            state.playback_speed
+        } else {
+            1.0
+        };
+        position += ((now - state.timestamp).max(0) as f64 * speed) as i64;
+    }
+    if view.duration_ms > 0 {
+        position = position.min(i64::from(view.duration_ms));
+    }
+    view.position_ms = u32::try_from(position).unwrap_or(u32::MAX);
+    if let Some(options) = state.options.as_ref() {
+        view.shuffle = options.shuffling_context;
+        view.repeat_context = options.repeating_context;
+        view.repeat_track = options.repeating_track;
+    }
+    view.next_uris = state
+        .next_tracks
+        .iter()
+        .map(|track| track.uri.as_str())
+        .filter(|uri| uri.starts_with("spotify:track:") || uri.starts_with("spotify:episode:"))
+        .take(CONNECT_NEXT_KEPT)
+        .map(str::to_owned)
+        .collect();
+    view
+}
+
+/// "SMARTPHONE" as the Web API spells it: "Smartphone". Television and
+/// audio dongle keep the Web API's own names.
+fn device_kind(raw: &str) -> String {
+    match raw {
+        "TV" => "TV".into(),
+        "AUDIO_DONGLE" => "CastAudio".into(),
+        "CAST_VIDEO" => "CastVideo".into(),
+        "CAST_AUDIO" => "CastAudio".into(),
+        "GAME_CONSOLE" => "GameConsole".into(),
+        "SMARTWATCH" => "Smartwatch".into(),
+        "AUTOMOBILE" => "Automobile".into(),
+        other => {
+            let lower = other.to_ascii_lowercase();
+            let mut chars = lower.chars();
+            match chars.next() {
+                Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+                None => String::new(),
+            }
+        }
+    }
 }
 
 pub type Notify = Arc<dyn Fn(EngineEvent) + Send + Sync>;
@@ -385,6 +513,9 @@ pub struct Engine {
     /// The player came from a dropped session and still plays what that
     /// session left it, until something is loaded through this one.
     carrying: std::sync::atomic::AtomicBool,
+    /// The last view Spotify Connect pushed, for sending commands to the
+    /// device it names.
+    connect: Arc<Mutex<Option<ConnectView>>>,
 }
 
 impl Engine {
@@ -471,6 +602,44 @@ impl Engine {
             }
         });
 
+        // Spotify Connect pushes every change on the account to the
+        // session; passing it on replaces asking the Web API what plays.
+        let connect: Arc<Mutex<Option<ConnectView>>> = Arc::default();
+        {
+            let mut players = spirc.watch_player_state();
+            let mut clusters = spirc.watch_cluster_state();
+            let watch_notify = Arc::clone(&notify);
+            let watch_session = session.clone();
+            let watch_flag = Arc::clone(&shutting_down);
+            let watch_connect = Arc::clone(&connect);
+            tokio::spawn(async move {
+                let mut heartbeat = tokio::time::interval(CONNECT_HEARTBEAT);
+                heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    tokio::select! {
+                        changed = players.changed() => if changed.is_err() { break },
+                        changed = clusters.changed() => if changed.is_err() { break },
+                        _ = heartbeat.tick() => {}
+                    }
+                    if watch_session.is_invalid()
+                        || watch_flag.load(std::sync::atomic::Ordering::SeqCst)
+                    {
+                        break;
+                    }
+                    // A change often arrives as a cluster update and a player
+                    // update together: one view describes both.
+                    tokio::time::sleep(Duration::from_millis(60)).await;
+                    let view = {
+                        let player = players.borrow_and_update().clone();
+                        let cluster = clusters.borrow_and_update().clone();
+                        connect_view(player.as_ref(), &cluster)
+                    };
+                    *watch_connect.lock().unwrap_or_else(|p| p.into_inner()) = Some(view.clone());
+                    watch_notify(EngineEvent::Connect(Box::new(view)));
+                }
+            });
+        }
+
         let device_id = config.device_id();
         Ok(Self {
             player,
@@ -484,6 +653,7 @@ impl Engine {
             closing,
             audio,
             carrying: std::sync::atomic::AtomicBool::new(carrying),
+            connect,
         })
     }
 
@@ -589,6 +759,50 @@ impl Engine {
 
     pub fn device_id(&self) -> &str {
         &self.device_id
+    }
+
+    /// The device a command meant for `device` (or for whatever plays, when
+    /// `None`) goes to over Spotify Connect: one Connect lists right now
+    /// that is not this computer. `None` sends the command the old way.
+    pub fn connect_target(&self, device: Option<&str>) -> Option<String> {
+        let view = self.connect.lock().unwrap_or_else(|p| p.into_inner());
+        let view = view.as_ref()?;
+        let id = device
+            .map(str::to_owned)
+            .or_else(|| view.active_device.clone())?;
+        (id != self.device_id && view.devices.iter().any(|known| known.id == id)).then_some(id)
+    }
+
+    /// Sends one player command to another device through Spotify Connect,
+    /// the way Spotify's own apps do: no Web API request, so no rate limit.
+    pub async fn command_device(&self, target: &str, command: serde_json::Value) -> Result<()> {
+        let endpoint = format!(
+            "/connect-state/v1/player/command/from/{}/to/{target}",
+            self.device_id
+        );
+        let body = serde_json::json!({ "command": command }).to_string();
+        self.session
+            .spclient()
+            .request_as_json(&http::Method::POST, &endpoint, None, Some(&body))
+            .await
+            .map(|_| ())
+            .map_err(|error| anyhow!("Spotify Connect refused the command: {error}"))
+    }
+
+    /// Sets another device's volume through Spotify Connect.
+    pub async fn set_device_volume(&self, target: &str, percent: u8) -> Result<()> {
+        let endpoint = format!(
+            "/connect-state/v1/connect/volume/from/{}/to/{target}",
+            self.device_id
+        );
+        let volume = u32::from(percent.min(100)) * 65_535 / 100;
+        let body = serde_json::json!({ "volume": volume }).to_string();
+        self.session
+            .spclient()
+            .request_as_json(&http::Method::PUT, &endpoint, None, Some(&body))
+            .await
+            .map(|_| ())
+            .map_err(|error| anyhow!("Spotify Connect refused the volume: {error}"))
     }
 
     /// What this engine is heard at, kept past the engine itself: the next

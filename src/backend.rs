@@ -27,8 +27,8 @@ use crate::images::ArtLoader;
 use crate::model::PlaylistCache;
 use crate::paths::AppDirs;
 use crate::player::{
-    Engine, EngineConfig, EngineEvent, Heard, KeptPlayer, LocalState, PlaybackResume,
-    PlayerCommand,
+    ConnectView, Engine, EngineConfig, EngineEvent, Heard, KeptPlayer, LocalState,
+    PlaybackResume, PlayerCommand,
 };
 use crate::session_reads;
 use crate::settings::ProxyConfig;
@@ -639,8 +639,23 @@ struct PlaylistCacheWrite {
     next_offset: Option<u32>,
 }
 
+/// How many upcoming songs are read for the queue the Connect view shows.
+const CONNECT_TRACKS_READ: usize = 30;
+
+/// How long one song's details may take over the session before the view
+/// goes on without them.
+const CONNECT_READ_TIMEOUT: Duration = Duration::from_secs(6);
+
+/// Songs read for the Connect view are forgotten past this many.
+const CONNECT_TRACKS_KEPT: usize = 2_000;
+
 pub enum Command {
     OpenThemesFolder,
+    /// Spotify Connect pushed what plays on the account.
+    Connect(Box<ConnectView>),
+    /// Songs read over the session for the Connect view, `None` where the
+    /// read failed.
+    ConnectTracks(Vec<(String, Option<Track>)>),
     ProxyRestored {
         lease: CredentialLease,
         result: Result<crate::credentials::Loaded, crate::credentials::Error>,
@@ -904,6 +919,13 @@ pub enum Event {
     },
     Local(Box<LocalState>),
     Api(Box<ApiResponse>),
+    /// What plays on the account, the queue and the devices, from Spotify
+    /// Connect's own updates rather than the Web API.
+    Connect {
+        state: Option<PlaybackState>,
+        queue: Option<Queue>,
+        devices: Vec<Device>,
+    },
     Accent {
         url: String,
         color: [u8; 3],
@@ -1512,6 +1534,12 @@ struct Worker {
     /// other request reports.
     rootlist_pending: bool,
     album_type_lookup: AlbumTypeLookup,
+    /// The last thing Spotify Connect pushed.
+    connect_view: Option<Box<ConnectView>>,
+    /// Songs the Connect view names, read once over the session.
+    connect_tracks: std::collections::HashMap<String, Option<Track>>,
+    /// Songs being read for the Connect view.
+    connect_fetching: HashSet<String>,
     /// Saved shows waiting for the streaming session to say which are audiobooks.
     audiobook_lookup: BTreeSet<String>,
     /// Radios asked for before the streaming session was ready, by seed.
@@ -1594,6 +1622,9 @@ impl Worker {
             heard: None,
             rootlist_pending: false,
             album_type_lookup: AlbumTypeLookup::default(),
+            connect_view: None,
+            connect_tracks: std::collections::HashMap::new(),
+            connect_fetching: HashSet::new(),
             audiobook_lookup: BTreeSet::new(),
             radio_waiting: BTreeMap::new(),
             prerelease_waiting: None,
@@ -2042,6 +2073,14 @@ impl Worker {
                     self.finish_playback_authorization(attempt)
                 }
                 Command::Reconnect => self.reconnect_engine(),
+                Command::Connect(view) => self.on_connect_view(view),
+                Command::ConnectTracks(tracks) => {
+                    for (uri, track) in tracks {
+                        self.connect_fetching.remove(&uri);
+                        self.connect_tracks.insert(uri, track);
+                    }
+                    self.emit_connect();
+                }
                 Command::RetryEngine { generation } => self.retry_engine(generation),
                 Command::DiscoverReceivers => self.discover_receivers(),
                 Command::ActivateReceiver(receiver) => self.activate_receiver(*receiver),
@@ -2791,6 +2830,165 @@ impl Worker {
         self.connect_engine(credentials);
     }
 
+    /// Keeps the pushed view and reads, over the session, any song it names
+    /// that has not been read yet: the current one first, then what is next.
+    fn on_connect_view(&mut self, view: Box<ConnectView>) {
+        let Some(engine) = self.engine.clone() else {
+            return;
+        };
+        if !same_account(&engine.session().username(), self.api.account().as_ref()) {
+            return;
+        }
+        let wanted: Vec<String> = view
+            .track_uri
+            .iter()
+            .chain(view.next_uris.iter().take(CONNECT_TRACKS_READ))
+            .filter(|uri| uri.starts_with("spotify:track:"))
+            .filter(|uri| {
+                !self.connect_tracks.contains_key(*uri) && !self.connect_fetching.contains(*uri)
+            })
+            .cloned()
+            .collect();
+        self.connect_view = Some(view);
+        if !wanted.is_empty() {
+            if self.connect_tracks.len() > CONNECT_TRACKS_KEPT {
+                self.connect_tracks.clear();
+            }
+            self.connect_fetching.extend(wanted.iter().cloned());
+            let commands = self.commands.clone();
+            tokio::spawn(async move {
+                let session = engine.session().clone();
+                let mut first = true;
+                let mut rest = tokio::task::JoinSet::new();
+                for uri in wanted {
+                    let session = session.clone();
+                    let read = async move {
+                        let id = uri.strip_prefix("spotify:track:").unwrap_or_default().to_owned();
+                        let track = tokio::time::timeout(
+                            CONNECT_READ_TIMEOUT,
+                            session_reads::track_details(&session, &id),
+                        )
+                        .await
+                        .ok()
+                        .and_then(Result::ok);
+                        (uri, track)
+                    };
+                    if first {
+                        // The song playing is shown the moment it is read.
+                        first = false;
+                        let _ = commands.send(Command::ConnectTracks(vec![read.await]));
+                    } else {
+                        rest.spawn(read);
+                    }
+                }
+                let mut read = Vec::new();
+                while let Some(done) = rest.join_next().await {
+                    if let Ok(done) = done {
+                        read.push(done);
+                    }
+                }
+                if !read.is_empty() {
+                    let _ = commands.send(Command::ConnectTracks(read));
+                }
+            });
+        }
+        self.emit_connect();
+    }
+
+    /// Passes the view on in the shapes the Web API would have answered
+    /// with, once the song playing has been read.
+    fn emit_connect(&mut self) {
+        let Some(view) = self.connect_view.as_deref() else {
+            return;
+        };
+        let item = |uri: &str| -> Option<PlayableItem> {
+            self.connect_tracks
+                .get(uri)
+                .cloned()
+                .flatten()
+                .map(PlayableItem::Track)
+        };
+        if view
+            .track_uri
+            .as_ref()
+            .is_some_and(|uri| self.connect_fetching.contains(uri))
+        {
+            // Wait for the song's details rather than show a blank one.
+            return;
+        }
+        let device = |id: &str| {
+            view.devices
+                .iter()
+                .find(|device| device.id == id)
+                .map(|device| Device {
+                    id: Some(device.id.clone()),
+                    name: device.name.clone(),
+                    is_active: view.active_device.as_deref() == Some(id),
+                    is_restricted: false,
+                    volume_percent: Some(device.volume_percent),
+                    supports_volume: Some(true),
+                    kind: device.kind.clone(),
+                })
+        };
+        let devices: Vec<Device> = view
+            .devices
+            .iter()
+            .filter_map(|known| device(&known.id))
+            .collect();
+        let state = view.active_device.as_deref().map(|active| {
+            let current = view.track_uri.as_deref().and_then(item);
+            PlaybackState {
+                device: device(active).or_else(|| {
+                    Some(Device {
+                        id: Some(active.to_owned()),
+                        is_active: true,
+                        ..Device::default()
+                    })
+                }),
+                repeat_state: if view.repeat_track {
+                    "track"
+                } else if view.repeat_context {
+                    "context"
+                } else {
+                    "off"
+                }
+                .into(),
+                shuffle_state: view.shuffle,
+                context: view.context_uri.as_ref().map(|uri| crate::api::models::Context {
+                    uri: uri.clone(),
+                    kind: uri.split(':').nth(1).unwrap_or_default().to_owned(),
+                }),
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |elapsed| elapsed.as_millis() as u64),
+                progress_ms: Some(view.position_ms),
+                is_playing: view.playing,
+                currently_playing_type: current.as_ref().map(|item| {
+                    match item {
+                        PlayableItem::Track(_) => "track",
+                        PlayableItem::Episode(_) => "episode",
+                    }
+                    .to_owned()
+                }),
+                item: current,
+            }
+        });
+        let next_reading = view
+            .next_uris
+            .iter()
+            .take(CONNECT_TRACKS_READ)
+            .any(|uri| self.connect_fetching.contains(uri));
+        let queue = (!next_reading).then(|| Queue {
+            currently_playing: view.track_uri.as_deref().and_then(item),
+            queue: view.next_uris.iter().filter_map(|uri| item(uri)).collect(),
+        });
+        self.emit(Event::Connect {
+            state,
+            queue,
+            devices,
+        });
+    }
+
     fn engine_notify(&self) -> crate::player::Notify {
         let events = self.events.clone();
         let commands = self.commands.clone();
@@ -2807,6 +3005,9 @@ impl Worker {
                 }
                 EngineEvent::SessionEnded => {
                     let _ = commands.send(Command::Reconnect);
+                }
+                EngineEvent::Connect(view) => {
+                    let _ = commands.send(Command::Connect(view));
                 }
             }
         })
@@ -4253,11 +4454,202 @@ fn playback_session<'a>(
         })
 }
 
+/// A Connect "play" command for `play`, or `None` for a plain list of
+/// songs, which only the Web API can start.
+fn connect_play(play: &PlayRequest, shuffle: Option<bool>) -> Option<serde_json::Value> {
+    let context = play.context_uri.as_deref()?;
+    let mut skip_to = serde_json::Map::new();
+    if let Some(uri) = &play.offset_uri {
+        skip_to.insert("track_uri".into(), uri.clone().into());
+    }
+    if let Some(index) = play.offset_position {
+        skip_to.insert("track_index".into(), index.into());
+    }
+    let mut overrides = serde_json::Map::new();
+    if let Some(shuffle) = shuffle {
+        overrides.insert("shuffling_context".into(), shuffle.into());
+    }
+    let mut options = serde_json::json!({
+        "license": "on-demand",
+        "skip_to": skip_to,
+        "player_options_override": overrides,
+    });
+    if play.position_ms > 0 {
+        options["seek_to"] = play.position_ms.into();
+    }
+    Some(serde_json::json!({
+        "endpoint": "play",
+        "context": {
+            "uri": context,
+            "url": format!("context://{context}"),
+            "metadata": {},
+        },
+        "play_origin": {
+            "feature_identifier": "chanceify",
+            "feature_version": crate::build_info::version(),
+        },
+        "options": options,
+        "logging_params": {},
+    }))
+}
+
+fn connect_command(endpoint: &str) -> serde_json::Value {
+    serde_json::json!({ "endpoint": endpoint, "logging_params": {} })
+}
+
+fn connect_value(endpoint: &str, value: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "endpoint": endpoint, "value": value, "logging_params": {} })
+}
+
+fn connect_queue(uri: &str) -> serde_json::Value {
+    serde_json::json!({
+        "endpoint": "add_to_queue",
+        "track": {
+            "uri": uri,
+            "metadata": { "is_queued": "true" },
+            "provider": "queue",
+        },
+        "logging_params": {},
+    })
+}
+
+/// Playback commands for another device go through Spotify Connect over
+/// the session, as Spotify's own apps send them: they cost no Web API
+/// quota, so a rate limit cannot stall them, and the device answers at
+/// once. `None` leaves the request to the Web API: no session, a device
+/// Connect does not list, a list of songs with no context, or Connect
+/// refusing the command.
+async fn over_connect(
+    api: &ApiGateway,
+    engine: Option<&Engine>,
+    request: &ApiRequest,
+) -> Option<ApiResponse> {
+    let engine = engine
+        .filter(|engine| same_account(&engine.session().username(), api.account().as_ref()))?;
+    let send = |target: String, commands: Vec<serde_json::Value>| async move {
+        for command in commands {
+            if let Err(error) = engine.command_device(&target, command).await {
+                log::info!("{error:#}; asking the Web API instead");
+                return false;
+            }
+        }
+        true
+    };
+    match request {
+        ApiRequest::Remote {
+            action,
+            device_id,
+            play,
+            position_ms,
+            percent,
+            flag,
+            repeat,
+        } => {
+            let target = engine.connect_target(device_id.as_deref())?;
+            let commands = match action {
+                RemoteAction::Play => match play {
+                    Some(play) => vec![connect_play(play, None)?],
+                    None => vec![connect_command("resume")],
+                },
+                RemoteAction::Pause => vec![connect_command("pause")],
+                RemoteAction::Next => vec![connect_command("skip_next")],
+                RemoteAction::Previous => vec![connect_command("skip_prev")],
+                RemoteAction::Seek => vec![serde_json::json!({
+                    "endpoint": "seek_to",
+                    "value": position_ms,
+                    "position": position_ms,
+                    "logging_params": {},
+                })],
+                RemoteAction::Shuffle => {
+                    vec![connect_value("set_shuffling_context", (*flag).into())]
+                }
+                RemoteAction::Repeat => vec![
+                    connect_value("set_repeating_context", (repeat != "off").into()),
+                    connect_value("set_repeating_track", (repeat == "track").into()),
+                ],
+                RemoteAction::Volume => {
+                    return match engine.set_device_volume(&target, *percent).await {
+                        Ok(()) => Some(ApiResponse::Remote {
+                            action: *action,
+                            result: Ok(()),
+                        }),
+                        Err(error) => {
+                            log::info!("{error:#}; asking the Web API instead");
+                            None
+                        }
+                    };
+                }
+            };
+            send(target, commands).await.then_some(ApiResponse::Remote {
+                action: *action,
+                result: Ok(()),
+            })
+        }
+        ApiRequest::ShufflePlay { device_id, play } => {
+            let target = engine.connect_target(device_id.as_deref())?;
+            let command = connect_play(play, Some(true))?;
+            send(target, vec![command])
+                .await
+                .then_some(ApiResponse::Remote {
+                    action: RemoteAction::Play,
+                    result: Ok(()),
+                })
+        }
+        ApiRequest::AddToQueue {
+            uri,
+            device_id,
+            label,
+        } => {
+            let target = engine.connect_target(device_id.as_deref())?;
+            send(target, vec![connect_queue(uri)])
+                .await
+                .then(|| ApiResponse::QueueAdded {
+                    label: label.clone(),
+                    result: Ok(()),
+                })
+        }
+        ApiRequest::AddManyToQueue {
+            request,
+            uris,
+            device_id,
+        } => {
+            let target = engine.connect_target(device_id.as_deref())?;
+            // Queued one after another, so they land in the order given. A
+            // refusal partway reports what was queued rather than starting
+            // again through the Web API, which would queue those twice.
+            let mut added = 0;
+            for uri in uris {
+                if let Err(error) = engine.command_device(&target, connect_queue(uri)).await {
+                    if added == 0 {
+                        log::info!("{error:#}; asking the Web API instead");
+                        return None;
+                    }
+                    return Some(ApiResponse::QueueBatchAdded {
+                        request: *request,
+                        added,
+                        result: Err(ApiError::Network(format!("{error:#}"))),
+                    });
+                }
+                added += 1;
+            }
+            Some(ApiResponse::QueueBatchAdded {
+                request: *request,
+                added,
+                result: Ok(()),
+            })
+        }
+        _ => None,
+    }
+}
+
 async fn handle(
     api: &ApiGateway,
     engine: Option<&Engine>,
     request: ApiRequest,
 ) -> (ApiResponse, Option<ApiSource>) {
+    if let Some(response) = over_connect(api, engine, &request).await {
+        return (response, None);
+    }
     if let ApiRequest::HiddenSongs { generation } = request {
         let result = match playback_session(api, engine) {
             Ok(session) => session_reads::hidden_songs(session)

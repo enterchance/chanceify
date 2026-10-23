@@ -40,6 +40,9 @@ const REMOTE_POLL_IDLE: Duration = Duration::from_secs(20);
 /// show up; everything this program does itself is immediate.
 const QUEUE_STALE: Duration = Duration::from_secs(15 * 60);
 const REMOTE_FRESH: Duration = Duration::from_secs(45);
+/// Spotify Connect counts as answering for this long after its last view;
+/// it sends one every few seconds while the session is up.
+const CONNECT_LIVE: Duration = Duration::from_secs(15);
 const DEVICES_FRESH: Duration = Duration::from_secs(12);
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(280);
 
@@ -438,6 +441,13 @@ pub struct App {
     remote_poll_pending: bool,
     /// Serial of the newest playback poll sent; older answers are stale.
     remote_poll_seq: u64,
+    /// When Spotify Connect last pushed what plays. While it keeps doing
+    /// so, the Web API is not asked about playback, the queue or devices.
+    connect_live_at: Option<Instant>,
+    /// The queue and devices last pushed, so an unchanged repeat is not
+    /// handled again.
+    connect_queue_seen: Option<Vec<String>>,
+    connect_devices_seen: Option<Vec<Device>>,
     /// The restorable session (sorts, recents, resume point) changed and
     /// should be written shortly, not only at exit.
     pub session_dirty: bool,
@@ -1201,6 +1211,9 @@ impl App {
             remote_polled_at: Instant::now() - REMOTE_POLL_IDLE,
             remote_poll_pending: false,
             remote_poll_seq: 0,
+            connect_live_at: None,
+            connect_queue_seen: None,
+            connect_devices_seen: None,
             session_dirty: false,
             last_session_save: Instant::now(),
             zoom_applied: false,
@@ -3170,6 +3183,11 @@ impl App {
                 }
                 Event::Local(state) => self.handle_local(*state),
                 Event::Api(response) => self.handle_api(*response),
+                Event::Connect {
+                    state,
+                    queue,
+                    devices,
+                } => self.handle_connect(state, queue, devices),
                 Event::Accent { url, color } => {
                     self.accent_pending.remove(&url);
                     let tint = self.palette.tint_from_art(color);
@@ -6170,8 +6188,60 @@ impl App {
         self.ensure_loaded(page);
     }
 
+    /// Whether Spotify Connect is pushing what plays, which makes asking
+    /// the Web API about playback, the queue and devices unnecessary.
+    fn connect_live(&self) -> bool {
+        self.connect_live_at
+            .is_some_and(|at| at.elapsed() < CONNECT_LIVE)
+    }
+
+    /// Takes what Spotify Connect pushed as if the Web API had answered:
+    /// the same checks apply, with no request made and no polling delay.
+    fn handle_connect(
+        &mut self,
+        state: Option<PlaybackState>,
+        queue: Option<Queue>,
+        devices: Vec<Device>,
+    ) {
+        self.connect_live_at = Some(Instant::now());
+        self.remote_poll_seq += 1;
+        self.remote_poll_pending = false;
+        self.remote_polled_at = Instant::now();
+        self.remote_recheck_at = None;
+        self.handle_api(ApiResponse::PlaybackState {
+            seq: self.remote_poll_seq,
+            result: Ok(state),
+        });
+        if let Some(queue) = queue {
+            let seen: Vec<String> = queue
+                .currently_playing
+                .iter()
+                .chain(queue.queue.iter())
+                .map(|item| item.uri().to_string())
+                .collect();
+            if self.connect_queue_seen.as_ref() != Some(&seen)
+                || !matches!(self.queue, Loadable::Loaded(_))
+            {
+                self.connect_queue_seen = Some(seen);
+                self.queue_seq += 1;
+                self.queue_fetched_at = Some(Instant::now());
+                self.handle_api(ApiResponse::Queue {
+                    seq: self.queue_seq,
+                    result: Ok(queue),
+                });
+            }
+        }
+        if !devices.is_empty()
+            && !self.devices_loading
+            && self.connect_devices_seen.as_ref() != Some(&devices)
+        {
+            self.connect_devices_seen = Some(devices.clone());
+            self.handle_api(ApiResponse::Devices(Ok(devices)));
+        }
+    }
+
     fn poll_remote(&mut self, _immediate: bool) {
-        if !self.is_connected() {
+        if !self.is_connected() || self.connect_live() {
             return;
         }
         self.remote_poll_pending = true;
@@ -6184,6 +6254,11 @@ impl App {
 
     fn refresh_devices(&mut self) {
         if !self.is_connected() || self.devices_loading {
+            return;
+        }
+        if self.connect_live() {
+            // Spotify Connect lists the devices as they change.
+            self.devices_fetched_at = Some(Instant::now());
             return;
         }
         self.devices_loading = true;
@@ -6204,6 +6279,13 @@ impl App {
         }
         if !matches!(self.queue, Loadable::Loaded(_)) {
             self.queue = Loadable::Loading;
+        }
+        if self.connect_live() {
+            // Spotify Connect pushes the queue whenever it changes; the
+            // next view fills in whatever is still loading.
+            self.queue_fetched_at = Some(Instant::now());
+            self.connect_queue_seen = None;
+            return;
         }
         self.queue_fetched_at = Some(Instant::now());
         self.queue_seq += 1;
