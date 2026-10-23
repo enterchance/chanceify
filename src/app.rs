@@ -4544,6 +4544,20 @@ impl App {
             self.check_for_updates(false);
         }
 
+        // Someone was signed in last time: their playlists are on screen
+        // while the sign-in finishes, not after it.
+        if !self.offline
+            && !self.is_connected()
+            && self.optimistic_user.is_some()
+            && matches!(self.library.playlists, Loadable::NotLoaded)
+        {
+            // Once: a missing file is not looked for again every frame.
+            static TRIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !TRIED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                self.show_remembered_playlists();
+            }
+        }
+
         // The computer stays awake for as long as music plays on it, and
         // may sleep again once it pauses or plays on another device.
         let wants_awake = !self.offline
@@ -4824,7 +4838,10 @@ impl App {
     /// Shows the list kept from the last launch while the real one loads,
     /// so the sidebar is not empty and no page waits on Spotify to draw it.
     fn show_remembered_playlists(&mut self) {
-        if !matches!(self.library.playlists, Loadable::Loading) {
+        if !matches!(
+            self.library.playlists,
+            Loadable::Loading | Loadable::NotLoaded
+        ) {
             return;
         }
         let Some(path) = self.playlist_list_path() else {

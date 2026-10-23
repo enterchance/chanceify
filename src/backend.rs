@@ -2407,6 +2407,18 @@ impl Worker {
         let gateway = Arc::clone(&self.api);
         let commands = self.commands.clone();
         let attempt = self.authorization_attempt;
+        // Who was signed in last time. When Spotify's Web API is slow or
+        // limiting, "who am I" can take a long while to answer; the grant
+        // on disk is the one that user signed in with, so the window opens
+        // as them at once and the first real answer refreshes the details.
+        let remembered: Option<User> = if source == ApiSource::Shared {
+            std::fs::read(self.dirs.cache.join("last_user.json"))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<User>(&bytes).ok())
+                .filter(|user| !user.id.is_empty())
+        } else {
+            None
+        };
         tokio::spawn(async move {
             let mut wait = Duration::from_secs(2);
             let error = loop {
@@ -2414,7 +2426,15 @@ impl Worker {
                     let _ = commands.send(Command::SignInEnded { source, attempt });
                     return;
                 }
-                match client.me().await {
+                let answer = if remembered.is_some() {
+                    match tokio::time::timeout(Duration::from_secs(4), client.me()).await {
+                        Ok(answer) => answer,
+                        Err(_) => Err(ApiError::RateLimited),
+                    }
+                } else {
+                    client.me().await
+                };
+                match answer {
                     Ok(user) => {
                         let _ = commands.send(Command::WebVerified {
                             source,
@@ -2426,6 +2446,24 @@ impl Worker {
                         return;
                     }
                     Err(error @ ApiError::SignInExpired { .. }) => break error,
+                    Err(error)
+                        if remembered.is_some()
+                            && (error.is_rate_limited()
+                                || matches!(error, ApiError::QuotaExhausted)
+                                || error.status().is_none_or(|status| status >= 500)) =>
+                    {
+                        log::warn!("Spotify sign-in check is slow ({error}); opening as the last user");
+                        if let Some(user) = remembered.clone() {
+                            let _ = commands.send(Command::WebVerified {
+                                source,
+                                token: Box::new(token),
+                                user: Box::new(user),
+                                lease: lease.clone(),
+                                attempt,
+                            });
+                            return;
+                        }
+                    }
                     Err(error) if error.status().is_some_and(|status| status < 500) => break error,
                     Err(error) => {
                         log::warn!("Spotify sign-in verification will retry: {error}");
