@@ -45,6 +45,9 @@ struct Change {
     /// Only a refresh started after the write can retire its optimistic state.
     #[serde(skip)]
     confirmed_generation: u64,
+    /// Whether `item.added_at` was supplied by a Spotify server row.
+    #[serde(default)]
+    server_origin: bool,
 }
 
 struct Refresh {
@@ -125,15 +128,33 @@ impl LikedSongs {
             self.refreshed_at = now;
             self.saved_through = None;
             let complete = self.server.is_complete();
+            let contiguous_prefix = self.server.base_offset == 0 && self.server.windows.is_empty();
+            let oldest_loaded_ts = if contiguous_prefix {
+                self.server.items.last().and_then(track_timestamp)
+            } else {
+                None
+            };
             self.changes.retain(|uri, change| {
-                let present = self.server.items.iter().any(|item| &item.track.uri == uri);
-                !(change.confirmed
+                let server_item = self.server.items.iter().find(|item| &item.track.uri == uri);
+                let change_ts = track_timestamp(&change.item);
+                let retired = change.confirmed
                     && change.confirmed_generation < self.generation
                     && if change.saved {
-                        present
+                        server_item.is_some()
+                    } else if let Some(server_track) = server_item {
+                        match (track_timestamp(server_track), change_ts) {
+                            (Some(server_ts), Some(change_ts)) => server_ts > change_ts,
+                            _ => false,
+                        }
                     } else {
-                        complete && !present
-                    })
+                        complete
+                            || (change.server_origin
+                                && match (change_ts, oldest_loaded_ts) {
+                                    (Some(change_ts), Some(oldest_ts)) => change_ts > oldest_ts,
+                                    _ => false,
+                                })
+                    };
+                !retired
             });
         } else {
             self.server.absorb(offset, page);
@@ -147,16 +168,25 @@ impl LikedSongs {
     }
 
     pub fn change(&mut self, uri: String, saved: bool, track: Track) {
-        let item = self
+        let (item, server_origin) = self
             .server
             .items
             .iter()
             .find(|item| item.track.uri == uri)
-            .cloned()
-            .or_else(|| self.changes.get(&uri).map(|change| change.item.clone()))
-            .unwrap_or_else(|| SavedTrack {
-                added_at: Some(jiff::Timestamp::now().to_string()),
-                track,
+            .map(|item| (item.clone(), true))
+            .or_else(|| {
+                self.changes
+                    .get(&uri)
+                    .map(|change| (change.item.clone(), change.server_origin))
+            })
+            .unwrap_or_else(|| {
+                (
+                    SavedTrack {
+                        added_at: Some(jiff::Timestamp::now().to_string()),
+                        track,
+                    },
+                    false,
+                )
             });
         self.changes.insert(
             uri,
@@ -165,6 +195,7 @@ impl LikedSongs {
                 item,
                 confirmed: false,
                 confirmed_generation: self.generation,
+                server_origin,
             },
         );
     }
@@ -270,6 +301,10 @@ impl LikedSongs {
                 .collect(),
         })
     }
+}
+
+fn track_timestamp(track: &SavedTrack) -> Option<jiff::Timestamp> {
+    track.added_at.as_deref()?.parse().ok()
 }
 
 pub async fn read(path: &std::path::Path, account: &str) -> Option<Cache> {

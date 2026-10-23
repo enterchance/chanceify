@@ -495,6 +495,8 @@ fn contents_inner(app: &mut App, ui: &mut egui::Ui, compact: bool) {
                 shift: 0.0,
                 picked: false,
                 picked_songs: &[],
+                picked_positions: &[],
+                position: None,
             },
         );
         ui.add_space(SECTION_GAP);
@@ -892,6 +894,8 @@ fn recents_contents_inner(app: &mut App, ui: &mut egui::Ui) {
                 shift: 0.0,
                 picked: picked_rows.contains(&index),
                 picked_songs: &picked_songs,
+                picked_positions: &[],
+                position: None,
             },
         );
         if let Some(pick) = pick {
@@ -972,6 +976,8 @@ fn queue_row(
             shift,
             picked: picked_rows.contains(&index),
             picked_songs,
+            picked_positions: &[],
+            position: None,
         },
     );
     if let Some(pick) = pick {

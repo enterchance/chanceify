@@ -1174,6 +1174,18 @@ pub fn picked_menu(
     songs: &[PlayableItem],
     editable_playlist: Option<&(String, Option<String>)>,
 ) {
+    picked_menu_at(ui, app, songs, &[], editable_playlist);
+}
+
+/// [`picked_menu`] for rows of a playlist at `positions`, so removing one
+/// copy of a song the list holds more than once removes only that copy.
+fn picked_menu_at(
+    ui: &mut Ui,
+    app: &mut App,
+    songs: &[PlayableItem],
+    positions: &[u32],
+    editable_playlist: Option<&(String, Option<String>)>,
+) {
     let palette = app.palette;
     let locale = app.locale;
     fit_menu(ui, 300.0);
@@ -1242,6 +1254,7 @@ pub fn picked_menu(
         app.actions.push(Action::RemoveFromPlaylist {
             playlist_id: playlist_id.clone(),
             uris: uris.clone(),
+            positions: positions.to_vec(),
         });
     }
     add_to_playlist_menu(ui, app, songs);
@@ -1372,6 +1385,7 @@ pub(crate) fn playlist_picker(
             app.actions.push(Action::RemoveFromPlaylist {
                 playlist_id: id.clone(),
                 uris: items.iter().map(|item| item.uri().to_string()).collect(),
+                positions: Vec::new(),
             });
         } else {
             app.actions.push(Action::AddToPlaylist {
@@ -1421,6 +1435,7 @@ pub(crate) fn playlist_picker(
                             app.actions.push(Action::RemoveFromPlaylist {
                                 playlist_id: id.clone(),
                                 uris: items.iter().map(|item| item.uri().to_string()).collect(),
+                                positions: Vec::new(),
                             });
                         } else {
                             app.actions.push(Action::AddToPlaylist {
@@ -1443,6 +1458,19 @@ pub fn item_menu(
     item: &PlayableItem,
     context: Option<&RowContext>,
     index: Option<usize>,
+) {
+    item_menu_at(ui, app, item, context, index, None);
+}
+
+/// [`item_menu`] for a playlist row at `position`, so removing it removes
+/// that copy of a song the list holds more than once.
+fn item_menu_at(
+    ui: &mut Ui,
+    app: &mut App,
+    item: &PlayableItem,
+    context: Option<&RowContext>,
+    index: Option<usize>,
+    position: Option<u32>,
 ) {
     let palette = app.palette;
     let locale = app.locale;
@@ -1650,6 +1678,7 @@ pub fn item_menu(
             app.actions.push(Action::RemoveFromPlaylist {
                 playlist_id: playlist_id.clone(),
                 uris: vec![uri.clone()],
+                positions: position.into_iter().collect(),
             });
         }
     }
@@ -2021,6 +2050,11 @@ pub struct TrackRow<'a> {
     /// the menu can update a destination playlist before Spotify answers.
     /// Empty where a list does not offer picking.
     pub picked_songs: &'a [PlayableItem],
+    /// The playlist position of each of `picked_songs`, when the list is a
+    /// playlist that knows them; empty otherwise.
+    pub picked_positions: &'a [u32],
+    /// This row's position in its playlist, whatever the view's order.
+    pub position: Option<u32>,
 }
 
 /// Draw each credited artist separately so its Spotify id remains clickable.
@@ -2497,7 +2531,11 @@ fn track_row_contents(
     // A queue row is a position, not the song itself: the same song can
     // sit in the queue while it plays (a repeat wrapping around, a song
     // queued twice), and only the Now playing row is the playing one.
+    // A song started from one of its copies in this list marks that copy
+    // alone: the others are other places in the list.
+    let played_copy = app.row_is_played_copy(row.context, row.index, row.item.uri());
     let is_current = !matches!(row.context, RowContext::Queue)
+        && played_copy
         && app
             .current_track_uri()
             .is_some_and(|uri| uri == row.item.uri());
@@ -2614,7 +2652,7 @@ fn track_row_contents(
     }
 
     // Number / play.
-    let pending = app.play_pending(row.item.uri());
+    let pending = played_copy && app.play_pending(row.item.uri());
     let draw_number = |ui: &mut Ui, cell: Rect| {
         if pending {
             let mut child = ui.new_child(
@@ -2702,7 +2740,7 @@ fn track_row_contents(
                     Color32::from_black_alpha(alpha),
                 );
             };
-            if app.play_pending(row.item.uri()) {
+            if pending {
                 scrim(140);
                 let mut child = ui.new_child(
                     UiBuilder::new()
@@ -3321,7 +3359,16 @@ fn track_row_contents(
         egui::Popup::menu(&more)
             .id(menu_id)
             .frame(menu_frame(&palette))
-            .show(|ui| item_menu(ui, app, row.item, Some(row.context), Some(row.index)));
+            .show(|ui| {
+                item_menu_at(
+                    ui,
+                    app,
+                    row.item,
+                    Some(row.context),
+                    Some(row.index),
+                    row.position,
+                )
+            });
     }
 
     // Row interactions.
@@ -3408,7 +3455,7 @@ fn track_row_contents(
                     } => Some(playlist),
                     _ => None,
                 };
-                picked_menu(ui, app, row.picked_songs, editable);
+                picked_menu_at(ui, app, row.picked_songs, row.picked_positions, editable);
                 // In the queue the picked songs can be taken out of it, as
                 // far as the queue lets any song leave.
                 if matches!(row.context, RowContext::Queue)
@@ -3434,7 +3481,14 @@ fn track_row_contents(
                     }
                 }
             } else {
-                item_menu(ui, app, row.item, Some(row.context), Some(row.index));
+                item_menu_at(
+                    ui,
+                    app,
+                    row.item,
+                    Some(row.context),
+                    Some(row.index),
+                    row.position,
+                );
             }
         });
     crate::autoscroll::row(ui, &response);
@@ -6266,6 +6320,8 @@ mod tests {
                                     shift: 0.0,
                                     picked,
                                     picked_songs: &[],
+                                    picked_positions: &[],
+                                    position: None,
                                 },
                             );
                             rect = response.rect;

@@ -19,6 +19,7 @@ use librespot_protocol::extended_metadata::{
     BatchedEntityRequest, BatchedExtensionResponse, EntityRequest, ExtensionQuery,
 };
 use librespot_protocol::extension_kind::ExtensionKind;
+use librespot_protocol::playlist4_external::{Item, SelectedListContent};
 use protobuf::{EnumOrUnknown, Message as _};
 
 use crate::api::ApiError;
@@ -173,6 +174,147 @@ pub async fn library(session: &Session, ids: &[String]) -> Vec<Playlist> {
     lists
 }
 
+/// One playlist row picked for removal: its song, its position among the
+/// rows the app holds, and how many copies of the song sit before it there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemovedRow {
+    pub uri: String,
+    pub position: u32,
+    pub copy: u32,
+}
+
+/// Removes exactly the picked rows, so the other copies of a song a list
+/// holds more than once stay, with their dates (#937). The Web API removes
+/// by URI, every copy at once, and ignores positions; the playlist service
+/// Spotify's own clients edit removes by index. The indices come from the
+/// list as it stands now, and the change is based on that revision, so a
+/// list edited meanwhile refuses it rather than losing another row. Returns
+/// the new snapshot when Spotify reports it.
+pub async fn remove_playlist_rows(
+    session: &Session,
+    id: &str,
+    rows: &[RemovedRow],
+) -> anyhow::Result<Option<String>> {
+    const CHANGED: &str = "The playlist changed meanwhile. Check it and try again.";
+    let (revision, uris) = playlist_uris(session, id).await?;
+    let indices = removal_indices(&uris, rows).ok_or_else(|| anyhow::anyhow!(CHANGED))?;
+    let changes = removal_changes(
+        &revision,
+        &session.username(),
+        jiff::Timestamp::now().as_millisecond(),
+        &indices,
+    );
+    // librespot sends a change once: it is not idempotent.
+    let bytes = session
+        .spclient()
+        .post_playlist_changes(&SpotifyId::from_base62(id)?, &changes)
+        .await
+        .map_err(|error| match error.kind {
+            ErrorKind::Aborted => anyhow::anyhow!(CHANGED),
+            _ => anyhow::anyhow!("Spotify did not remove the song: {error}"),
+        })?;
+    Ok(SelectedListContent::parse_from_bytes(&bytes)
+        .ok()
+        .map(|answer| answer.revision().to_vec())
+        .filter(|revision| !revision.is_empty())
+        .map(|revision| snapshot(&revision)))
+}
+
+/// The list's revision and every row's URI, read page by page from the
+/// same revision.
+async fn playlist_uris(session: &Session, id: &str) -> anyhow::Result<(Vec<u8>, Vec<String>)> {
+    const PAGE: u32 = 1000;
+    let failed = |failure: Failure| match failure {
+        Failure::Definitive(error) => anyhow::anyhow!("{error}"),
+        Failure::Retry(error) => error,
+    };
+    let mut revision = None;
+    let mut uris = Vec::new();
+    loop {
+        let from = uris.len() as u32;
+        let list = window(session, id, from, PAGE).await.map_err(failed)?;
+        match &revision {
+            None => revision = Some(list.revision.clone()),
+            Some(first) => anyhow::ensure!(
+                *first == list.revision,
+                "The playlist changed meanwhile. Check it and try again."
+            ),
+        }
+        let page = rows(&list, from, PAGE);
+        uris.extend(page.iter().map(|row| row.id.to_uri()));
+        if page.is_empty() || uris.len() as u32 >= total(&list) {
+            break;
+        }
+    }
+    Ok((revision.unwrap_or_default(), uris))
+}
+
+/// Where each picked row sits in `uris`, the list as Spotify holds it: at
+/// its own position when that row holds its song, as when every row before
+/// it is one both sources count, or else the same copy of the song counted
+/// from the start. `None` when a row is not there any more, so nothing is
+/// removed on a guess. Highest index first, so each removal leaves the
+/// indices of the next ones in place.
+fn removal_indices(uris: &[String], rows: &[RemovedRow]) -> Option<Vec<(u32, String)>> {
+    let mut indices = rows
+        .iter()
+        .map(|row| {
+            let at = row.position as usize;
+            let index = if uris.get(at) == Some(&row.uri) {
+                at
+            } else {
+                uris.iter()
+                    .enumerate()
+                    .filter(|(_, uri)| **uri == row.uri)
+                    .nth(row.copy as usize)?
+                    .0
+            };
+            Some((u32::try_from(index).ok()?, row.uri.clone()))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    indices.sort_by_key(|(index, _)| std::cmp::Reverse(*index));
+    indices.dedup_by_key(|(index, _)| *index);
+    Some(indices)
+}
+
+/// One change that removes each `(index, uri)` row on its own, highest
+/// index first. Naming the row's song lets Spotify refuse a row that does
+/// not hold it; `items_as_key` stays unset, since it would remove every
+/// copy of the song instead of the row.
+fn removal_changes(
+    revision: &[u8],
+    user: &str,
+    timestamp_ms: i64,
+    indices: &[(u32, String)],
+) -> librespot_protocol::playlist4_external::ListChanges {
+    use librespot_protocol::playlist4_external::{ChangeInfo, Delta, ListChanges, Op, Rem, op};
+    let ops = indices
+        .iter()
+        .map(|(index, uri)| {
+            let mut item = Item::new();
+            item.set_uri(uri.clone());
+            let mut rem = Rem::new();
+            rem.set_from_index(*index as i32);
+            rem.set_length(1);
+            rem.items.push(item);
+            let mut op = Op::new();
+            op.set_kind(op::Kind::REM);
+            op.rem = protobuf::MessageField::some(rem);
+            op
+        })
+        .collect();
+    let mut info = ChangeInfo::new();
+    info.set_user(user.to_string());
+    info.set_timestamp(timestamp_ms);
+    let mut delta = Delta::new();
+    delta.ops = ops;
+    delta.info = protobuf::MessageField::some(info);
+    let mut changes = ListChanges::new();
+    changes.set_base_revision(revision.to_vec());
+    changes.deltas.push(delta);
+    changes
+}
+
 /// A playlist's header: name, owner, cover, and snapshot.
 pub async fn playlist(session: &Session, id: &str) -> Result<Playlist, Failure> {
     let list = window(session, id, 0, 0).await?;
@@ -294,27 +436,70 @@ fn page(items: Vec<PlaylistItem>, total: u32, offset: u32, limit: u32) -> Page<P
     }
 }
 
-/// The songs of Spotify's radio `station`, in Spotify's order, with their
-/// details from one batched request. Spotify mixes a station afresh each
-/// time it is resolved, so the list returned here is the one to play.
+/// The songs of Spotify's radio `station`, with a song seed first and the
+/// rest in Spotify's order, their details from one batched request. Spotify
+/// mixes a station afresh each time it is resolved, so the list returned
+/// here is the one to play.
 pub async fn station(session: &Session, station: &str) -> anyhow::Result<Vec<Track>> {
     let context = session.spclient().get_context(station).await?;
-    let uris = station_songs(&context);
-    anyhow::ensure!(!uris.is_empty(), "Spotify has no songs for this radio");
-    let found = metadata(session, uris.iter())
+    let uris = station_uris(station, &context)?;
+    let tolerated: BTreeSet<String> = track_seed(station)
+        .map(|seed| seed.to_uri())
+        .into_iter()
+        .collect();
+    let found = metadata_tolerating(session, uris.iter(), &tolerated)
         .await
         .map_err(|failure| match failure {
             Failure::Definitive(error) => anyhow::anyhow!("{error}"),
             Failure::Retry(error) => error,
         })?;
-    Ok(uris
-        .iter()
-        .map(|uri| uri.to_uri())
+    Ok(resolved_station(&uris, &found))
+}
+
+/// The station's songs, with its song seed first, or an error when Spotify
+/// resolved no songs at all.
+fn station_uris(
+    station: &str,
+    context: &librespot_protocol::context::Context,
+) -> anyhow::Result<Vec<SpotifyUri>> {
+    let uris = station_songs(context);
+    anyhow::ensure!(!uris.is_empty(), "Spotify has no songs for this radio");
+    Ok(seed_first(station, uris))
+}
+
+/// A station seeded by a song starts with that song, exactly once, followed
+/// by its other songs in Spotify's order. Other kinds of station keep the
+/// order Spotify returned.
+pub(crate) fn seed_first(station: &str, uris: Vec<SpotifyUri>) -> Vec<SpotifyUri> {
+    let Some(seed) = track_seed(station) else {
+        return uris;
+    };
+    let seed_uri = seed.to_uri();
+    let mut ordered = Vec::with_capacity(uris.len() + 1);
+    ordered.push(seed);
+    ordered.extend(uris.into_iter().filter(|uri| uri.to_uri() != seed_uri));
+    ordered
+}
+
+/// The song a station is seeded by, when the seed is a song Spotify can name.
+fn track_seed(station: &str) -> Option<SpotifyUri> {
+    let seed = crate::util::station_seed(station)?;
+    match SpotifyUri::from_uri(&seed).ok()? {
+        seed @ SpotifyUri::Track { .. } => Some(seed),
+        _ => None,
+    }
+}
+
+/// The station's usable songs in resolved order. A song Spotify has no
+/// details for, such as a seed which is gone or withheld, is left out.
+fn resolved_station(uris: &[SpotifyUri], found: &HashMap<String, PlayableItem>) -> Vec<Track> {
+    uris.iter()
+        .map(SpotifyUri::to_uri)
         .filter_map(|uri| match found.get(&uri) {
             Some(PlayableItem::Track(track)) => Some(track.clone()),
             _ => None,
         })
-        .collect())
+        .collect()
 }
 
 /// Each song of a resolved station once, named by URI or by raw id.
@@ -659,12 +844,23 @@ async fn metadata(
     session: &Session,
     uris: impl Iterator<Item = &SpotifyUri>,
 ) -> Result<HashMap<String, PlayableItem>, Failure> {
+    metadata_tolerating(session, uris, &BTreeSet::new()).await
+}
+
+/// As `metadata`, but a URI in `tolerated` may be left unanswered, refused,
+/// or carry unreadable details without failing the whole batch. A provider
+/// error over the batch still fails it.
+async fn metadata_tolerating(
+    session: &Session,
+    uris: impl Iterator<Item = &SpotifyUri>,
+    tolerated: &BTreeSet<String>,
+) -> Result<HashMap<String, PlayableItem>, Failure> {
     let (request, asked) = batch(uris);
     if asked.is_empty() {
         return Ok(HashMap::new());
     }
     let response = session.spclient().get_extended_metadata(request).await?;
-    answers(&asked, response)
+    answers_tolerating(&asked, tolerated, response)
 }
 
 /// One request for the details of every track and episode among `uris`,
@@ -702,10 +898,12 @@ fn batch<'a>(
 /// legal reasons, and the Web API shows both as a row without one. Any
 /// other refusal, a provider error over the whole batch, bytes that do not
 /// read as a song, or a URI left unanswered is a retry, since a page cached
-/// without those songs would stay wrong. Kinds the request never asked for
-/// are passed over.
-fn answers(
+/// without those songs would stay wrong. A URI in `tolerated` may be
+/// unanswered, refused, or unreadable without failing the page. Kinds the
+/// request never asked for are passed over.
+fn answers_tolerating(
     asked: &BTreeSet<String>,
+    tolerated: &BTreeSet<String>,
     response: BatchedExtensionResponse,
 ) -> Result<HashMap<String, PlayableItem>, Failure> {
     let retry = |reason: String| Failure::Retry(anyhow::anyhow!(reason));
@@ -722,21 +920,29 @@ fn answers(
             _ => continue,
         };
         for data in array.extension_data {
-            unanswered.remove(data.entity_uri.as_str());
+            let uri = data.entity_uri;
+            let optional = tolerated.contains(&uri);
+            unanswered.remove(uri.as_str());
             match data.header.status_code {
                 0 | 200 => {}
                 404 | 451 => continue,
-                code => return Err(retry(format!("{} answered {code}", data.entity_uri))),
+                _ if optional => continue,
+                code => return Err(retry(format!("{uri} answered {code}"))),
             }
-            let item = data
+            let Some(item) = data
                 .extension_data
                 .as_ref()
                 .and_then(|any| playable(kind, &any.value))
-                .ok_or_else(|| retry(format!("unreadable metadata for {}", data.entity_uri)))?;
-            playables.insert(data.entity_uri, item);
+            else {
+                if optional {
+                    continue;
+                }
+                return Err(retry(format!("unreadable metadata for {uri}")));
+            };
+            playables.insert(uri, item);
         }
     }
-    if let Some(uri) = unanswered.first() {
+    if let Some(uri) = unanswered.iter().find(|uri| !tolerated.contains(**uri)) {
         return Err(retry(format!("no metadata answer for {uri}")));
     }
     Ok(playables)
@@ -853,6 +1059,13 @@ mod tests {
 
     const TRACK: &str = "spotify:track:4uLU6hMCjMI75M1A2tKUQC";
     const EPISODE: &str = "spotify:episode:7GhIk7Il098yCjg4BQjzvb";
+
+    fn answers(
+        asked: &BTreeSet<String>,
+        response: BatchedExtensionResponse,
+    ) -> Result<HashMap<String, PlayableItem>, Failure> {
+        answers_tolerating(asked, &BTreeSet::new(), response)
+    }
 
     fn playlist_uri() -> SpotifyUri {
         SpotifyUri::Playlist {

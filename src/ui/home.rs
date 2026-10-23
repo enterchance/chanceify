@@ -1455,6 +1455,8 @@ fn track_list(
                 shift: 0.0,
                 picked: false,
                 picked_songs: &[],
+                picked_positions: &[],
+                position: None,
             },
         );
     }

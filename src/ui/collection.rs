@@ -1036,6 +1036,7 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
         .filter(|(item, _, _)| !item.uri().is_empty())
         .map(|(item, _, _)| item.clone())
         .collect();
+    let picked_positions = picked_positions(&table, &picked, &item_index);
     let mut pick = None;
     let mut row_responses = Vec::new();
     let mut missing = None;
@@ -1215,6 +1216,8 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
                 shift,
                 picked: picked.contains(&row),
                 picked_songs: &picked_songs,
+                picked_positions: &picked_positions,
+                position: playlist_position(&table, index),
             },
         );
         row_responses.push((row, response));
@@ -1345,6 +1348,10 @@ fn list_shortcuts(
     if ui.ctx().text_edit_focused() || app.dialog.is_some() {
         return;
     }
+    let picked_positions = app
+        .picked_rows(&table.page)
+        .map(|picked| picked_positions(table, picked, item_index))
+        .unwrap_or_default();
     let editable = match &table.context {
         RowContext::Context {
             editable_playlist: Some((id, _)),
@@ -1412,6 +1419,7 @@ fn list_shortcuts(
         app.actions.push(Action::RemoveFromPlaylist {
             playlist_id: playlist_id.clone(),
             uris,
+            positions: picked_positions.clone(),
         });
     }
     if let (true, Some(playlist_id)) = (cut, &editable) {
@@ -1423,6 +1431,7 @@ fn list_shortcuts(
         app.actions.push(Action::RemoveFromPlaylist {
             playlist_id: playlist_id.clone(),
             uris,
+            positions: picked_positions,
         });
     } else if copy {
         app.actions.push(Action::CopySongs(picked_songs));
@@ -1430,6 +1439,47 @@ fn list_shortcuts(
     if let (Some(playlist_id), Some(text)) = (editable, pasted) {
         app.actions.push(Action::PasteSongs { playlist_id, text });
     }
+}
+
+/// The playlist positions of the picked songs, so removing one copy of a
+/// repeated song leaves the others; none when some picked row has none.
+fn picked_positions(
+    table: &Table<'_>,
+    picked: &std::collections::BTreeSet<usize>,
+    item_index: &dyn Fn(usize) -> Option<usize>,
+) -> Vec<u32> {
+    picked
+        .iter()
+        .filter_map(|row| item_index(*row))
+        .filter(|index| {
+            table
+                .items
+                .get(*index)
+                .is_some_and(|(item, _, _)| !item.uri().is_empty())
+        })
+        .map(|index| playlist_position(table, index))
+        .collect::<Option<_>>()
+        .unwrap_or_default()
+}
+
+/// The playlist position of the table's item at `index`, which the view's
+/// sort or filter does not change; `None` outside a playlist.
+fn playlist_position(table: &Table<'_>, index: usize) -> Option<u32> {
+    let (RowContext::Context { uri, .. }
+    | RowContext::View {
+        context_uri: uri, ..
+    }) = &table.context
+    else {
+        return None;
+    };
+    if !uri.starts_with("spotify:playlist:") {
+        return None;
+    }
+    let local = match table.pagination.and_then(|page| page.positions) {
+        Some(positions) => *positions.get(index)?,
+        None => index,
+    };
+    u32::try_from(absolute_row_index(table.row_offset, local)).ok()
 }
 
 /// Arrow keys follow display order, independent of the positions of the
@@ -3834,7 +3884,7 @@ mod tests {
         match table.app.actions.as_slice() {
             [
                 Action::CopySongs(copied),
-                Action::RemoveFromPlaylist { playlist_id, uris },
+                Action::RemoveFromPlaylist { playlist_id, uris, .. },
             ] => {
                 let copied: Vec<String> =
                     copied.iter().map(|item| item.uri().to_string()).collect();
@@ -3990,13 +4040,13 @@ mod tests {
         table.key(egui::Key::ArrowDown);
         table.key(egui::Key::Delete);
         assert!(matches!(table.app.actions.as_slice(),
-            [Action::RemoveFromPlaylist { playlist_id, uris }]
+            [Action::RemoveFromPlaylist { playlist_id, uris, .. }]
                 if playlist_id == "test" && uris == &["spotify:track:t_1"]));
         table.app.actions.clear();
         table.modified_key(egui::Key::ArrowDown, egui::Modifiers::SHIFT);
         table.key(egui::Key::Delete);
         assert!(matches!(table.app.actions.as_slice(),
-            [Action::RemoveFromPlaylist { playlist_id, uris }]
+            [Action::RemoveFromPlaylist { playlist_id, uris, .. }]
                 if playlist_id == "test" && uris == &["spotify:track:t_1", "spotify:track:t_2"]));
         table.app.actions.clear();
         table.editable = false;
@@ -4025,7 +4075,7 @@ mod tests {
         table.key(egui::Key::Backspace);
         if cfg!(target_os = "macos") {
             assert!(matches!(table.app.actions.as_slice(),
-                [Action::RemoveFromPlaylist { playlist_id, uris }]
+                [Action::RemoveFromPlaylist { playlist_id, uris, .. }]
                     if playlist_id == "test" && uris == &["spotify:track:t_1", "spotify:track:t_2"]));
         } else {
             assert!(table.app.actions.is_empty());
