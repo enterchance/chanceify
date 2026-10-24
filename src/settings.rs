@@ -1139,6 +1139,8 @@ pub struct Settings {
     /// How tall the cover on the card above the controls is, once the
     /// reader has resized it.
     pub float_card_side: Option<f32>,
+    /// The volume is labelled in decibels instead of percent.
+    pub volume_db: bool,
     /// Where the controls panel sits while the album art is big, and in full-screen lyrics.
     pub float_hide_bar: bool,
     /// The pop-out controls live in a window of their own, off the app.
@@ -1648,6 +1650,7 @@ impl Default for Settings {
             calm_look: 1,
             float_controls: None,
             float_card_side: None,
+            volume_db: false,
             float_hide_bar: false,
             views_width: 316.0,
             views_height: 0.0,

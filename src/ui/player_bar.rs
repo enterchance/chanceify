@@ -6578,9 +6578,53 @@ fn preset_menu(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette
 
 /// The menu on the volume's speaker and percentage: add a volume button, or
 /// open the equalizer. (Right-clicking the bar itself jumps to that spot.)
+/// The volume as a gain in decibels: 0 dB at full, down to -60 dB at the
+/// bottom, on the same cubic curve this computer's player turns the slider
+/// into loudness with. It says how much quieter than full the music is
+/// played, not how loud it is in the room: that depends on the speakers or
+/// headphones and the system volume.
+fn volume_db(percent: u8) -> f64 {
+    let level = f64::from(percent.min(100)) / 100.0;
+    60.0 * (level * 0.9 + 0.1).log10()
+}
+
+/// The percent that plays at `db` decibels on the same curve.
+fn volume_from_db(db: f64) -> u8 {
+    let level = (10f64.powf(db.min(0.0) / 60.0) - 0.1) / 0.9;
+    (level * 100.0).round().clamp(0.0, 100.0) as u8
+}
+
+/// What the volume reads: percent, or decibels when the reader chose them.
+fn volume_label(app: &App, shown: u8) -> String {
+    if app.settings.volume_db {
+        let db = volume_db(shown);
+        if db > -0.5 { "0 dB".into() } else { format!("{db:.0} dB") }
+    } else {
+        format!("{shown}%")
+    }
+}
+
+/// A typed volume: a percent, or decibels when it ends in "dB" or is
+/// negative while the volume reads in decibels.
+fn parse_volume(app: &App, text: &str) -> Option<u8> {
+    let lower = text.trim().to_ascii_lowercase();
+    if lower.ends_with("db") || (app.settings.volume_db && !lower.ends_with('%')) {
+        let number: f64 = lower.trim_end_matches("db").trim().parse().ok()?;
+        return Some(volume_from_db(-number.abs()));
+    }
+    let percent: f32 = lower.trim_end_matches('%').trim().parse().ok()?;
+    Some(percent.round().clamp(0.0, 100.0) as u8)
+}
+
 fn volume_menu(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette, shown: u8) {
     let list = app.settings.volume_presets_value();
     ui.set_width(210.0);
+    let unit = if app.settings.volume_db { "show percent" } else { "show decibels" };
+    if super::widgets::menu_item(ui, palette, None, unit) {
+        app.settings.volume_db = !app.settings.volume_db;
+        app.mark_settings_dirty();
+        ui.close();
+    }
     theme::subtle(ui, palette, "volume buttons");
     if list.len() < 4 && super::widgets::menu_item(ui, palette, None, &gettext(app.locale, "Add button at current volume")) {
         let mut next = list.clone();
@@ -6727,13 +6771,12 @@ fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, presets: &
         if let Some(text) = number_field_framed(
             ui,
             egui::Id::new("volume-field"),
-            format!("{shown}%"),
-            46.0,
+            volume_label(app, shown),
+            if app.settings.volume_db { 56.0 } else { 46.0 },
             palette.secondary,
             false,
-        ) && let Ok(percent) = text.trim().trim_end_matches('%').trim().parse::<f32>()
+        ) && let Some(percent) = parse_volume(app, &text)
         {
-            let percent = percent.round().clamp(0.0, 100.0) as u8;
             app.volume_preview = None;
             app.actions.push(Action::SetVolume(percent));
         }
@@ -6996,7 +7039,7 @@ pub(super) fn volume_row(app: &mut App, ui: &mut egui::Ui, rect: Rect) {
         Icon::Volume2
     };
     theme::paint_icon(ui, icon, icon_box, 16.0 * k, palette.secondary);
-    let text_w = 40.0 * k;
+    let text_w = if app.settings.volume_db { 50.0 } else { 40.0 } * k;
     let track = Rect::from_min_max(
         pos2(icon_box.right() + 8.0, rect.top()),
         pos2(rect.right() - text_w - 6.0, rect.bottom()),
@@ -7050,7 +7093,7 @@ pub(super) fn volume_row(app: &mut App, ui: &mut egui::Ui, rect: Rect) {
     ui.painter().text(
         pos2(rect.right(), mid),
         egui::Align2::RIGHT_CENTER,
-        format!("{shown}%"),
+        volume_label(app, shown),
         theme::regular(12.5 * k),
         palette.secondary,
     );
