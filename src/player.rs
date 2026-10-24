@@ -306,9 +306,196 @@ pub enum PlayerCommand {
 pub enum EngineEvent {
     State(LocalState),
     SessionEnded,
+    /// What Spotify Connect says is playing on the account, the moment it
+    /// changes and every few seconds while it plays.
+    Connect(Box<ConnectView>),
+}
+
+/// One device on the account, as Spotify Connect lists it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ConnectDevice {
+    pub id: String,
+    pub name: String,
+    /// The kind of device in the Web API's words: "Smartphone", "Computer".
+    pub kind: String,
+    pub volume_percent: u8,
+}
+
+/// The account's playback as Spotify Connect pushes it over the streaming
+/// session: no Web API request, so no rate limit, and no polling delay.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ConnectView {
+    /// The device playing, or `None` when nothing is active.
+    pub active_device: Option<String>,
+    pub devices: Vec<ConnectDevice>,
+    pub track_uri: Option<String>,
+    pub context_uri: Option<String>,
+    /// Where the song is now, worked out from when Spotify last placed it.
+    pub position_ms: u32,
+    pub duration_ms: u32,
+    pub playing: bool,
+    pub shuffle: bool,
+    pub repeat_context: bool,
+    pub repeat_track: bool,
+    /// The songs coming up, in the order they will play.
+    pub next_uris: Vec<String>,
+}
+
+/// How often the view is passed on while nothing changes, so the position
+/// shown stays right and a quiet device still counts as playing.
+const CONNECT_HEARTBEAT: Duration = Duration::from_secs(5);
+
+/// How many upcoming songs a view carries: more than the queue panel shows.
+const CONNECT_NEXT_KEPT: usize = 50;
+
+fn connect_view(
+    player: Option<&librespot_protocol::player::PlayerState>,
+    cluster: &librespot_connect::ClusterState,
+) -> ConnectView {
+    let mut devices: Vec<ConnectDevice> = cluster
+        .devices
+        .values()
+        .map(|device| ConnectDevice {
+            id: device.device_id.clone(),
+            name: device.device_alias.clone(),
+            kind: device_kind(&format!("{:?}", device.device_type)),
+            volume_percent: ((u64::from(device.volume) * 100 + 32_767) / 65_535).min(100) as u8,
+        })
+        .collect();
+    devices.sort_by(|left, right| left.name.cmp(&right.name));
+    let mut view = ConnectView {
+        active_device: cluster.active_device_id.clone(),
+        devices,
+        ..ConnectView::default()
+    };
+    let Some(state) = player else {
+        return view;
+    };
+    if view.active_device.is_none() {
+        return view;
+    }
+    view.track_uri = state
+        .track
+        .as_ref()
+        .map(|track| track.uri.clone())
+        .filter(|uri| !uri.is_empty());
+    view.context_uri = Some(state.context_uri.clone()).filter(|uri| !uri.is_empty());
+    view.playing = state.is_playing && !state.is_paused;
+    view.duration_ms = u32::try_from(state.duration.max(0)).unwrap_or(u32::MAX);
+    let mut position = state.position_as_of_timestamp.max(0);
+    if view.playing && state.timestamp > 0 {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_millis() as i64);
+        let speed = if state.playback_speed > 0.0 {
+            state.playback_speed
+        } else {
+            1.0
+        };
+        position += ((now - state.timestamp).max(0) as f64 * speed) as i64;
+    }
+    if view.duration_ms > 0 {
+        position = position.min(i64::from(view.duration_ms));
+    }
+    view.position_ms = u32::try_from(position).unwrap_or(u32::MAX);
+    if let Some(options) = state.options.as_ref() {
+        view.shuffle = options.shuffling_context;
+        view.repeat_context = options.repeating_context;
+        view.repeat_track = options.repeating_track;
+    }
+    view.next_uris = state
+        .next_tracks
+        .iter()
+        .map(|track| track.uri.as_str())
+        .filter(|uri| uri.starts_with("spotify:track:") || uri.starts_with("spotify:episode:"))
+        .take(CONNECT_NEXT_KEPT)
+        .map(str::to_owned)
+        .collect();
+    view
+}
+
+/// "SMARTPHONE" as the Web API spells it: "Smartphone". Television and
+/// audio dongle keep the Web API's own names.
+fn device_kind(raw: &str) -> String {
+    match raw {
+        "TV" => "TV".into(),
+        "AUDIO_DONGLE" => "CastAudio".into(),
+        "CAST_VIDEO" => "CastVideo".into(),
+        "CAST_AUDIO" => "CastAudio".into(),
+        "GAME_CONSOLE" => "GameConsole".into(),
+        "SMARTWATCH" => "Smartwatch".into(),
+        "AUTOMOBILE" => "Automobile".into(),
+        other => {
+            let lower = other.to_ascii_lowercase();
+            let mut chars = lower.chars();
+            match chars.next() {
+                Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+                None => String::new(),
+            }
+        }
+    }
 }
 
 pub type Notify = Arc<dyn Fn(EngineEvent) + Send + Sync>;
+
+/// The parts of an engine that outlive its session (upstream #268).
+/// librespot's player keeps playing what it has already fetched when the
+/// session drops; handed to the next engine, the song carries on through the
+/// reconnect instead of stopping until the new session has loaded it again.
+#[derive(Clone)]
+pub struct KeptPlayer {
+    player: Arc<Player>,
+    mixer: Arc<dyn Mixer>,
+    state: Arc<Mutex<LocalState>>,
+    audio: Arc<AudioControl>,
+}
+
+impl KeptPlayer {
+    /// Stops the song, when nothing is going to pick it up.
+    pub fn stop(&self) {
+        self.player.stop();
+    }
+
+    /// Pauses the song or plays it again, while there is no session to ask.
+    /// False when it has no song left to pause or play.
+    pub fn toggle(&self) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if state.track.is_none() {
+            return false;
+        }
+        // Shown at once, and a second toggle before the player answers
+        // undoes the first instead of repeating it.
+        match state.playback {
+            Playback::Playing => {
+                state.position_ms = state.position_now();
+                state.position_at = None;
+                state.playback = Playback::Paused;
+                self.player.pause();
+            }
+            Playback::Paused => {
+                state.position_at = Some(Instant::now());
+                state.playback = Playback::Playing;
+                self.player.play();
+            }
+            Playback::Stopped | Playback::Loading => return false,
+        }
+        true
+    }
+
+    /// Whether the player still has a song, playing or paused.
+    pub fn has_song(&self) -> bool {
+        self.now().is_some()
+    }
+
+    /// Where the song is now and whether it plays, or `None` once the
+    /// player has nothing left.
+    fn now(&self) -> Option<Interrupted> {
+        self.state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .interrupted()
+    }
+}
 
 pub struct Engine {
     player: Arc<Player>,
@@ -320,7 +507,15 @@ pub struct Engine {
     /// What was playing when the session ended on its own.
     interrupted: Arc<Mutex<Option<Interrupted>>>,
     shutting_down: Arc<std::sync::atomic::AtomicBool>,
+    /// The session is being ended while its player plays on.
+    closing: Arc<std::sync::atomic::AtomicBool>,
     audio: Arc<AudioControl>,
+    /// The player came from a dropped session and still plays what that
+    /// session left it, until something is loaded through this one.
+    carrying: std::sync::atomic::AtomicBool,
+    /// The last view Spotify Connect pushed, for sending commands to the
+    /// device it names.
+    connect: Arc<Mutex<Option<ConnectView>>>,
 }
 
 impl Engine {
@@ -328,20 +523,152 @@ impl Engine {
         self.session.cache().and_then(|cache| cache.credentials())
     }
     /// Connects to Spotify and announces this device on Spotify Connect.
+    /// A player `kept` from an engine whose session dropped plays on, and
+    /// this engine takes it over, instead of starting a player of its own.
     pub async fn connect(
         config: &EngineConfig,
         proxy: Option<reqwest::Url>,
         credentials: Credentials,
         cache: Cache,
         notify: Notify,
+        kept: Option<KeptPlayer>,
     ) -> Result<Self> {
-        let device_id = config.device_id();
         let session_config = SessionConfig {
-            device_id: device_id.clone(),
+            device_id: config.device_id(),
             autoplay: Some(config.autoplay),
             proxy,
             ..SessionConfig::default()
         };
+        let session = Session::new(session_config, Some(cache));
+        let carrying = kept.is_some();
+        let (player, mixer, state, audio) = match kept {
+            Some(kept) => (kept.player, kept.mixer, kept.state, kept.audio),
+            None => Self::start_player(config, &session, &notify)?,
+        };
+
+        let connect_config = ConnectConfig {
+            name: config.device_name.clone(),
+            device_type: DeviceType::Computer,
+            initial_volume: config.initial_volume,
+            disable_volume: false,
+            volume_steps: 64,
+            ..ConnectConfig::default()
+        };
+        let (spirc, spirc_task) = Spirc::new(
+            connect_config,
+            session.clone(),
+            credentials,
+            Arc::clone(&player),
+            Arc::clone(&mixer),
+        )
+        .await
+        .context("unable to connect to Spotify")?;
+        if carrying {
+            // Before Spirc's task runs, so everything it loads comes through
+            // the new session. The song already playing keeps fetching the
+            // rest of its file as it did.
+            player.set_session(session.clone());
+        }
+
+        {
+            let mut current = state.lock().unwrap_or_else(|p| p.into_inner());
+            current.connected = true;
+            current.username = session.username();
+            notify(EngineEvent::State(current.clone()));
+        }
+
+        let shutting_down = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let closing = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let interrupted: Arc<Mutex<Option<Interrupted>>> = Arc::default();
+        let ended_flag = Arc::clone(&shutting_down);
+        let ended_closing = Arc::clone(&closing);
+        let ended_notify = Arc::clone(&notify);
+        let ended_state = Arc::clone(&state);
+        let ended_interrupted = Arc::clone(&interrupted);
+        tokio::spawn(async move {
+            spirc_task.await;
+            let shut_down = ended_flag.load(std::sync::atomic::Ordering::SeqCst);
+            {
+                let mut current = ended_state.lock().unwrap_or_else(|p| p.into_inner());
+                // Kept before the state is marked stopped, so a reconnect
+                // knows what to pick up.
+                *ended_interrupted.lock().unwrap_or_else(|p| p.into_inner()) =
+                    current.interrupted();
+                session_ended(&mut current, shut_down);
+                ended_notify(EngineEvent::State(current.clone()));
+            }
+            if !shut_down && !ended_closing.load(std::sync::atomic::Ordering::SeqCst) {
+                ended_notify(EngineEvent::SessionEnded);
+            }
+        });
+
+        // Spotify Connect pushes every change on the account to the
+        // session; passing it on replaces asking the Web API what plays.
+        let connect: Arc<Mutex<Option<ConnectView>>> = Arc::default();
+        {
+            let mut players = spirc.watch_player_state();
+            let mut clusters = spirc.watch_cluster_state();
+            let watch_notify = Arc::clone(&notify);
+            let watch_session = session.clone();
+            let watch_flag = Arc::clone(&shutting_down);
+            let watch_connect = Arc::clone(&connect);
+            tokio::spawn(async move {
+                let mut heartbeat = tokio::time::interval(CONNECT_HEARTBEAT);
+                heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    tokio::select! {
+                        changed = players.changed() => if changed.is_err() { break },
+                        changed = clusters.changed() => if changed.is_err() { break },
+                        _ = heartbeat.tick() => {}
+                    }
+                    if watch_session.is_invalid()
+                        || watch_flag.load(std::sync::atomic::Ordering::SeqCst)
+                    {
+                        break;
+                    }
+                    // A change often arrives as a cluster update and a player
+                    // update together: one view describes both.
+                    tokio::time::sleep(Duration::from_millis(60)).await;
+                    let view = {
+                        let player = players.borrow_and_update().clone();
+                        let cluster = clusters.borrow_and_update().clone();
+                        connect_view(player.as_ref(), &cluster)
+                    };
+                    *watch_connect.lock().unwrap_or_else(|p| p.into_inner()) = Some(view.clone());
+                    watch_notify(EngineEvent::Connect(Box::new(view)));
+                }
+            });
+        }
+
+        let device_id = config.device_id();
+        Ok(Self {
+            player,
+            spirc: Arc::new(spirc),
+            session,
+            mixer,
+            device_id,
+            state,
+            interrupted,
+            shutting_down,
+            closing,
+            audio,
+            carrying: std::sync::atomic::AtomicBool::new(carrying),
+            connect,
+        })
+    }
+
+    /// A new player, with the mixer, output and state it plays through.
+    #[allow(clippy::type_complexity)]
+    fn start_player(
+        config: &EngineConfig,
+        session: &Session,
+        notify: &Notify,
+    ) -> Result<(
+        Arc<Player>,
+        Arc<dyn Mixer>,
+        Arc<Mutex<LocalState>>,
+        Arc<AudioControl>,
+    )> {
         let normalisation_factor = Arc::new(std::sync::atomic::AtomicU64::new(1.0f64.to_bits()));
         let player_config = PlayerConfig {
             bitrate: config.bitrate(),
@@ -372,12 +699,11 @@ impl Engine {
             volume: config.initial_volume,
             ..LocalState::default()
         }));
-        let session = Session::new(session_config, Some(cache));
         let audio = AudioControl::new(config.buffer_ms);
         let (sink_builder, volume) = sink_builder(
             config,
             Arc::clone(&state),
-            Arc::clone(&notify),
+            Arc::clone(notify),
             &mixer,
             Arc::clone(&normalisation_factor),
             Arc::clone(&audio),
@@ -387,70 +713,33 @@ impl Engine {
         tokio::spawn(run_events(
             events,
             Arc::clone(&state),
-            Arc::clone(&notify),
+            Arc::clone(notify),
             Arc::clone(&audio),
         ));
+        Ok((player, mixer, state, audio))
+    }
 
-        let connect_config = ConnectConfig {
-            name: config.device_name.clone(),
-            device_type: DeviceType::Computer,
-            initial_volume: config.initial_volume,
-            disable_volume: false,
-            volume_steps: 64,
-            ..ConnectConfig::default()
-        };
-        let (spirc, spirc_task) = Spirc::new(
-            connect_config,
-            session.clone(),
-            credentials,
-            Arc::clone(&player),
-            Arc::clone(&mixer),
-        )
-        .await
-        .context("unable to connect to Spotify")?;
-
-        {
-            let mut current = state.lock().unwrap_or_else(|p| p.into_inner());
-            current.connected = true;
-            current.username = session.username();
-            notify(EngineEvent::State(current.clone()));
+    /// The player and what it plays through, for the engine that replaces
+    /// this one after its session dropped. Nothing stops it: the song plays
+    /// on until the next engine takes it over or [`KeptPlayer::stop`].
+    pub fn keep_player(&self) -> KeptPlayer {
+        KeptPlayer {
+            player: Arc::clone(&self.player),
+            mixer: Arc::clone(&self.mixer),
+            state: Arc::clone(&self.state),
+            audio: Arc::clone(&self.audio),
         }
+    }
 
-        let shutting_down = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let interrupted: Arc<Mutex<Option<Interrupted>>> = Arc::default();
-        let ended_flag = Arc::clone(&shutting_down);
-        let ended_notify = Arc::clone(&notify);
-        let ended_state = Arc::clone(&state);
-        let ended_interrupted = Arc::clone(&interrupted);
-        tokio::spawn(async move {
-            spirc_task.await;
-            {
-                let mut current = ended_state.lock().unwrap_or_else(|p| p.into_inner());
-                // Kept before the state is marked stopped, so a reconnect
-                // knows what to pick up.
-                *ended_interrupted.lock().unwrap_or_else(|p| p.into_inner()) =
-                    current.interrupted();
-                current.connected = false;
-                current.playback = Playback::Stopped;
-                current.position_at = None;
-                ended_notify(EngineEvent::State(current.clone()));
-            }
-            if !ended_flag.load(std::sync::atomic::Ordering::SeqCst) {
-                ended_notify(EngineEvent::SessionEnded);
-            }
-        });
+    /// Whether the player still plays only what a dropped session left it:
+    /// nothing has been loaded or picked up through this engine yet.
+    pub fn carrying(&self) -> bool {
+        self.carrying.load(std::sync::atomic::Ordering::SeqCst)
+    }
 
-        Ok(Self {
-            player,
-            spirc: Arc::new(spirc),
-            session,
-            mixer,
-            device_id,
-            state,
-            interrupted,
-            shutting_down,
-            audio,
-        })
+    fn stop_carrying(&self) {
+        self.carrying
+            .store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Playback state to resume after replacing this engine.
@@ -470,6 +759,50 @@ impl Engine {
 
     pub fn device_id(&self) -> &str {
         &self.device_id
+    }
+
+    /// The device a command meant for `device` (or for whatever plays, when
+    /// `None`) goes to over Spotify Connect: one Connect lists right now
+    /// that is not this computer. `None` sends the command the old way.
+    pub fn connect_target(&self, device: Option<&str>) -> Option<String> {
+        let view = self.connect.lock().unwrap_or_else(|p| p.into_inner());
+        let view = view.as_ref()?;
+        let id = device
+            .map(str::to_owned)
+            .or_else(|| view.active_device.clone())?;
+        (id != self.device_id && view.devices.iter().any(|known| known.id == id)).then_some(id)
+    }
+
+    /// Sends one player command to another device through Spotify Connect,
+    /// the way Spotify's own apps do: no Web API request, so no rate limit.
+    pub async fn command_device(&self, target: &str, command: serde_json::Value) -> Result<()> {
+        let endpoint = format!(
+            "/connect-state/v1/player/command/from/{}/to/{target}",
+            self.device_id
+        );
+        let body = serde_json::json!({ "command": command }).to_string();
+        self.session
+            .spclient()
+            .request_as_json(&http::Method::POST, &endpoint, None, Some(&body))
+            .await
+            .map(|_| ())
+            .map_err(|error| anyhow!("Spotify Connect refused the command: {error}"))
+    }
+
+    /// Sets another device's volume through Spotify Connect.
+    pub async fn set_device_volume(&self, target: &str, percent: u8) -> Result<()> {
+        let endpoint = format!(
+            "/connect-state/v1/connect/volume/from/{}/to/{target}",
+            self.device_id
+        );
+        let volume = u32::from(percent.min(100)) * 65_535 / 100;
+        let body = serde_json::json!({ "volume": volume }).to_string();
+        self.session
+            .spclient()
+            .request_as_json(&http::Method::PUT, &endpoint, None, Some(&body))
+            .await
+            .map(|_| ())
+            .map_err(|error| anyhow!("Spotify Connect refused the volume: {error}"))
     }
 
     /// What this engine is heard at, kept past the engine itself: the next
@@ -566,6 +899,14 @@ impl Engine {
         self.player.stop();
     }
 
+    /// Ends the session but leaves the player playing, for an engine that
+    /// is not kept while the song it carries is (upstream #268).
+    pub fn close_session(&self) {
+        self.closing
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = self.spirc.shutdown();
+    }
+
     pub fn resume_point(&self) -> Option<PlaybackResume> {
         if let Some(snapshot) = self.spirc.disconnected_playback() {
             return Some(PlaybackResume::Session(snapshot));
@@ -581,15 +922,23 @@ impl Engine {
     }
 
     pub fn resume(&self, resume: PlaybackResume) -> Result<()> {
-        match resume {
+        // A carried song is picked up where it has got to, playing or
+        // paused as it is now, not where the session dropped.
+        let now = self.carrying().then(|| self.keep_player().now()).flatten();
+        self.stop_carrying();
+        match resume_from(resume, now.as_ref()) {
             PlaybackResume::Session(snapshot) => {
                 self.spirc.restore_playback(snapshot).map_err(Into::into)
             }
-            PlaybackResume::Track(spec) => self.command(PlayerCommand::Load(spec)),
+            PlaybackResume::Track(spec) => self.send_command(PlayerCommand::Load(spec)),
         }
     }
 
     pub fn command(&self, command: PlayerCommand) -> Result<()> {
+        if matches!(command, PlayerCommand::Load(_) | PlayerCommand::Transfer) {
+            // Something else chosen replaces the song a dropped session left.
+            self.stop_carrying();
+        }
         let interrupts_audio = command_interrupts_audio(
             &self.state.lock().unwrap_or_else(|p| p.into_inner()),
             &command,
@@ -611,7 +960,7 @@ impl Engine {
             PlayerCommand::Next => spirc.next()?,
             PlayerCommand::Previous => spirc.prev()?,
             PlayerCommand::ClearQueue => spirc.clear_queue()?,
-            PlayerCommand::AddToQueue(uri) => spirc.add_to_queue(uri)?,
+            PlayerCommand::AddToQueue(uri) => spirc.add_to_queue(SpotifyUri::from_uri(&uri)?)?,
             PlayerCommand::Seek(position_ms) => spirc.set_position_ms(position_ms)?,
             PlayerCommand::Volume(volume) => self.note_volume(volume, false)?,
             PlayerCommand::VolumePreview(volume) => self.note_volume(volume, true)?,
@@ -659,6 +1008,44 @@ impl Engine {
             }
         }
         Ok(())
+    }
+}
+
+/// What to pick up: `resume` as it was when the session dropped, or where a
+/// song the player carried through the reconnect is `now`.
+///
+/// Only a track pickup can be moved: the librespot revision in use has no
+/// way to change the position of a session snapshot (upstream uses
+/// `PlaybackSnapshot::at_position`, librespot-org/librespot#1765), so a
+/// session pickup restores the position of the drop.
+fn resume_from(resume: PlaybackResume, now: Option<&Interrupted>) -> PlaybackResume {
+    let Some(now) = now else {
+        return resume;
+    };
+    match resume {
+        PlaybackResume::Track(mut spec) => {
+            if spec.uris.first() == Some(&now.uri) {
+                spec.position_ms = now.position_ms;
+                spec.play = now.playing;
+            }
+            PlaybackResume::Track(spec)
+        }
+        PlaybackResume::Session(snapshot) => PlaybackResume::Session(std::sync::Arc::new(
+            snapshot.at_position(now.position_ms, now.playing),
+        )),
+    }
+}
+
+/// The session is gone. librespot's player does not stop with it, so a
+/// song playing or paused stays as it is until the next session takes it
+/// over or the player is stopped (upstream #268); a shutdown asked for stops
+/// it.
+fn session_ended(state: &mut LocalState, shut_down: bool) {
+    state.connected = false;
+    if shut_down || !matches!(state.playback, Playback::Playing | Playback::Paused) {
+        state.playback = Playback::Stopped;
+        state.loading = false;
+        state.position_at = None;
     }
 }
 
@@ -717,6 +1104,7 @@ fn sink_builder(
                         let sink = builder(device, AudioFormat::S16);
                         Box::new(Tapped::new(
                             sink,
+                            Some(audio),
                             tap,
                             applied,
                             true,
@@ -742,11 +1130,12 @@ fn sink_builder(
                 report,
                 volume,
                 buffer_ms,
-                audio,
+                Arc::clone(&audio),
                 Arc::clone(&speed),
             ));
             Box::new(Tapped::new(
                 sink,
+                Some(audio),
                 tap,
                 ceiling,
                 false,
@@ -911,7 +1300,7 @@ fn apply_event(state: &mut LocalState, event: PlayerEvent) -> bool {
                 &mut state.error,
                 Some(format!(
                     "This item isn't available: {}",
-                    track_id.to_uri().unwrap_or_default()
+                    track_id.to_uri()
                 )),
             );
             changed |= set(&mut state.loading, false);
@@ -954,7 +1343,8 @@ fn apply_event(state: &mut LocalState, event: PlayerEvent) -> bool {
         | PlayerEvent::EndOfTrack { .. }
         | PlayerEvent::PlayRequestIdChanged { .. }
         | PlayerEvent::AutoPlayChanged { .. }
-        | PlayerEvent::FilterExplicitContentChanged { .. } => false,
+        | PlayerEvent::FilterExplicitContentChanged { .. }
+        | PlayerEvent::SetQueue { .. } => false,
     }
 }
 
@@ -964,7 +1354,7 @@ fn local_track(item: &AudioItem) -> LocalTrack {
             artists
                 .iter()
                 .map(|artist| {
-                    let uri = artist.id.to_uri().ok();
+                    let uri = Some(artist.id.to_uri());
                     ArtistRef {
                         id: uri
                             .as_deref()
@@ -1175,7 +1565,7 @@ mod tests {
         ];
         let item = AudioItem {
             track_id: uri(),
-            uri: uri().to_uri().unwrap(),
+            uri: uri().to_uri(),
             files: Default::default(),
             name: "Song".into(),
             covers: vec![],
@@ -1326,7 +1716,7 @@ mod tests {
     fn interlude() -> AudioItem {
         AudioItem {
             track_id: uri(),
-            uri: uri().to_uri().unwrap(),
+            uri: uri().to_uri(),
             files: Default::default(),
             name: "Short interlude".into(),
             covers: vec![],

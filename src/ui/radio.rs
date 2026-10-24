@@ -108,7 +108,7 @@ pub fn radio(app: &mut App, ui: &mut egui::Ui, seed: &str) {
                     None,
                 );
             } else {
-                widgets::loading_row(ui, &app.palette, app.locale);
+                widgets::skeleton_rows(ui, &app.palette, app.locale, 8);
             }
             return;
         }

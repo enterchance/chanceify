@@ -444,11 +444,12 @@ pub fn paint_sticky_cover(
     let id = egui::Id::new(("sticky-cover", key));
     let corner = CornerRadius::same(radius.min(127.0) as u8);
     if let Some(url) = url {
-        art.touch(url);
-        let image = egui::Image::new(url).show_loading_spinner(false);
-        if let Ok(egui::load::TexturePoll::Ready { texture }) = image.load_for_size(ui.ctx(), rect.size()) {
-            art.release_bytes(url);
-            art.note_decoded(url, texture.size.x.round() as usize, texture.size.y.round() as usize);
+        let cover = CoverAt { url, rect, corner };
+        // The copy at this size, or while it is made, the nearest copy of
+        // the same artwork already on the GPU.
+        if let Some(texture) = cover_url_texture(ui, cover, Some(art))
+            .or_else(|| nearest_copy_texture(ui, cover, Some(art)))
+        {
             ui.ctx().data_mut(|data| data.insert_temp(id, (texture.id, texture.size)));
             paint_cover_texture(ui, texture, rect, corner, false);
             return;
@@ -478,12 +479,14 @@ pub(super) fn paint_cover_with_thumbnail(
         return;
     }
     let corner = CornerRadius::same(radius.min(127.0) as u8);
-    let loaded = sources
-        .requested
-        .is_some_and(|url| paint_cover_url(ui, url, rect, corner, art, false))
-        || sources
-            .previous
-            .is_some_and(|url| paint_ready_cover_url(ui, url, rect, corner, art))
+    let at = |url| CoverAt { url, rect, corner };
+    // A copy at this size, or while it is made, the nearest copy of the
+    // same artwork already on the GPU.
+    let loaded = sources.requested.is_some_and(|url| {
+        paint_cover_url(ui, at(url), art, false) || paint_nearest_copy(ui, at(url), art)
+    }) || sources
+        .previous
+        .is_some_and(|url| paint_ready_cover_url(ui, at(url), art))
         || sources.softened.is_some_and(|texture| {
             paint_cover_texture(
                 ui,
@@ -494,9 +497,9 @@ pub(super) fn paint_cover_with_thumbnail(
             );
             true
         })
-        || sources.thumbnail.is_some_and(|url| {
-            paint_cover_url(ui, url, rect, corner, art, sources.align_thumbnail)
-        });
+        || sources
+            .thumbnail
+            .is_some_and(|url| paint_cover_url(ui, at(url), art, sources.align_thumbnail));
     if !loaded {
         let painter = ui.painter();
         let fill = if palette.dark {
@@ -531,41 +534,120 @@ pub(super) fn ready_cover_texture(
     }
 }
 
-fn paint_ready_cover_url(
-    ui: &Ui,
-    url: &str,
+/// A cover to paint: its artwork, where it goes, and its corners.
+#[derive(Clone, Copy)]
+struct CoverAt<'a> {
+    url: &'a str,
     rect: Rect,
     corner: CornerRadius,
+}
+
+/// Paints `cover`'s artwork only if it needs no wait on the network: a
+/// copy made from bytes already loaded, or one already on the GPU.
+fn paint_ready_cover_url(
+    ui: &Ui,
+    cover: CoverAt<'_>,
     art: Option<&crate::images::ArtLoader>,
 ) -> bool {
-    art.is_some_and(|art| art.is_ready(url)) && paint_cover_url(ui, url, rect, corner, art, false)
+    art.is_some_and(|art| art.is_ready(cover.url)) && paint_cover_url(ui, cover, art, false)
+        || paint_nearest_copy(ui, cover, art)
+}
+
+/// The size of the copy of a cover drawn at `rect`.
+fn cover_copy_pixels(ui: &Ui, rect: Rect) -> u32 {
+    crate::images::cover_pixels(rect.width().max(rect.height()) * ui.ctx().pixels_per_point())
+}
+
+/// The texture of the copy of `cover`'s artwork already on the GPU that is
+/// nearest the size it is drawn at, without asking for one to be made. The
+/// artwork loader's bytes may be on their way back from the disk for
+/// another size meanwhile; the copy is the texture egui already holds.
+fn nearest_copy_texture(
+    ui: &Ui,
+    cover: CoverAt<'_>,
+    art: Option<&crate::images::ArtLoader>,
+) -> Option<egui::load::SizedTexture> {
+    let art = art?;
+    let uri = art.nearest_copy(cover.url, cover_copy_pixels(ui, cover.rect))?;
+    let image = egui::Image::new(uri.as_str())
+        .texture_options(crate::images::COVER_TEXTURE)
+        .show_loading_spinner(false);
+    let Ok(egui::load::TexturePoll::Ready { texture }) =
+        image.load_for_size(ui.ctx(), cover.rect.size())
+    else {
+        return None;
+    };
+    art.touch(cover.url);
+    let [width, height] = [texture.size.x, texture.size.y].map(|side| side.round() as usize);
+    art.note_texture(cover.url, &uri, width, height);
+    Some(texture)
+}
+
+/// Paints the nearest copy of `cover`'s artwork already on the GPU; see
+/// [`nearest_copy_texture`].
+fn paint_nearest_copy(ui: &Ui, cover: CoverAt<'_>, art: Option<&crate::images::ArtLoader>) -> bool {
+    let Some(texture) = nearest_copy_texture(ui, cover, art) else {
+        return false;
+    };
+    paint_cover_texture(ui, texture, cover.rect, cover.corner, false);
+    true
+}
+
+/// The texture of `cover`'s artwork from a copy scaled on the CPU to the
+/// pixels it covers, with a Lanczos filter, so the GPU holds no more than
+/// the screen shows and fine detail survives instead of the GPU skipping
+/// texels of a much larger picture. Artwork that is not fetched over the
+/// network is drawn as it is. `None` until the copy is made.
+fn cover_url_texture(
+    ui: &Ui,
+    cover: CoverAt<'_>,
+    art: Option<&crate::images::ArtLoader>,
+) -> Option<egui::load::SizedTexture> {
+    let CoverAt { url, rect, .. } = cover;
+    if let Some(art) = art {
+        art.touch(url);
+    }
+    let scaled = (url.starts_with("https://") || url.starts_with("http://"))
+        .then(|| crate::images::scaled_uri(url, cover_copy_pixels(ui, rect)));
+    let uri = scaled.as_deref().unwrap_or(url);
+    let image = egui::Image::new(uri)
+        .texture_options(crate::images::COVER_TEXTURE)
+        .show_loading_spinner(false);
+    let Ok(egui::load::TexturePoll::Ready { texture }) = image.load_for_size(ui.ctx(), rect.size())
+    else {
+        return None;
+    };
+    match art {
+        Some(art) => {
+            let [width, height] =
+                [texture.size.x, texture.size.y].map(|side| side.round() as usize);
+            // Only on the frame this copy's texture first appears: the same
+            // artwork can be wanted at another size, a row's and a page
+            // header's, and releasing the bytes on every frame of the one
+            // already made would snatch them from the other each time they
+            // came back from the disk, so it never got made.
+            if art.note_texture(url, uri, width, height) {
+                art.release_bytes(url);
+                crate::images::forget_decoded(ui.ctx(), uri);
+            }
+        }
+        // Nothing tracks this cover's copies, so let go of the decoded one
+        // as soon as egui holds the texture.
+        None => crate::images::forget_decoded(ui.ctx(), uri),
+    }
+    Some(texture)
 }
 
 fn paint_cover_url(
     ui: &Ui,
-    url: &str,
-    rect: Rect,
-    corner: CornerRadius,
+    cover: CoverAt<'_>,
     art: Option<&crate::images::ArtLoader>,
     shift_thumbnail: bool,
 ) -> bool {
-    if let Some(art) = art {
-        art.touch(url);
-    }
-    let image = egui::Image::new(url).show_loading_spinner(false);
-    let Ok(egui::load::TexturePoll::Ready { texture }) = image.load_for_size(ui.ctx(), rect.size())
-    else {
+    let Some(texture) = cover_url_texture(ui, cover, art) else {
         return false;
     };
-    if let Some(art) = art {
-        art.release_bytes(url);
-        art.note_decoded(
-            url,
-            texture.size.x.round() as usize,
-            texture.size.y.round() as usize,
-        );
-    }
-    paint_cover_texture(ui, texture, rect, corner, shift_thumbnail);
+    paint_cover_texture(ui, texture, cover.rect, cover.corner, shift_thumbnail);
     true
 }
 
@@ -734,6 +816,18 @@ fn fit_width(ui: &Ui, need: f32) -> f32 {
     now.max(before).min(room)
 }
 
+/// Holds a popup menu to the width its rows asked for on the last frame, so
+/// the menu has no empty space beside its rows (menus lay out justified, so
+/// without this they stretch to their widest allowed width).
+pub fn fit_menu(ui: &mut Ui, cap: f32) {
+    let key = ui.id().with("menu-fit");
+    let fit = ui
+        .ctx()
+        .data(|data| data.get_temp::<(u64, f32, f32)>(key))
+        .map_or(0.0, |(_, now, before)| now.max(before));
+    ui.set_max_width(if fit > 0.0 { fit.min(cap) } else { cap });
+}
+
 /// One entry in a popup menu. Closes the menu when chosen.
 pub fn menu_item(ui: &mut Ui, palette: &Palette, icon: Option<Icon>, label: &str) -> bool {
     menu_item_enabled(ui, palette, icon, label, true)
@@ -782,7 +876,7 @@ fn menu_row(
         let wanted = crate::bidi::layout(
             ui.painter(),
             label,
-            theme::regular(13.5),
+            theme::regular(theme::BODY_TEXT),
             palette.text,
             f32::INFINITY,
             1,
@@ -840,7 +934,7 @@ fn menu_row(
         let galley = crate::bidi::layout(
             ui.painter(),
             label,
-            theme::regular(13.5),
+            theme::regular(theme::BODY_TEXT),
             color,
             (rect.right() - 10.0 - x).max(0.0),
             1,
@@ -917,7 +1011,7 @@ fn submenu<R>(
         let wanted = crate::bidi::layout(
             ui.painter(),
             label,
-            theme::regular(13.5),
+            theme::regular(theme::BODY_TEXT),
             palette.text,
             f32::INFINITY,
             1,
@@ -952,7 +1046,7 @@ fn submenu<R>(
         let arrow_galley = crate::bidi::layout(
             ui.painter(),
             egui::menu::SubMenuButton::RIGHT_ARROW,
-            theme::regular(11.0),
+            theme::regular(theme::SMALL_TEXT),
             palette.secondary,
             16.0,
             1,
@@ -979,7 +1073,7 @@ fn submenu<R>(
         let galley = crate::bidi::layout(
             ui.painter(),
             label,
-            theme::regular(13.5),
+            theme::regular(theme::BODY_TEXT),
             color,
             max_text_width,
             1,
@@ -1039,7 +1133,7 @@ pub fn menu_group(ui: &mut Ui, palette: &Palette, label: &str) {
     let galley = crate::bidi::layout(
         ui.painter(),
         label,
-        theme::semibold(11.0),
+        theme::semibold(theme::SMALL_TEXT),
         palette.dim,
         rect.width() - 12.0,
         1,
@@ -1080,10 +1174,21 @@ pub fn picked_menu(
     songs: &[PlayableItem],
     editable_playlist: Option<&(String, Option<String>)>,
 ) {
+    picked_menu_at(ui, app, songs, &[], editable_playlist);
+}
+
+/// [`picked_menu`] for rows of a playlist at `positions`, so removing one
+/// copy of a song the list holds more than once removes only that copy.
+fn picked_menu_at(
+    ui: &mut Ui,
+    app: &mut App,
+    songs: &[PlayableItem],
+    positions: &[u32],
+    editable_playlist: Option<&(String, Option<String>)>,
+) {
     let palette = app.palette;
     let locale = app.locale;
-    ui.set_min_width(150.0);
-    ui.set_max_width(300.0);
+    fit_menu(ui, 300.0);
     let count = songs.len();
     let uris: Vec<String> = songs.iter().map(|item| item.uri().to_string()).collect();
     ui.add_space(4.0);
@@ -1100,7 +1205,7 @@ pub fn picked_menu(
                 )
                 .replace("{count}", &count.to_string()),
             )
-            .font(theme::medium(12.0))
+            .font(theme::medium(theme::SMALL_TEXT))
             .color(palette.secondary),
         );
     });
@@ -1149,6 +1254,7 @@ pub fn picked_menu(
         app.actions.push(Action::RemoveFromPlaylist {
             playlist_id: playlist_id.clone(),
             uris: uris.clone(),
+            positions: positions.to_vec(),
         });
     }
     add_to_playlist_menu(ui, app, songs);
@@ -1279,6 +1385,7 @@ pub(crate) fn playlist_picker(
             app.actions.push(Action::RemoveFromPlaylist {
                 playlist_id: id.clone(),
                 uris: items.iter().map(|item| item.uri().to_string()).collect(),
+                positions: Vec::new(),
             });
         } else {
             app.actions.push(Action::AddToPlaylist {
@@ -1328,6 +1435,7 @@ pub(crate) fn playlist_picker(
                             app.actions.push(Action::RemoveFromPlaylist {
                                 playlist_id: id.clone(),
                                 uris: items.iter().map(|item| item.uri().to_string()).collect(),
+                                positions: Vec::new(),
                             });
                         } else {
                             app.actions.push(Action::AddToPlaylist {
@@ -1351,8 +1459,33 @@ pub fn item_menu(
     context: Option<&RowContext>,
     index: Option<usize>,
 ) {
+    item_menu_at(ui, app, item, context, index, None);
+}
+
+/// [`item_menu`] for a playlist row at `position`, so removing it removes
+/// that copy of a song the list holds more than once.
+fn item_menu_at(
+    ui: &mut Ui,
+    app: &mut App,
+    item: &PlayableItem,
+    context: Option<&RowContext>,
+    index: Option<usize>,
+    position: Option<u32>,
+) {
     let palette = app.palette;
     let locale = app.locale;
+    // Spotify's own mixes hide a song for this listener without removing
+    // it from anyone's copy.
+    let hide_in = match context {
+        Some(RowContext::Context { uri: playlist, .. }) => Some(playlist),
+        Some(RowContext::View {
+            context_uri: playlist,
+            ..
+        }) => Some(playlist),
+        _ => None,
+    }
+    .filter(|playlist| item.is_track() && app.can_hide_in(playlist))
+    .cloned();
     // The menu is exactly as wide as its widest row: no empty space.
     {
         let mut labels: Vec<(String, f32)> = vec![
@@ -1360,6 +1493,11 @@ pub fn item_menu(
             (gettext(locale, "Copy link").into_owned(), 0.0),
             (gettext(locale, "Open in Spotify").into_owned(), 0.0),
         ];
+        if let (Some(RowContext::Queue), Some(index)) = (context, index)
+            && app.can_remove_from_queue(index)
+        {
+            labels.push((gettext(locale, "Remove from queue").into_owned(), 0.0));
+        }
         if item.is_track() {
             let saved = app.is_saved(item.uri()).unwrap_or(false);
             labels.push((
@@ -1388,13 +1526,17 @@ pub fn item_menu(
             labels.push((gettext(locale, "Remove from this playlist").into_owned(), 0.0));
             labels.push((gettext(locale, "Move down").into_owned(), 0.0));
         }
+        if hide_in.is_some() {
+            labels.push((gettext(locale, "Show in this playlist").into_owned(), 0.0));
+            labels.push((gettext(locale, "Hide in this playlist").into_owned(), 0.0));
+        }
         let widest = labels
             .iter()
             .map(|(text, extra)| {
                 let galley = crate::bidi::layout(
                     ui.painter(),
                     text,
-                    theme::regular(13.5),
+                    theme::regular(theme::BODY_TEXT),
                     palette.text,
                     f32::INFINITY,
                     1,
@@ -1426,6 +1568,21 @@ pub fn item_menu(
         app.actions.push(Action::AddToQueue {
             uri: uri.clone(),
             label: label.clone(),
+        });
+    }
+    // Only a song the user queued, and only on this computer's queue: the
+    // context's rows play themselves, and no other queue can be rewritten.
+    if let (Some(RowContext::Queue), Some(index)) = (context, index)
+        && app.can_remove_from_queue(index)
+        && menu_item(
+            ui,
+            &palette,
+            Some(Icon::Minus),
+            &gettext(locale, "Remove from queue"),
+        )
+    {
+        app.actions.push(Action::RemoveFromQueue {
+            rows: vec![(index, uri.clone())],
         });
     }
     if let PlayableItem::Track(track) = item
@@ -1521,6 +1678,22 @@ pub fn item_menu(
             app.actions.push(Action::RemoveFromPlaylist {
                 playlist_id: playlist_id.clone(),
                 uris: vec![uri.clone()],
+                positions: position.into_iter().collect(),
+            });
+        }
+    }
+    if let Some(playlist_uri) = hide_in {
+        let hidden = app.hidden_in(&playlist_uri, &uri);
+        let (icon, text) = if hidden {
+            (Icon::Eye, gettext(locale, "Show in this playlist"))
+        } else {
+            (Icon::EyeOff, gettext(locale, "Hide in this playlist"))
+        };
+        if menu_item(ui, &palette, Some(icon), &text) {
+            app.actions.push(Action::SetHiddenInPlaylist {
+                playlist_uri,
+                track_uri: uri.clone(),
+                hidden: !hidden,
             });
         }
     }
@@ -1658,10 +1831,26 @@ pub fn context_menu_items(
     name: &str,
     owned_playlist: Option<&Playlist>,
 ) {
+    context_menu_rows(ui, app, uri, name, owned_playlist, true);
+}
+
+/// The usual choices for a list that already offers "Add to queue" itself,
+/// at its top.
+pub fn context_menu_items_no_queue(ui: &mut Ui, app: &mut App, uri: &str, name: &str) {
+    context_menu_rows(ui, app, uri, name, None, false);
+}
+
+fn context_menu_rows(
+    ui: &mut Ui,
+    app: &mut App,
+    uri: &str,
+    name: &str,
+    owned_playlist: Option<&Playlist>,
+    with_queue: bool,
+) {
     let palette = app.palette;
     let locale = app.locale;
-    ui.set_min_width(200.0);
-    ui.set_max_width(300.0);
+    fit_menu(ui, 300.0);
     let kind = util::uri_kind(uri).unwrap_or("");
     if menu_item(ui, &palette, Some(Icon::Play), &gettext(locale, "Play")) {
         app.actions.push(Action::PlayContext {
@@ -1701,7 +1890,8 @@ pub fn context_menu_items(
     {
         app.actions.push(Action::CheckNewReleases(Some(id.to_string())));
     }
-    if kind == "album"
+    if with_queue
+        && kind == "album"
         && menu_item(
             ui,
             &palette,
@@ -1806,7 +1996,7 @@ pub fn context_menu_items(
 pub(crate) fn queue_click_held(app: &App, ui: &Ui) -> bool {
     let modifiers = ui.input(|input| input.modifiers);
     match app.settings.queue_click {
-        0 => modifiers.command && !modifiers.shift,
+        // Ctrl+click picks songs, as in Spotify; queuing is a key or Alt.
         1 => modifiers.alt && !modifiers.shift,
         _ => false,
     }
@@ -1816,7 +2006,6 @@ pub(crate) fn queue_click_held(app: &App, ui: &Ui) -> bool {
 pub(crate) fn play_next_held(app: &App, ui: &Ui) -> bool {
     let modifiers = ui.input(|input| input.modifiers);
     match app.settings.queue_click {
-        0 => modifiers.command && modifiers.shift,
         1 => modifiers.alt && modifiers.shift,
         _ => false,
     }
@@ -1861,6 +2050,11 @@ pub struct TrackRow<'a> {
     /// the menu can update a destination playlist before Spotify answers.
     /// Empty where a list does not offer picking.
     pub picked_songs: &'a [PlayableItem],
+    /// The playlist position of each of `picked_songs`, when the list is a
+    /// playlist that knows them; empty otherwise.
+    pub picked_positions: &'a [u32],
+    /// This row's position in its playlist, whatever the view's order.
+    pub position: Option<u32>,
 }
 
 /// Draw each credited artist separately so its Spotify id remains clickable.
@@ -2313,6 +2507,16 @@ fn track_row_contents(
             })
             .flatten();
         let preview = items.first().unwrap_or(row.item);
+        // Several picked queue rows are dragged as one: remember which rows,
+        // so dropping them in the queue moves them together.
+        if matches!(row.context, RowContext::Queue)
+            && row.picked
+            && items.len() > 1
+            && let Some(rows) = app.picked_rows(&Page::Queue)
+        {
+            let rows: Vec<usize> = rows.iter().copied().collect();
+            ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("queue-drag-rows"), rows));
+        }
         egui::DragAndDrop::set_payload(
             ui.ctx(),
             DragTrack {
@@ -2327,7 +2531,11 @@ fn track_row_contents(
     // A queue row is a position, not the song itself: the same song can
     // sit in the queue while it plays (a repeat wrapping around, a song
     // queued twice), and only the Now playing row is the playing one.
+    // A song started from one of its copies in this list marks that copy
+    // alone: the others are other places in the list.
+    let played_copy = app.row_is_played_copy(row.context, row.index, row.item.uri());
     let is_current = !matches!(row.context, RowContext::Queue)
+        && played_copy
         && app
             .current_track_uri()
             .is_some_and(|uri| uri == row.item.uri());
@@ -2342,6 +2550,9 @@ fn track_row_contents(
     if ui.rect_contains_pointer(rect) && row.item.is_track() {
         app.hovered_track = Some(row.item.uri().to_string());
         app.hovered_playable = Some(row.item.clone());
+    }
+    if ui.rect_contains_pointer(rect) && matches!(row.context, RowContext::Queue) {
+        app.hovered_queue_row = Some(row.index);
     }
     if row.picked {
         // Keep the existing translucent selection, using a neutral palette
@@ -2441,7 +2652,7 @@ fn track_row_contents(
     }
 
     // Number / play.
-    let pending = app.play_pending(row.item.uri());
+    let pending = played_copy && app.play_pending(row.item.uri());
     let draw_number = |ui: &mut Ui, cell: Rect| {
         if pending {
             let mut child = ui.new_child(
@@ -2470,7 +2681,7 @@ fn track_row_contents(
                 cell.center(),
                 egui::Align2::CENTER_CENTER,
                 label,
-                theme::regular(14.0),
+                theme::regular(theme::BODY_TEXT),
                 color,
             );
         }
@@ -2503,6 +2714,24 @@ fn track_row_contents(
             },
             Some(app.backend.art()),
         );
+        // A click on the cover opens the song's album. (Without a number
+        // column the cover is the play control instead.)
+        if !cover_plays
+            && let PlayableItem::Track(track) = row.item
+            && let Some(album) = track.album.as_ref().filter(|album| !album.id.is_empty())
+        {
+            let open = ui.interact(
+                cover_rect,
+                ui.id().with(("row-cover-open", row.index, left as i32)),
+                Sense::click(),
+            );
+            if open.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if open.clicked() {
+                app.actions.push(Action::Open(Page::Album(album.id.clone())));
+            }
+        }
         if cover_plays {
             let scrim = |alpha: u8| {
                 painter.rect_filled(
@@ -2511,7 +2740,7 @@ fn track_row_contents(
                     Color32::from_black_alpha(alpha),
                 );
             };
-            if app.play_pending(row.item.uri()) {
+            if pending {
                 scrim(140);
                 let mut child = ui.new_child(
                     UiBuilder::new()
@@ -2581,7 +2810,7 @@ fn track_row_contents(
                     pos2(at + 10.0, rect.center().y),
                     egui::Align2::LEFT_CENTER,
                     util::format_duration_ms(row.item.duration_ms()),
-                    theme::regular(13.0),
+                    theme::regular(theme::BODY_TEXT),
                     palette.secondary,
                 );
             }
@@ -2604,7 +2833,7 @@ fn track_row_contents(
             pos2(text_right + 6.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
             label,
-            theme::regular(12.0),
+            theme::regular(theme::SMALL_TEXT),
             palette.secondary,
         );
         if label.ends_with(" ago") {
@@ -2684,7 +2913,7 @@ fn track_row_contents(
         song_name_cell(
             &mut child,
             row.item.name(),
-            theme::medium(14.0),
+            theme::medium(theme::BODY_TEXT),
             title_color,
             hovered,
             // The artists and, when there is no date column, the date as
@@ -2700,14 +2929,14 @@ fn track_row_contents(
                 theme::text(
                     &mut child,
                     "•",
-                    theme::regular(12.0),
+                    theme::regular(theme::SMALL_TEXT),
                     palette.secondary.gamma_multiply(0.6),
                 );
                 artist_links(
                     &mut child,
                     app,
                     &track.artists,
-                    theme::regular(13.0),
+                    theme::regular(theme::BODY_TEXT),
                     subtitle_color,
                 );
                 if let Some(added) = row.added_at.filter(|a| !a.starts_with("1970-01-01"))
@@ -2719,10 +2948,10 @@ fn track_row_contents(
                     theme::text(
                         &mut child,
                         "•",
-                        theme::regular(12.0),
+                        theme::regular(theme::SMALL_TEXT),
                         palette.secondary.gamma_multiply(0.6),
                     );
-                    theme::text(&mut child, &label, theme::regular(12.0), palette.secondary);
+                    theme::text(&mut child, &label, theme::regular(theme::SMALL_TEXT), palette.secondary);
                     if label.ends_with(" ago") {
                         ui.ctx()
                             .request_repaint_after(std::time::Duration::from_secs(1));
@@ -2739,12 +2968,12 @@ fn track_row_contents(
                     theme::text(
                         &mut child,
                         "•",
-                        theme::regular(12.0),
+                        theme::regular(theme::SMALL_TEXT),
                         palette.secondary.gamma_multiply(0.6),
                     );
                     let show_id = episode.show.as_ref().map(|show| show.id.clone());
                     let response =
-                        theme::link(&mut child, subtitle, theme::regular(13.0), subtitle_color);
+                        theme::link(&mut child, subtitle, theme::regular(theme::BODY_TEXT), subtitle_color);
                     if response.clicked()
                         && let Some(id) = show_id
                     {
@@ -2758,12 +2987,12 @@ fn track_row_contents(
                     theme::text(
                         &mut child,
                         "•",
-                        theme::regular(12.0),
+                        theme::regular(theme::SMALL_TEXT),
                         palette.secondary.gamma_multiply(0.6),
                     );
                     let label =
                         util::format_relative_date(app.locale, added, jiff::Timestamp::now());
-                    theme::text(&mut child, &label, theme::regular(12.0), palette.secondary);
+                    theme::text(&mut child, &label, theme::regular(theme::SMALL_TEXT), palette.secondary);
                     if label.ends_with(" ago") {
                         ui.ctx()
                             .request_repaint_after(std::time::Duration::from_secs(1));
@@ -2810,7 +3039,7 @@ fn track_row_contents(
                         ui,
                         app,
                         &track.artists,
-                        theme::regular(12.5),
+                        theme::regular(theme::SMALL_TEXT),
                         subtitle_color,
                     );
                     if let Some(added) = row.added_at.filter(|a| !a.starts_with("1970-01-01"))
@@ -2820,12 +3049,12 @@ fn track_row_contents(
                         theme::text(
                             ui,
                             "•",
-                            theme::regular(12.0),
+                            theme::regular(theme::SMALL_TEXT),
                             palette.secondary.gamma_multiply(0.6),
                         );
                         let label =
                             util::format_relative_date(app.locale, added, jiff::Timestamp::now());
-                        theme::text(ui, &label, theme::regular(12.0), palette.secondary);
+                        theme::text(ui, &label, theme::regular(theme::SMALL_TEXT), palette.secondary);
                         if label.ends_with(" ago") {
                             ui.ctx()
                                 .request_repaint_after(std::time::Duration::from_secs(1));
@@ -2839,7 +3068,7 @@ fn track_row_contents(
                         .map(|show| show.name.clone())
                         .unwrap_or_default();
                     let show_id = episode.show.as_ref().map(|show| show.id.clone());
-                    let response = theme::link(ui, subtitle, theme::regular(12.5), subtitle_color);
+                    let response = theme::link(ui, subtitle, theme::regular(theme::SMALL_TEXT), subtitle_color);
                     if response.clicked()
                         && let Some(id) = show_id
                     {
@@ -2852,12 +3081,12 @@ fn track_row_contents(
                         theme::text(
                             ui,
                             "•",
-                            theme::regular(12.0),
+                            theme::regular(theme::SMALL_TEXT),
                             palette.secondary.gamma_multiply(0.6),
                         );
                         let label =
                             util::format_relative_date(app.locale, added, jiff::Timestamp::now());
-                        theme::text(ui, &label, theme::regular(12.0), palette.secondary);
+                        theme::text(ui, &label, theme::regular(theme::SMALL_TEXT), palette.secondary);
                         if label.ends_with(" ago") {
                             ui.ctx()
                                 .request_repaint_after(std::time::Duration::from_secs(1));
@@ -2895,7 +3124,7 @@ fn track_row_contents(
             // The album name wraps onto a second line before it is cut off
             // with an ellipsis, so a narrow column still says something.
             let width = (cols.album - 12.0).max(10.0);
-            let galley = ellipsized(ui, &album.name, theme::regular(13.0), subtitle_color, width, 2);
+            let galley = ellipsized(ui, &album.name, theme::regular(theme::BODY_TEXT), subtitle_color, width, 2);
             let size = galley.size();
             let text_rect = Rect::from_min_size(
                 pos2(x, rect.center().y - size.y / 2.0),
@@ -2934,7 +3163,7 @@ fn track_row_contents(
                 cell.right(),
                 cell.center().y,
                 adder,
-                theme::regular(13.0),
+                theme::regular(theme::BODY_TEXT),
                 palette.secondary,
             );
         }
@@ -2986,7 +3215,7 @@ fn track_row_contents(
                 x + (cols.genre - 8.0).max(0.0),
                 rect.center().y,
                 &names.join(", "),
-                theme::regular(13.0),
+                theme::regular(theme::BODY_TEXT),
                 palette.secondary,
             );
         }
@@ -3010,7 +3239,7 @@ fn track_row_contents(
             // column read at a glance while scrolling. 104 is what the
             // record is.
             let label = format!("{}", tempo.round());
-            let galley = fitted_galley(&painter, &label, &theme::regular(13.0), 5.0, (cell.width() - 8.0).max(10.0), palette.secondary);
+            let galley = fitted_galley(&painter, &label, &theme::regular(theme::BODY_TEXT), 5.0, (cell.width() - 8.0).max(10.0), palette.secondary);
             let at = pos2(cell.left(), cell.center().y - galley.size().y / 2.0);
             painter.galley(at, galley, palette.secondary);
         }
@@ -3095,7 +3324,7 @@ fn track_row_contents(
             pos2(duration_rect.left() + 10.0, duration_rect.center().y),
             egui::Align2::LEFT_CENTER,
             util::format_duration_ms(row.item.duration_ms()),
-            theme::regular(13.0),
+            theme::regular(theme::BODY_TEXT),
             palette.secondary,
         );
         x += cols.duration;
@@ -3130,7 +3359,16 @@ fn track_row_contents(
         egui::Popup::menu(&more)
             .id(menu_id)
             .frame(menu_frame(&palette))
-            .show(|ui| item_menu(ui, app, row.item, Some(row.context), Some(row.index)));
+            .show(|ui| {
+                item_menu_at(
+                    ui,
+                    app,
+                    row.item,
+                    Some(row.context),
+                    Some(row.index),
+                    row.position,
+                )
+            });
     }
 
     // Row interactions.
@@ -3189,9 +3427,7 @@ fn track_row_contents(
             let modifiers = ui.input(|input| input.modifiers);
             pick = Some(if modifiers.shift {
                 RowPick::Range
-            } else if (app.settings.queue_click == 0 && modifiers.alt)
-                || (app.settings.queue_click != 0 && modifiers.command)
-            {
+            } else if modifiers.command {
                 RowPick::Toggle
             } else {
                 RowPick::Only
@@ -3219,9 +3455,40 @@ fn track_row_contents(
                     } => Some(playlist),
                     _ => None,
                 };
-                picked_menu(ui, app, row.picked_songs, editable);
+                picked_menu_at(ui, app, row.picked_songs, row.picked_positions, editable);
+                // In the queue the picked songs can be taken out of it, as
+                // far as the queue lets any song leave.
+                if matches!(row.context, RowContext::Queue)
+                    && let Some(rows) = app.picked_rows(&Page::Queue)
+                {
+                    let removable: Vec<(usize, String)> = rows
+                        .iter()
+                        .copied()
+                        .zip(row.picked_songs)
+                        .filter(|(index, _)| app.can_remove_from_queue(*index))
+                        .map(|(index, item)| (index, item.uri().to_string()))
+                        .collect();
+                    if !removable.is_empty() {
+                        menu_separator(ui, &palette);
+                        if menu_item(
+                            ui,
+                            &palette,
+                            Some(Icon::Minus),
+                            &gettext(app.locale, "Remove from queue"),
+                        ) {
+                            app.actions.push(Action::RemoveFromQueue { rows: removable });
+                        }
+                    }
+                }
             } else {
-                item_menu(ui, app, row.item, Some(row.context), Some(row.index));
+                item_menu_at(
+                    ui,
+                    app,
+                    row.item,
+                    Some(row.context),
+                    Some(row.index),
+                    row.position,
+                );
             }
         });
     crate::autoscroll::row(ui, &response);
@@ -3331,7 +3598,7 @@ pub fn drag_ghost(ctx: &egui::Context, palette: &Palette, locale: Locale) {
                         ui.add(
                             egui::Label::new(
                                 egui::RichText::new(&title)
-                                    .font(theme::medium(13.0))
+                                    .font(theme::medium(theme::BODY_TEXT))
                                     .color(palette.text),
                             )
                             .truncate()
@@ -3416,7 +3683,7 @@ fn explicit_badge_unused(ui: &mut Ui, palette: &Palette) {
         rect.center(),
         egui::Align2::CENTER_CENTER,
         "E",
-        theme::bold(9.5),
+        theme::bold(theme::TINY_TEXT),
         palette.window,
     );
 }
@@ -3464,7 +3731,7 @@ fn column_label(locale: Locale, entry: &'static str) -> String {
 }
 
 /// A small square switch drawn as an icon alone: lit when on.
-fn icon_toggle(ui: &mut Ui, palette: &Palette, icon: Icon, on: bool, tooltip: &str) -> bool {
+pub(crate) fn icon_toggle(ui: &mut Ui, palette: &Palette, icon: Icon, on: bool, tooltip: &str) -> bool {
     let (rect, response) = ui.allocate_exact_size(vec2(36.0, 30.0), Sense::click());
     if ui.is_rect_visible(rect) {
         let fill = if on {
@@ -3486,13 +3753,13 @@ fn icon_toggle(ui: &mut Ui, palette: &Palette, icon: Icon, on: bool, tooltip: &s
 }
 
 /// A compact row with a green tick box, as in Spotify's Columns menu.
-fn checkbox_row(ui: &mut Ui, palette: &Palette, label: &str, checked: bool) -> bool {
+pub(crate) fn checkbox_row(ui: &mut Ui, palette: &Palette, label: &str, checked: bool) -> bool {
     checkbox_row_ex(ui, palette, label, checked, true, "")
 }
 
 /// The same row, optionally greyed out (always-on or not-yet-built columns)
 /// with a short note on the right.
-fn checkbox_row_ex(
+pub(crate) fn checkbox_row_ex(
     ui: &mut Ui,
     palette: &Palette,
     label: &str,
@@ -3527,7 +3794,7 @@ fn checkbox_row_ex(
             pos2(rect.left() + 34.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
             label,
-            theme::regular(13.5),
+            theme::regular(theme::BODY_TEXT),
             if enabled { palette.text } else { palette.secondary },
         );
         if !note.is_empty() {
@@ -3535,7 +3802,7 @@ fn checkbox_row_ex(
                 pos2(rect.right() - 10.0, rect.center().y),
                 egui::Align2::RIGHT_CENTER,
                 note,
-                theme::regular(11.5),
+                theme::regular(theme::SMALL_TEXT),
                 palette.secondary,
             );
         }
@@ -3578,7 +3845,7 @@ fn sort_menu_row(
                 pos2(x, rect.center().y),
                 egui::Align2::LEFT_CENTER,
                 place.to_string(),
-                theme::bold(12.0),
+                theme::bold(theme::SMALL_TEXT),
                 palette.accent,
             );
             x += 18.0;
@@ -3587,7 +3854,7 @@ fn sort_menu_row(
         let galley = crate::bidi::layout(
             ui.painter(),
             label,
-            theme::regular(13.5),
+            theme::regular(theme::BODY_TEXT),
             palette.text,
             (rect.right() - 10.0 - x - arrow_room).max(0.0),
             1,
@@ -3850,7 +4117,7 @@ pub fn table_header(
     let mut action = HeaderAction::default();
     let width = ui.available_width();
     let (rect, row) = ui.allocate_exact_size(vec2(width, 34.0), Sense::click());
-    let font = theme::regular(12.0);
+    let font = theme::regular(theme::SMALL_TEXT);
     let color = palette.secondary;
     let mut widths = *columns;
     let mut clicked = None;
@@ -4215,8 +4482,8 @@ pub fn card_row_height(ui: &mut Ui) -> f32 {
     const SUBTITLE_GAP: f32 = 2.0;
     const BOTTOM_PAD: f32 = 8.0;
     let image_size = CARD_WIDTH - 2.0 * PAD;
-    let title_font = theme::semibold(14.0);
-    let subtitle_font = theme::regular(12.5);
+    let title_font = theme::semibold(theme::BODY_TEXT);
+    let subtitle_font = theme::regular(theme::SMALL_TEXT);
     let (title_row, subtitle_row) = ui.fonts_mut(|fonts| {
         (
             fonts.row_height(&title_font),
@@ -4247,8 +4514,8 @@ pub fn card(
     const BOTTOM_PAD: f32 = 8.0;
     let image_size = CARD_WIDTH - 2.0 * PAD;
     let text_width = image_size;
-    let title_font = theme::semibold(14.0);
-    let subtitle_font = theme::regular(12.5);
+    let title_font = theme::semibold(theme::BODY_TEXT);
+    let subtitle_font = theme::regular(theme::SMALL_TEXT);
     // Every card reserves the title row and two subtitle rows, whatever its
     // own subtitle needs: a two-line subtitle then sits inside the hover
     // background, and a shelf that mixes one- and two-line subtitles keeps
@@ -4363,6 +4630,38 @@ pub fn card(
     }
 }
 
+/// Lets the mouse wheel scroll a sideways row: over the row last drawn
+/// under `id`, an up/down wheel turn moves it left/right while it has room
+/// that way, and the page scrolls as usual once it reaches an end. Call
+/// before showing the row, and [`note_sideways`] after.
+pub(crate) fn wheel_sideways(ui: &Ui, id: egui::Id) {
+    let Some((rect, offset, max)) = ui.ctx().data(|data| data.get_temp::<(Rect, f32, f32)>(id)) else {
+        return;
+    };
+    if max <= 0.5 || !ui.rect_contains_pointer(rect) {
+        return;
+    }
+    ui.ctx().input_mut(|input| {
+        let delta = input.smooth_scroll_delta;
+        if delta.y == 0.0 || delta.x != 0.0 {
+            return;
+        }
+        // Wheel down (negative) moves the row on to the right.
+        let room = if delta.y < 0.0 { offset < max - 0.5 } else { offset > 0.5 };
+        if room {
+            input.smooth_scroll_delta = vec2(delta.y, 0.0);
+        }
+    });
+}
+
+/// Remembers where a sideways row is and how far it can scroll, for
+/// [`wheel_sideways`] on the next frame.
+pub(crate) fn note_sideways<R>(ui: &Ui, id: egui::Id, output: &egui::scroll_area::ScrollAreaOutput<R>) {
+    let max = (output.content_size.x - output.inner_rect.width()).max(0.0);
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(id, (output.inner_rect, output.state.offset.x, max)));
+}
+
 /// A horizontal shelf of cards with a title.
 pub fn shelf(
     ui: &mut Ui,
@@ -4371,10 +4670,39 @@ pub fn shelf(
     title: &str,
     add_contents: impl FnOnce(&mut Ui),
 ) {
+    shelf_scrolled(ui, palette, id, title, false, add_contents);
+}
+
+/// Like [`shelf`], but the plain mouse wheel over the row moves it sideways
+/// while it has room that way, then scrolls the page at either end.
+pub fn wheel_shelf(
+    ui: &mut Ui,
+    palette: &Palette,
+    id: &str,
+    title: &str,
+    add_contents: impl FnOnce(&mut Ui),
+) {
+    shelf_scrolled(ui, palette, id, title, true, add_contents);
+}
+
+fn shelf_scrolled(
+    ui: &mut Ui,
+    palette: &Palette,
+    id: &str,
+    title: &str,
+    wheel: bool,
+    add_contents: impl FnOnce(&mut Ui),
+) {
     ui.add_space(8.0);
     theme::section_title(ui, palette, title);
     ui.add_space(4.0);
-    crate::autoscroll::show(
+    // The wheel scrolls the page; Shift+wheel moves the row. A wheel shelf
+    // also takes the plain wheel while the pointer is over it.
+    let wheel_id = egui::Id::new(("shelf-wheel", id));
+    if wheel {
+        wheel_sideways(ui, wheel_id);
+    }
+    let output = crate::autoscroll::show(
         ui,
         egui::ScrollArea::horizontal().id_salt(id),
         egui::Vec2b::new(true, false),
@@ -4385,6 +4713,9 @@ pub fn shelf(
             });
         },
     );
+    if wheel {
+        note_sideways(ui, wheel_id, &output);
+    }
     ui.add_space(12.0);
 }
 
@@ -4411,6 +4742,108 @@ pub fn grid(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui)) {
     });
 }
 
+/// The colour of a skeleton's shapes: the surface a loaded row or card
+/// draws on, so the page keeps its look while it loads.
+fn skeleton_fill(palette: &Palette) -> Color32 {
+    palette
+        .surface_hover
+        .gamma_multiply(if palette.dark { 0.9 } else { 1.0 })
+}
+
+/// How wide a skeleton's text bar is, as a share of its room: varied by
+/// row so the placeholder reads as a list rather than a grid.
+fn skeleton_share(index: usize, line: usize) -> f32 {
+    const SHARES: [f32; 5] = [0.62, 0.48, 0.71, 0.55, 0.4];
+    SHARES[(index * 2 + line) % SHARES.len()] * if line == 0 { 1.0 } else { 0.7 }
+}
+
+/// Placeholder rows shaped like the songs a page is loading, in place of a
+/// spinner: a cover and two lines each. They are drawn once and do not move,
+/// so loading asks for no frames and there is no motion to reduce. Screen
+/// readers hear Loading….
+pub fn skeleton_rows(ui: &mut Ui, palette: &Palette, locale: Locale, count: usize) {
+    let fill = skeleton_fill(palette);
+    let (rect, response) = ui.allocate_exact_size(
+        vec2(ui.available_width(), theme::ROW_HEIGHT * count as f32),
+        Sense::hover(),
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Label, true, gettext(locale, "Loading…"))
+    });
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let painter = ui.painter_at(rect);
+    for index in 0..count {
+        let top = rect.top() + theme::ROW_HEIGHT * index as f32;
+        let cover = Rect::from_min_size(
+            pos2(rect.left() + 12.0, top + (theme::ROW_HEIGHT - 40.0) / 2.0).round(),
+            Vec2::splat(40.0),
+        );
+        painter.rect_filled(cover, CornerRadius::same(4), fill);
+        let room = (rect.right() - cover.right() - 32.0).clamp(0.0, 420.0);
+        for (line, (y, height)) in [(top + 16.0, 10.0_f32), (top + 32.0, 8.0)]
+            .into_iter()
+            .enumerate()
+        {
+            let bar = Rect::from_min_size(
+                pos2(cover.right() + 14.0, y).round(),
+                vec2((room * skeleton_share(index, line)).round(), height),
+            );
+            painter.rect_filled(bar, CornerRadius::same(4), fill);
+        }
+    }
+}
+
+/// Placeholder cards for a shelf that is loading, the size of the cards it
+/// will show, round for artists. Like [`skeleton_rows`], they do not move.
+pub fn skeleton_cards(ui: &mut Ui, palette: &Palette, locale: Locale, count: usize, round: bool) {
+    let fill = skeleton_fill(palette);
+    const PAD: f32 = 12.0;
+    let art_size = CARD_WIDTH - 2.0 * PAD;
+    // The same height as a real card, so the page does not jump when the
+    // cards arrive.
+    let (title_row, subtitle_row) = ui.fonts_mut(|fonts| {
+        (
+            fonts.row_height(&theme::semibold(theme::BODY_TEXT)),
+            fonts.row_height(&theme::regular(theme::SMALL_TEXT)),
+        )
+    });
+    let height = PAD + art_size + 10.0 + title_row + 2.0 + 2.0 * subtitle_row + 8.0;
+    for index in 0..count {
+        let (rect, response) = ui.allocate_exact_size(vec2(CARD_WIDTH, height), Sense::hover());
+        if index == 0 {
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Label,
+                    true,
+                    gettext(locale, "Loading…"),
+                )
+            });
+        }
+        if !ui.is_rect_visible(rect) {
+            continue;
+        }
+        let painter = ui.painter();
+        let art = Rect::from_min_size(
+            (rect.min + vec2(PAD, PAD)).round(),
+            Vec2::splat(art_size),
+        );
+        let radius = if round { (art_size / 2.0) as u8 } else { 6 };
+        painter.rect_filled(art, CornerRadius::same(radius), fill);
+        let title = Rect::from_min_size(
+            pos2(art.left(), art.bottom() + 12.0).round(),
+            vec2((art_size * skeleton_share(index, 0)).round(), 12.0),
+        );
+        painter.rect_filled(title, CornerRadius::same(4), fill);
+        let subtitle = Rect::from_min_size(
+            pos2(art.left(), title.bottom() + 8.0).round(),
+            vec2((art_size * skeleton_share(index, 1)).round(), 9.0),
+        );
+        painter.rect_filled(subtitle, CornerRadius::same(4), fill);
+    }
+}
+
 pub fn loading_row(ui: &mut Ui, palette: &Palette, locale: Locale) {
     ui.horizontal(|ui| {
         ui.add_space(8.0);
@@ -4424,7 +4857,7 @@ pub fn error_row(ui: &mut Ui, app: &mut App, message: &str, retry: Option<Page>)
     ui.horizontal(|ui| {
         ui.add_space(8.0);
         theme::icon(ui, Icon::CircleAlert, 16.0, palette.danger);
-        theme::text(ui, message, theme::regular(13.0), palette.secondary);
+        theme::text(ui, message, theme::regular(theme::BODY_TEXT), palette.secondary);
         if let Some(page) = retry
             && theme::soft_button(
                 ui,
@@ -4445,9 +4878,9 @@ pub fn empty_state(ui: &mut Ui, palette: &Palette, icon: Icon, title: &str, body
     ui.vertical_centered(|ui| {
         theme::icon(ui, icon, 40.0, palette.dim);
         ui.add_space(8.0);
-        theme::text(ui, title, theme::semibold(16.0), palette.text);
+        theme::text(ui, title, theme::semibold(theme::SECTION_TEXT), palette.text);
         ui.add_space(2.0);
-        theme::text(ui, body, theme::regular(13.5), palette.secondary);
+        theme::text(ui, body, theme::regular(theme::BODY_TEXT), palette.secondary);
     });
 }
 
@@ -4507,6 +4940,41 @@ pub fn thin_slider(
     thin_slider_scaled(ui, palette, id, label, value, width, wheel_step, 1.0)
 }
 
+/// Whether the dot of a slider locked inside the pop-out controls is being
+/// held: a press that lands on the dot, until the button is let go. The
+/// panel does not move for it (see [`window_drag_blocked`]).
+pub(crate) fn knob_grabbed(ui: &Ui, id: egui::Id, knob: egui::Pos2, radius: f32) -> bool {
+    let key = egui::Id::new("sliders-knob-grab");
+    let held = ui.data(|data| data.get_temp::<egui::Id>(key)) == Some(id);
+    let (pressed, down, at) = ui.input(|input| {
+        (
+            input.pointer.primary_pressed(),
+            input.pointer.primary_down(),
+            input.pointer.interact_pos(),
+        )
+    });
+    if !down {
+        if held {
+            ui.data_mut(|data| data.remove::<egui::Id>(key));
+        }
+        return false;
+    }
+    if held {
+        return true;
+    }
+    if pressed && at.is_some_and(|at| at.distance(knob) <= radius) {
+        ui.data_mut(|data| data.insert_temp(key, id));
+        return true;
+    }
+    false
+}
+
+/// Whether a press this frame took hold of a slider's dot, so it must not
+/// also pick up the pop-out window.
+pub(crate) fn window_drag_blocked(ctx: &egui::Context) -> bool {
+    ctx.data(|data| data.get_temp::<egui::Id>(egui::Id::new("sliders-knob-grab"))).is_some()
+}
+
 /// `thin_slider` with its height scaled: the track, the handle and the room
 /// to grab it all grow together.
 #[allow(clippy::too_many_arguments)]
@@ -4529,10 +4997,34 @@ pub fn thin_slider_scaled(
     ui.data_mut(|data| data.insert_temp(id.with("rect"), rect));
     // In the pop-out controls a press or a drag on the bar only moves the
     // panel: the bar answers a right-click or a double-click instead.
-    let locked = ui.data(|data| data.get_temp::<bool>(egui::Id::new("sliders-locked"))).unwrap_or(false);
     let dragging_value = ui.data(|data| data.get_temp::<f32>(id));
+    // The dot itself is the exception: held and dragged, it sets the value.
+    let knob = pos2(
+        rect.left() + rect.width() * dragging_value.unwrap_or(value).clamp(0.0, 1.0),
+        rect.center().y,
+    );
+    let locked = ui.data(|data| data.get_temp::<bool>(egui::Id::new("sliders-locked"))).unwrap_or(false)
+        && !knob_grabbed(ui, id, knob, 12.0 * scale);
+    // egui hands a press near a widget to the closest one, so a click just
+    // past the end of the bar must not set the value: a slider only moves
+    // for a press that started on its own track.
+    let grabbed = id.with("grabbed");
+    if (response.drag_started() || response.is_pointer_button_down_on())
+        && let Some(origin) = ui.input(|input| input.pointer.press_origin())
+    {
+        ui.data_mut(|data| data.insert_temp(grabbed, rect.contains(origin)));
+    }
+    let on_track = if response.clicked() && !response.dragged() {
+        response.interact_pointer_pos().is_some_and(|pos| rect.contains(pos))
+    } else {
+        ui.data(|data| data.get_temp::<bool>(grabbed)).unwrap_or(true)
+    };
+    if response.drag_stopped() || response.clicked() {
+        ui.data_mut(|data| data.remove::<bool>(grabbed));
+    }
     let pointer_value = response
         .interact_pointer_pos()
+        .filter(|_| on_track)
         .map(|pos| ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0));
     let mut event = SliderEvent::None;
     // Preview on press, before egui's click-or-drag movement threshold.
@@ -4543,7 +5035,7 @@ pub fn thin_slider_scaled(
         ui.data_mut(|data| data.insert_temp(id, v));
         event = SliderEvent::Dragging(v);
     }
-    if !locked && response.drag_stopped() {
+    if !locked && on_track && response.drag_stopped() {
         let v = dragging_value.or(pointer_value).unwrap_or(value);
         ui.data_mut(|data| data.remove::<f32>(id));
         event = SliderEvent::Committed(v);
@@ -4803,7 +5295,7 @@ pub fn search_field(
             .painter()
             .layout_job(egui::text::LayoutJob::simple_singleline(
                 buffer.as_str().to_owned(),
-                theme::regular(14.0),
+                theme::regular(theme::BODY_TEXT),
                 text_color,
             ));
         crate::bidi::reorder(&mut galley);
@@ -4815,7 +5307,7 @@ pub fn search_field(
         egui::TextEdit::singleline(text)
             .id(id)
             .hint_text(egui::RichText::new(crate::i18n::ui_text(hint).into_owned()).color(palette.dim))
-            .font(theme::regular(14.0))
+            .font(theme::regular(theme::BODY_TEXT))
             .text_color(palette.text)
             .frame(egui::Frame::NONE)
             .desired_width(field_rect.width())
@@ -4885,7 +5377,7 @@ pub fn switch_labeled(ui: &mut Ui, palette: &Palette, label: &str, on: &mut bool
         let response = switch(ui, palette, label, on);
         ui.add(egui::Label::new(
             egui::RichText::new(label)
-                .font(theme::regular(13.0))
+                .font(theme::regular(theme::BODY_TEXT))
                 .color(palette.text),
         ).wrap());
         response
@@ -4905,13 +5397,13 @@ pub fn credit(ui: &mut Ui, palette: &Palette, locale: Locale) -> bool {
     let mut clicked = false;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
-        theme::text(ui, "\u{2665}  ", theme::regular(13.0), palette.danger);
-        theme::text(ui, before, theme::regular(13.0), palette.secondary);
+        theme::text(ui, "\u{2665}  ", theme::regular(theme::BODY_TEXT), palette.danger);
+        theme::text(ui, before, theme::regular(theme::BODY_TEXT), palette.secondary);
         let name = ui
             .add(
                 egui::Label::new(
                     egui::RichText::new("chance")
-                        .font(theme::medium(13.0))
+                        .font(theme::medium(theme::BODY_TEXT))
                         .color(palette.accent)
                         .underline(),
                 )
@@ -4920,10 +5412,9 @@ pub fn credit(ui: &mut Ui, palette: &Palette, locale: Locale) -> bool {
             .on_hover_cursor(egui::CursorIcon::PointingHand);
         clicked = name.clicked();
         if !after.is_empty() {
-            theme::text(ui, after, theme::regular(13.0), palette.secondary);
+            theme::text(ui, after, theme::regular(theme::BODY_TEXT), palette.secondary);
         }
-        // One of chance's little pictures after the name, a different one
-        // each time chanceify starts.
+        // Chance's little picture after the name.
         let (uri, bytes) = credit_icon();
         ui.add_space(6.0);
         ui.add(egui::Image::from_bytes(uri, bytes).fit_to_exact_size(vec2(20.0, 20.0)));
@@ -4933,7 +5424,7 @@ pub fn credit(ui: &mut Ui, palette: &Palette, locale: Locale) -> bool {
             .add(
                 egui::Label::new(
                     egui::RichText::new(gettext(locale, "source code"))
-                        .font(theme::regular(10.0))
+                        .font(theme::regular(theme::TINY_TEXT))
                         .color(palette.dim)
                         .underline(),
                 )
@@ -4949,28 +5440,12 @@ pub fn credit(ui: &mut Ui, palette: &Palette, locale: Locale) -> bool {
     clicked
 }
 
-/// The little pictures that go beside "chance" in the credit line.
-const CREDIT_ICONS: [&[u8]; 8] = [
-    include_bytes!("../../assets/credit-icons/c0.png"),
-    include_bytes!("../../assets/credit-icons/c1.png"),
-    include_bytes!("../../assets/credit-icons/c2.png"),
-    include_bytes!("../../assets/credit-icons/c3.png"),
-    include_bytes!("../../assets/credit-icons/c4.png"),
-    include_bytes!("../../assets/credit-icons/c5.png"),
-    include_bytes!("../../assets/credit-icons/c6.png"),
-    include_bytes!("../../assets/credit-icons/c7.png"),
-];
-
-/// This run's credit picture: chosen once at random, so it does not flicker.
-fn credit_icon() -> (String, &'static [u8]) {
-    static PICK: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    let pick = *PICK.get_or_init(|| {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.subsec_nanos() as usize);
-        nanos % CREDIT_ICONS.len()
-    });
-    (format!("bytes://credit-icon-{pick}.png"), CREDIT_ICONS[pick])
+/// The little picture that goes beside "chance" in the credit line.
+fn credit_icon() -> (&'static str, &'static [u8]) {
+    (
+        "bytes://credit-icon.png",
+        include_bytes!("../../assets/credit-icon.png"),
+    )
 }
 
 /// The width a settings row keeps for its control: switches, fields and
@@ -5033,12 +5508,12 @@ fn setting_row_full(
 ) {
     let reserved = (control_width + 16.0).max(SETTING_CONTROL_WIDTH);
     let text = |ui: &mut Ui| {
-        theme::text(ui, crate::i18n::ui_text(label), theme::medium(14.0), palette.text);
+        theme::text(ui, crate::i18n::ui_text(label), theme::medium(theme::BODY_TEXT), palette.text);
         if show_description && !description.is_empty() {
             ui.add(
                 egui::Label::new(
                     egui::RichText::new(crate::i18n::ui_text(description))
-                        .font(theme::regular(12.5))
+                        .font(theme::regular(theme::SMALL_TEXT))
                         .color(palette.secondary),
                 )
                 .wrap(),
@@ -5080,7 +5555,7 @@ pub fn labeled_field(
 ) -> egui::Response {
     let response = ui
         .vertical(|ui| {
-            theme::text(ui, label, theme::medium(13.0), palette.text);
+            theme::text(ui, label, theme::medium(theme::BODY_TEXT), palette.text);
             ui.add_space(6.0);
             Frame::new()
                 .fill(palette.surface)
@@ -5092,7 +5567,7 @@ pub fn labeled_field(
                         locale,
                         egui::TextEdit::singleline(value)
                             .hint_text(egui::RichText::new(hint).color(palette.dim))
-                            .font(theme::regular(14.0))
+                            .font(theme::regular(theme::BODY_TEXT))
                             .password(password)
                             .frame(egui::Frame::NONE)
                             .desired_width(ui.available_width()),
@@ -5202,7 +5677,7 @@ pub fn proxy_scope_note(
     ui.add(
         egui::Label::new(
             egui::RichText::new(note)
-                .font(theme::regular(13.0))
+                .font(theme::regular(theme::BODY_TEXT))
                 .color(palette.secondary),
         )
         .wrap(),
@@ -5859,6 +6334,8 @@ mod tests {
                                     shift: 0.0,
                                     picked,
                                     picked_songs: &[],
+                                    picked_positions: &[],
+                                    position: None,
                                 },
                             );
                             rect = response.rect;
@@ -6175,5 +6652,47 @@ mod tests {
             text.x1 <= control.x0,
             "the control moved: description {text:?}, control {control:?}"
         );
+    }
+
+    /// Covers are painted well below their pixel size, so they are sampled
+    /// through mipmaps: without them a 640 pixel cover on a 148 point card
+    /// shows stair-stepped edges and grain.
+    #[test]
+    fn covers_are_uploaded_with_mipmaps() {
+        let ctx = egui::Context::default();
+        egui_extras::install_image_loaders(&ctx);
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image::RgbImage::from_pixel(64, 64, image::Rgb([20, 30, 40]))
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        let uri = "bytes://mipmapped-cover.png";
+        ctx.include_bytes(uri, encoded.into_inner());
+        let palette = theme::Palette::dark();
+        let started = std::time::Instant::now();
+        while !ctx
+            .tex_manager()
+            .read()
+            .allocated()
+            .any(|(_, meta)| meta.name == uri)
+        {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(10),
+                "the cover never loaded"
+            );
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(148.0, 148.0));
+                paint_cover(ui, &palette, Some(uri), rect, 6.0, Icon::Disc, None);
+            });
+            output.textures_delta.clear();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let manager = ctx.tex_manager();
+        let manager = manager.read();
+        let (_, meta) = manager
+            .allocated()
+            .find(|(_, meta)| meta.name == uri)
+            .unwrap();
+        assert_eq!(meta.options, crate::images::COVER_TEXTURE);
+        assert_eq!(meta.options.mipmap_mode, Some(egui::TextureFilter::Linear));
     }
 }

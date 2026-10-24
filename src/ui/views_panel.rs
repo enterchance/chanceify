@@ -204,6 +204,11 @@ pub(super) fn default_float(ctx: &Context) -> [f32; 3] {
     ]
 }
 
+/// The cover on the card above the controls, before it is resized, and the
+/// smallest it may be made.
+const CARD_SIDE_DEFAULT: f32 = 96.0;
+const CARD_SIDE_MIN: f32 = 56.0;
+
 /// The controls (buttons and song bar) as a panel of their own that can be
 /// dragged anywhere by its top strip, widened from its right edge, snapped
 /// onto the library sidebar, or put away from the right-click menu.
@@ -289,25 +294,58 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
             if (lyrics_page || app.fullscreen_vis || !app.settings.art_expanded)
                 && let Some(now) = app.now_playing()
             {
-                let side = if lyrics_page { 44.0 } else { (outer.width() * 0.26).clamp(64.0, 120.0) };
                 let pad = 8.0;
-                // Above the controls; where that would be cut off by the top of
-                // the window, below them instead.
-                let above_top = outer.top() - side - pad * 2.0 - 8.0;
-                let top = if above_top >= screen.top() + 4.0 + pad {
-                    above_top
+                // The cover is as tall as the reader dragged the card's edge.
+                // Beside it the name needs room, so past that point the cover
+                // takes the card's whole width and the name sits on it, in
+                // its lower corner, sized with the controls' width.
+                let full = (outer.width() - pad * 2.0).max(CARD_SIDE_MIN);
+                let side_max = (outer.width() - pad * 2.0 - 12.0 - 140.0).max(CARD_SIDE_MIN);
+                let wanted = app
+                    .settings
+                    .float_card_side
+                    .unwrap_or(CARD_SIDE_DEFAULT)
+                    .clamp(CARD_SIDE_MIN, full);
+                let stacked = !lyrics_page && wanted > side_max;
+                let side = if lyrics_page {
+                    44.0
+                } else if stacked {
+                    full
                 } else {
-                    outer.bottom() + 8.0 + pad
+                    wanted
                 };
-                let cover = Rect::from_min_size(egui::pos2(outer.left() + pad, top), egui::vec2(side, side));
                 let palette = app.palette;
-                let text_left = if lyrics_page { outer.left() + 14.0 } else { cover.right() + 12.0 };
-                let text_w = (outer.right() - pad - text_left - 28.0).max(40.0);
+                let inset = 14.0;
+                let text_left = if lyrics_page {
+                    outer.left() + 14.0
+                } else if stacked {
+                    outer.left() + pad + inset
+                } else {
+                    outer.left() + pad + side + 12.0
+                };
+                let text_w = if stacked {
+                    (full - inset * 2.0 - 28.0).max(40.0)
+                } else {
+                    (outer.right() - pad - text_left - 28.0).max(40.0)
+                };
+                let (title_size, artist_size) = if stacked {
+                    let title = (full * 0.055).clamp(16.0, 32.0);
+                    (title, title * 0.72)
+                } else {
+                    ((side * 0.2).clamp(14.0, 22.0), (side * 0.15).clamp(12.0, 16.0))
+                };
+                // On the cover the words are white over a shade, whatever
+                // the theme.
+                let (title_colour, artist_colour) = if stacked {
+                    (egui::Color32::WHITE, egui::Color32::from_white_alpha(215))
+                } else {
+                    (palette.text, palette.secondary)
+                };
                 let title = crate::bidi::layout(
                     ui.painter(),
                     &now.title,
-                    theme::bold((side * 0.2).clamp(14.0, 22.0)),
-                    palette.text,
+                    theme::bold(title_size),
+                    title_colour,
                     text_w,
                     2,
                     Some(crate::bidi::ELLIPSIS),
@@ -315,18 +353,34 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                 let artist = crate::bidi::layout(
                     ui.painter(),
                     &now.subtitle,
-                    theme::regular((side * 0.15).clamp(12.0, 16.0)),
-                    palette.secondary,
+                    theme::regular(artist_size),
+                    artist_colour,
                     text_w,
                     1,
                     Some(crate::bidi::ELLIPSIS),
                 );
-                // The card is only as wide as its words need (the cover, the name,
-                // the heart), never wider than the controls under it; a name
-                // too long for that goes onto two lines and then ends in "…".
+                let block = title.size().y + 4.0 + artist.size().y;
+                let card_h = side + pad * 2.0;
+                // Above the controls; where that would be cut off by the top of
+                // the window, below them instead.
+                let above_top = outer.top() - 16.0 - card_h;
+                let card_top = if above_top >= screen.top() + 4.0 {
+                    above_top
+                } else {
+                    outer.bottom() + 8.0
+                };
+                let cover = Rect::from_min_size(egui::pos2(outer.left() + pad, card_top + pad), egui::vec2(side, side));
+                // Side by side, the card is only as wide as its words need (the
+                // cover, the name, the heart), never wider than the controls
+                // under it; a name too long for that goes onto two lines and
+                // then ends in "…". Stacked, it is the controls' width.
                 let need = text_left + (title.size().x + 34.0).max(artist.size().x) + pad + 4.0;
-                let card_right = need.clamp(outer.left() + 160.0_f32.min(outer.width()), outer.right());
-                let card = Rect::from_min_max(cover.min - egui::vec2(pad, pad), egui::pos2(card_right, cover.bottom() + pad));
+                let card_right = if stacked {
+                    outer.right()
+                } else {
+                    need.clamp(outer.left() + 160.0_f32.min(outer.width()), outer.right())
+                };
+                let card = Rect::from_min_max(egui::pos2(outer.left(), card_top), egui::pos2(card_right, card_top + card_h));
                 ui.ctx().data_mut(|data| data.insert_temp(Id::new(("pop-out-card-last", vp)), card));
                 let song = app.now_playing_item();
                 // The whole card is a handle, registered first so the cover,
@@ -337,6 +391,31 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                 }
                 card_drag = handle.drag_delta();
                 card_dragging = handle.dragged();
+                // The edge away from the controls resizes the card on its own:
+                // a taller card has a bigger cover. Registered after the
+                // handle, so the edge wins over moving the panel.
+                if !lyrics_page {
+                    let above = card.bottom() <= outer.top();
+                    let edge = if above {
+                        Rect::from_min_max(card.left_top(), egui::pos2(card.right(), card.top() + 6.0))
+                    } else {
+                        Rect::from_min_max(egui::pos2(card.left(), card.bottom() - 6.0), card.right_bottom())
+                    };
+                    let resize = ui.interact(edge, Id::new("pop-out-card-resize"), egui::Sense::drag());
+                    if resize.hovered() || resize.dragged() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                    }
+                    if resize.dragged() {
+                        let grow = if above { -resize.drag_delta().y } else { resize.drag_delta().y };
+                        // Pulled back from the full width, the cover returns to
+                        // its place beside the name at once.
+                        let from = if stacked && grow < 0.0 { side_max } else { wanted };
+                        app.settings.float_card_side = Some((from + grow).clamp(CARD_SIDE_MIN, full));
+                    }
+                    if resize.drag_stopped() {
+                        app.mark_settings_dirty();
+                    }
+                }
                 // A backing, so the words read over any page.
                 ui.painter().rect(
                     card,
@@ -364,6 +443,17 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                         Icon::Music,
                         &loader,
                     );
+                    if stacked {
+                        // A shade up from the cover's foot, so the name reads
+                        // over any picture.
+                        let shade_h = (block + inset * 2.0 + 24.0).min(cover.height());
+                        super::widgets::paint_vertical_gradient(
+                            ui,
+                            Rect::from_min_max(egui::pos2(cover.left(), cover.bottom() - shade_h), cover.max),
+                            egui::Color32::TRANSPARENT,
+                            egui::Color32::from_black_alpha(185),
+                        );
+                    }
                     let cover_click = ui
                         .interact(cover, Id::new("pop-out-card-cover"), egui::Sense::click())
                         .on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -371,8 +461,11 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                         open_song(app);
                     }
                 }
-                let block = title.size().y + 4.0 + artist.size().y;
-                let y = cover.center().y - block / 2.0;
+                let y = if stacked {
+                    cover.bottom() - inset - block
+                } else {
+                    cover.center().y - block / 2.0
+                };
                 let title_h = title.size().y;
                 let title_w = title.size().x;
                 let first_row = title_h / title.rows.len().max(1) as f32;
@@ -417,7 +510,7 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                         app.actions.push(Action::Open(crate::model::Page::Show(id.clone())));
                     }
                 }
-                ui.painter().galley(egui::pos2(text_left, y), title, palette.text);
+                ui.painter().galley(egui::pos2(text_left, y), title, title_colour);
                 // The like heart, right after the song's name.
                 super::player_bar::like_heart(
                     app,
@@ -427,7 +520,7 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                     18.0,
                     &now.uri,
                 );
-                ui.painter().galley(egui::pos2(text_left, y + title_h + 4.0), artist, palette.secondary);
+                ui.painter().galley(egui::pos2(text_left, y + title_h + 4.0), artist, artist_colour);
             }
             if grip_response.hovered() || grip_response.dragged() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
@@ -440,9 +533,38 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                 .ctx()
                 .data(|data| data.get_temp::<bool>(Id::new(("popout-bar-dragging", vp))))
                 .unwrap_or(false);
+            // A press on an edge or a corner resizes the panel and never
+            // moves it as well: one or the other, for the whole press.
+            let resize_key = Id::new(("pop-out-resizing", vp));
+            let mut resizing = ui.ctx().data(|data| data.get_temp::<bool>(resize_key)).unwrap_or(false);
+            let (pressed, down, press_at) = ui.ctx().input(|input| {
+                (
+                    input.pointer.primary_pressed(),
+                    input.pointer.primary_down(),
+                    input.pointer.interact_pos(),
+                )
+            });
+            if pressed {
+                resizing = press_at.is_some_and(|p| {
+                    let sides = p.y >= outer.top() + 14.0
+                        && p.y <= outer.bottom() + 6.0
+                        && ((p.x >= outer.right() - 10.0 && p.x <= outer.right() + 6.0)
+                            || (p.x >= outer.left() - 6.0 && p.x <= outer.left() + 10.0));
+                    let bottom = p.x >= outer.left() - 6.0
+                        && p.x <= outer.right() + 6.0
+                        && p.y >= outer.bottom() - 10.0
+                        && p.y <= outer.bottom() + 6.0;
+                    sides || bottom
+                });
+            }
+            if !down {
+                resizing = false;
+            }
+            ui.ctx().data_mut(|data| data.insert_temp(resize_key, resizing));
             let grab_key = Id::new(("pop-out-grab", vp));
             let pointer = ui.ctx().input(|input| input.pointer.latest_pos());
-            if (grip_response.dragged() || card_dragging || bar_dragging)
+            if !resizing
+                && (grip_response.dragged() || card_dragging || bar_dragging)
                 && let Some(p) = pointer
             {
                 let grab = ui
@@ -702,7 +824,11 @@ fn detached_controls(app: &mut App, ctx: &Context) {
                     .unwrap_or(false);
                 let was_key = Id::new("detached-bar-was");
                 let was = ctx.data(|data| data.get_temp::<bool>(was_key)).unwrap_or(false);
-                if bar_dragging && !was {
+                // (Not when the press is on the resize corner: one or the other.)
+                let on_corner = ctx
+                    .input(|input| input.pointer.interact_pos())
+                    .is_some_and(|p| p.x >= body.right() - 22.0 && p.y >= body.bottom() - 22.0);
+                if bar_dragging && !was && !on_corner {
                     ctx.send_viewport_cmd(ViewportCommand::StartDrag);
                 }
                 ctx.data_mut(|data| data.insert_temp(was_key, bar_dragging));
@@ -904,7 +1030,6 @@ pub fn show(app: &mut App, ctx: &Context) {
                             ("Lyrics on it", app.settings.vis_lyrics, Action::ToggleVisLyrics),
                             flag(S::LYRICS_FLOAT_ART, "Floating art", false, app),
                             flag(S::LYRICS_BOUNCE_ART, "Art bounces", false, app),
-                            ("Artist name", !app.settings.vis_text_no_artist, Action::ToggleVisArtist),
                             ("Settings", app.vis_panel, Action::ToggleVisPanel),
                             (if app.extra_vis { "Close visualizer window" } else { "New visualizer window" }, app.extra_vis, Action::ToggleExtraWindow),
                             on_top,

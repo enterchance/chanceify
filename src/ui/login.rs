@@ -70,9 +70,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                     let (logo, _) = ui.allocate_exact_size(Vec2::splat(72.0), egui::Sense::hover());
                     theme::logo(ui, logo.center(), 72.0);
                     ui.add_space(6.0);
-                    theme::text(ui, crate::build_info::DISPLAY_NAME, theme::bold(30.0), palette.text);
-                    theme::text(ui, gettext(locale, "music reimagined"), theme::regular(16.0), palette.text);
-                    theme::text(ui, gettext(locale, "Inspired by Spotify, Spotifast and Spicetify"), theme::regular(13.0), palette.secondary);
+                    theme::text(ui, crate::build_info::DISPLAY_NAME, theme::bold(theme::TITLE_TEXT), palette.text);
+                    theme::text(ui, gettext(locale, "music reimagined"), theme::regular(theme::SECTION_TEXT), palette.text);
+                    theme::text(ui, gettext(locale, "Inspired by Spotify, Spotifast and Spicetify"), theme::regular(theme::BODY_TEXT), palette.secondary);
                     ui.add_space(10.0);
                     for (icon, line) in [
                         (crate::theme::Icon::ListMusic, "Your library, queue and lyrics in one window."),
@@ -84,7 +84,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                         ui.horizontal(|ui| {
                             ui.add_space(10.0);
                             ui.add(icon.image(palette.accent, 14.0));
-                            theme::text(ui, gettext(locale, line), theme::regular(12.5), palette.dim);
+                            theme::text(ui, gettext(locale, line), theme::regular(theme::SMALL_TEXT), palette.dim);
                         });
                     }
                     ui.add_space(22.0);
@@ -94,10 +94,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                             ui.horizontal(|ui| {
                                 ui.add_space((ui.available_width() - 250.0).max(0.0) / 2.0);
                                 theme::spinner(ui, 18.0, palette.accent);
-                                theme::text(ui, gettext(locale, "Waiting for Spotify in your browser…"), theme::medium(14.0), palette.text);
+                                theme::text(ui, gettext(locale, "Waiting for Spotify in your browser…"), theme::medium(theme::BODY_TEXT), palette.text);
                             });
                             ui.add_space(6.0);
-                            if theme::link(ui, gettext(locale, "Didn't open? Open the sign-in page again"), theme::regular(13.0), palette.secondary).clicked() {
+                            if theme::link(ui, gettext(locale, "Didn't open? Open the sign-in page again"), theme::regular(theme::BODY_TEXT), palette.secondary).clicked() {
                                 ctx.open_url(egui::OpenUrl::new_tab(url));
                             }
                             ui.add_space(14.0);
@@ -109,13 +109,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                             ui.horizontal(|ui| {
                                 ui.add_space((ui.available_width() - 200.0).max(0.0) / 2.0);
                                 theme::spinner(ui, 18.0, palette.accent);
-                                theme::text(ui, gettext(locale, "Connecting to Spotify…"), theme::medium(14.0), palette.text);
+                                theme::text(ui, gettext(locale, "Connecting to Spotify…"), theme::medium(theme::BODY_TEXT), palette.text);
                             });
                         }
                         AuthStatus::Failed(message) => {
                             let message = message.clone();
                             ui.add(
-                                egui::Label::new(egui::RichText::new(message).font(theme::regular(13.0)).color(palette.danger)).wrap(),
+                                egui::Label::new(egui::RichText::new(message).font(theme::regular(theme::BODY_TEXT)).color(palette.danger)).wrap(),
                             );
                             ui.add_space(12.0);
                             if big_button(ui, app, &gettext(locale, "Try again")) {
@@ -147,7 +147,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                             ui.add(
                                 egui::Label::new(
                                     egui::RichText::new(gettext(locale, "Sign in through your browser. chanceify™ never sees your password. Local playback needs Spotify Premium."))
-                                        .font(theme::regular(12.5))
+                                        .font(theme::regular(theme::SMALL_TEXT))
                                         .color(palette.secondary),
                                 )
                                 .wrap(),
@@ -183,7 +183,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                                 locale,
                                 "No internet, or no account? Your own song files still play. Spotify songs show up but can't play until you sign in.",
                             ))
-                            .font(theme::regular(12.0))
+                            .font(theme::regular(theme::SMALL_TEXT))
                             .color(palette.dim),
                         )
                         .wrap(),
@@ -195,7 +195,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                             if theme::link(
                                 ui,
                                 gettext(locale, "Proxy Settings"),
-                                theme::regular(13.0),
+                                theme::regular(theme::BODY_TEXT),
                                 palette.secondary,
                             )
                             .clicked()
@@ -215,7 +215,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                 pos2(rect.center().x, rect.bottom() - 42.0),
                 egui::Align2::CENTER_BOTTOM,
                 "Inspired by Spotify, Spotifast and Spicetify",
-                theme::regular(11.0),
+                theme::regular(theme::SMALL_TEXT),
                 palette.dim,
             );
             ui.painter().text(
@@ -227,7 +227,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                     "chanceify™ {version} • not affiliated with Spotify",
                 )
                     .replace("{version}", env!("CARGO_PKG_VERSION")),
-                theme::regular(11.5),
+                theme::regular(theme::SMALL_TEXT),
                 palette.dim,
             );
         });
@@ -244,7 +244,7 @@ fn proxy_fields(ui: &mut egui::Ui, app: &mut App) {
             .map(|choice| {
                 let galley = ui.painter().layout_no_wrap(
                     choice.label(app.locale).into_owned(),
-                    theme::medium(13.0),
+                    theme::medium(theme::BODY_TEXT),
                     palette.text,
                 );
                 galley.size().x + 24.0
@@ -306,7 +306,7 @@ fn big_button(ui: &mut egui::Ui, app: &App, label: &str) -> bool {
     let palette = app.palette;
     let galley =
         ui.painter()
-            .layout_no_wrap(label.to_string(), theme::bold(15.0), palette.on_accent);
+            .layout_no_wrap(label.to_string(), theme::bold(theme::BODY_TEXT), palette.on_accent);
     let size = Vec2::new(ui.available_width().min(300.0), 46.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     response.widget_info(|| {

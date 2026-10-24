@@ -158,12 +158,96 @@ impl Error {
     }
 }
 
-fn native_error(error: keyring_core::Error) -> Error {
-    // Some provider errors contain the secret or arbitrary platform data.
-    // Never propagate their Debug/Display text into application diagnostics.
+fn native_error(operation: &str, error: keyring_core::Error) -> Error {
+    log::warn!(
+        "credential store {operation} failed: {}",
+        describe_native_error(&error)
+    );
     match error {
         keyring_core::Error::NoStorageAccess(_) => Error::Locked,
         _ => Error::Unavailable,
+    }
+}
+
+/// What a provider error may say in the log: its kind, and on Windows the
+/// error code. Some provider errors contain the secret or arbitrary platform
+/// data, so their own Debug/Display text is never used, except the Windows
+/// store's fixed "Windows ERROR_NAME" or "Windows error code N".
+fn describe_native_error(error: &keyring_core::Error) -> String {
+    use keyring_core::Error as E;
+    let (kind, platform) = match error {
+        E::PlatformFailure(platform) => ("platform failure", Some(platform)),
+        E::NoStorageAccess(platform) => ("no storage access", Some(platform)),
+        E::NoEntry => ("no entry", None),
+        E::BadEncoding(_) => ("bad encoding", None),
+        E::BadDataFormat(..) => ("bad data format", None),
+        E::BadStoreFormat(_) => ("bad store format", None),
+        E::TooLong(..) => ("attribute too long", None),
+        E::Invalid(..) => ("invalid parameter", None),
+        E::Ambiguous(_) => ("ambiguous entry", None),
+        E::NoDefaultStore => ("no default store", None),
+        E::NotSupportedByStore(_) => ("not supported by store", None),
+        _ => ("other", None),
+    };
+    let code = platform
+        .map(ToString::to_string)
+        .filter(|text| windows_error_code(text));
+    match code {
+        Some(code) => format!("{kind} ({code})"),
+        None => kind.to_owned(),
+    }
+}
+
+fn windows_error_code(text: &str) -> bool {
+    if let Some(name) = text.strip_prefix("Windows ERROR_") {
+        !name.is_empty()
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+    } else if let Some(number) = text.strip_prefix("Windows error code ") {
+        !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+    } else {
+        false
+    }
+}
+
+/// Windows writes with Enterprise persistence, which survives a restart and
+/// roams with the profile. Some machines refuse it, or keep the credential
+/// for the logon session only, so the grant is gone after a restart.
+/// Either way, write it again with Local persistence, which also survives a
+/// restart. `enterprise` returns the persistence the store reports after the
+/// write, when it can tell.
+#[cfg(any(windows, test))]
+fn write_preferring_enterprise(
+    enterprise: impl FnOnce() -> Result<Option<String>, keyring_core::Error>,
+    local: impl FnOnce() -> Result<(), keyring_core::Error>,
+) -> Result<(), Error> {
+    let kept = match enterprise() {
+        Ok(persistence) if persistence.as_deref().is_none_or(|kind| kind != "Session") => {
+            return Ok(());
+        }
+        Ok(_) => {
+            log::warn!(
+                "credential store kept the grant for this logon session only; writing it with Local persistence"
+            );
+            true
+        }
+        Err(error) => {
+            native_error("write with Enterprise persistence", error);
+            false
+        }
+    };
+    match local() {
+        Ok(()) => {
+            log::info!("credential store write with Local persistence succeeded");
+            Ok(())
+        }
+        // The session-only copy still serves until the restart.
+        Err(error) if kept => {
+            native_error("write with Local persistence", error);
+            Ok(())
+        }
+        Err(error) => Err(native_error("write with Local persistence", error)),
     }
 }
 
@@ -192,6 +276,15 @@ impl NativeStore {
     }
 
     fn entry_in(&mut self, service: &str, key: &str) -> Result<keyring_core::Entry, Error> {
+        self.entry_in_with(service, key, None)
+    }
+
+    fn entry_in_with(
+        &mut self,
+        service: &str,
+        key: &str,
+        modifiers: Option<&std::collections::HashMap<&str, &str>>,
+    ) -> Result<keyring_core::Entry, Error> {
         if self.store.is_none() {
             #[cfg(target_os = "linux")]
             let store = zbus_secret_service_keyring_store::Store::new();
@@ -199,13 +292,13 @@ impl NativeStore {
             let store = apple_native_keyring_store::keychain::Store::new();
             #[cfg(windows)]
             let store = windows_native_keyring_store::Store::new();
-            self.store = Some(store.map_err(native_error)?);
+            self.store = Some(store.map_err(|error| native_error("open", error))?);
         }
         self.store
             .as_ref()
             .ok_or(Error::Unavailable)?
-            .build(service, key, None)
-            .map_err(native_error)
+            .build(service, key, modifiers)
+            .map_err(|error| native_error("entry", error))
     }
 }
 
@@ -218,31 +311,274 @@ impl ProtectedStore for NativeStore {
                 let secret = match legacy.get_secret() {
                     Ok(secret) => secret,
                     Err(keyring_core::Error::NoEntry) => return Ok(None),
-                    Err(error) => return Err(native_error(error)),
+                    Err(error) => return Err(native_error("legacy read", error)),
                 };
                 let current = self.entry(key)?;
-                current.set_secret(&secret).map_err(native_error)?;
-                if current.get_secret().map_err(native_error)? != secret {
+                current
+                    .set_secret(&secret)
+                    .map_err(|error| native_error("migration write", error))?;
+                if current
+                    .get_secret()
+                    .map_err(|error| native_error("migration read", error))?
+                    != secret
+                {
                     return Err(Error::Unavailable);
                 }
                 // Delete only after reading the replacement back successfully.
-                legacy.delete_credential().map_err(native_error)?;
+                legacy
+                    .delete_credential()
+                    .map_err(|error| native_error("legacy delete", error))?;
                 Ok(Some(secret))
             }
-            Err(error) => Err(native_error(error)),
+            Err(error) => Err(native_error("read", error)),
         }
     }
+    #[cfg(not(windows))]
     fn write(&mut self, key: &str, secret: &[u8]) -> Result<(), Error> {
-        self.entry(key)?.set_secret(secret).map_err(native_error)
+        self.entry(key)?
+            .set_secret(secret)
+            .map_err(|error| native_error("write", error))
+    }
+    #[cfg(windows)]
+    fn write(&mut self, key: &str, secret: &[u8]) -> Result<(), Error> {
+        let service = if self.legacy_profile {
+            LEGACY_SERVICE
+        } else {
+            SERVICE
+        };
+        let enterprise = self.entry_in(service, key)?;
+        let local = self.entry_in_with(
+            service,
+            key,
+            Some(&std::collections::HashMap::from([("persistence", "Local")])),
+        )?;
+        write_preferring_enterprise(
+            || {
+                enterprise.set_secret(secret)?;
+                Ok(enterprise
+                    .get_attributes()
+                    .ok()
+                    .and_then(|mut attributes| attributes.remove("persistence")))
+            },
+            || local.set_secret(secret),
+        )
     }
     fn delete(&mut self, key: &str) -> Result<(), Error> {
         for service in [SERVICE, LEGACY_SERVICE] {
             match self.entry_in(service, key)?.delete_credential() {
                 Ok(()) | Err(keyring_core::Error::NoEntry) => (),
-                Err(error) => return Err(native_error(error)),
+                Err(error) => return Err(native_error("delete", error)),
             }
         }
         Ok(())
+    }
+}
+
+/// Credential Manager first, and a copy sealed for this Windows user in the
+/// state directory. On some machines Credential Manager refuses the write
+/// (#748) or drops the entries during a restart (#815); the sealed copy then
+/// serves instead. Every save writes both, and sign-out deletes both.
+#[cfg(windows)]
+struct WithSealedCopy<P, C> {
+    primary: P,
+    copy: C,
+}
+
+#[cfg(windows)]
+impl<P: ProtectedStore, C: ProtectedStore> ProtectedStore for WithSealedCopy<P, C> {
+    fn read(&mut self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+        let primary = self.primary.read(key);
+        if let Ok(Some(secret)) = &primary {
+            // A grant saved before the copy existed gains one here, so it
+            // survives the next time the native store loses it.
+            if !matches!(self.copy.read(key), Ok(Some(copy)) if copy == *secret)
+                && let Err(error) = self.copy.write(key, secret)
+            {
+                log::warn!("could not keep a sealed copy of the grant: {error:?}");
+            }
+            return primary;
+        }
+        match self.copy.read(key) {
+            Ok(Some(secret)) => {
+                log::info!(
+                    "credential store {}; using the sealed copy",
+                    if primary.is_ok() {
+                        "no longer has the grant"
+                    } else {
+                        "is unavailable"
+                    }
+                );
+                Ok(Some(secret))
+            }
+            Ok(None) => primary,
+            // The native store's own error says more, when it has one.
+            Err(error) => primary.and(Err(error)),
+        }
+    }
+
+    fn write(&mut self, key: &str, secret: &[u8]) -> Result<(), Error> {
+        let primary = self.primary.write(key, secret);
+        if primary.is_err() {
+            // An older grant left there must not shadow the new copy.
+            let _ = self.primary.delete(key);
+        }
+        let copy = self.copy.write(key, secret);
+        if let Err(error) = copy {
+            log::warn!("could not write the sealed copy of the grant: {error:?}");
+            // Nor may an older copy outlive the grant that replaced it.
+            let _ = self.copy.delete(key);
+        }
+        match (primary, copy) {
+            (Err(error), Err(_)) => Err(error),
+            _ => Ok(()),
+        }
+    }
+
+    fn delete(&mut self, key: &str) -> Result<(), Error> {
+        let primary = self.primary.delete(key);
+        let copy = self.copy.delete(key);
+        primary.and(copy)
+    }
+}
+
+/// Encrypts a secret so only the current user can decrypt it. `context` is
+/// bound to the result: a sealed grant opens only under its own key.
+#[cfg(windows)]
+trait Sealer: Send {
+    fn seal(&self, secret: &[u8], context: &[u8]) -> Result<Vec<u8>, Error>;
+    fn open(&self, sealed: &[u8], context: &[u8]) -> Result<Vec<u8>, Error>;
+}
+
+/// Sealed grants, one file per key, replaced whole on every write.
+#[cfg(windows)]
+struct SealedFiles<S> {
+    dir: PathBuf,
+    sealer: S,
+}
+
+#[cfg(windows)]
+impl<S> SealedFiles<S> {
+    const MAGIC: &'static [u8] = b"chanceify-sealed-grant-1\n";
+
+    fn path(&self, key: &str) -> PathBuf {
+        // Keys are "<hex profile>:<slot name>"; ':' cannot name a Windows file.
+        self.dir.join(format!("{}.sealed", key.replace(':', ".")))
+    }
+
+    fn context(key: &str) -> Vec<u8> {
+        format!("{SERVICE}\n{key}").into_bytes()
+    }
+}
+
+#[cfg(windows)]
+impl<S: Sealer> ProtectedStore for SealedFiles<S> {
+    fn read(&mut self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+        let bytes = match std::fs::read(self.path(key)) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err(Error::Filesystem),
+        };
+        let sealed = bytes.strip_prefix(Self::MAGIC).ok_or(Error::Invalid)?;
+        self.sealer.open(sealed, &Self::context(key)).map(Some)
+    }
+
+    fn write(&mut self, key: &str, secret: &[u8]) -> Result<(), Error> {
+        let mut bytes = Self::MAGIC.to_vec();
+        bytes.extend(self.sealer.seal(secret, &Self::context(key))?);
+        std::fs::create_dir_all(&self.dir).map_err(|_| Error::Filesystem)?;
+        let path = self.path(key);
+        let temporary = path.with_extension("sealed.tmp");
+        std::fs::write(&temporary, bytes).map_err(|_| Error::Filesystem)?;
+        crate::util::replace_file(&temporary, &path).map_err(|_| {
+            let _ = std::fs::remove_file(&temporary);
+            Error::Filesystem
+        })
+    }
+
+    fn delete(&mut self, key: &str) -> Result<(), Error> {
+        let path = self.path(key);
+        let _ = remove_file(&path.with_extension("sealed.tmp"));
+        remove_file(&path)
+    }
+}
+
+/// DPAPI with the user's own key: the copy opens only for this Windows user.
+#[cfg(windows)]
+struct Dpapi;
+
+#[cfg(windows)]
+impl Dpapi {
+    fn transform(input: &[u8], context: &[u8], seal: bool) -> Result<Vec<u8>, Error> {
+        use windows_sys::Win32::Foundation::{GetLastError, LocalFree};
+        use windows_sys::Win32::Security::Cryptography::{
+            CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
+        };
+        let blob = |bytes: &[u8]| -> Result<CRYPT_INTEGER_BLOB, Error> {
+            Ok(CRYPT_INTEGER_BLOB {
+                cbData: u32::try_from(bytes.len()).map_err(|_| Error::Invalid)?,
+                pbData: bytes.as_ptr().cast_mut(),
+            })
+        };
+        let input = blob(input)?;
+        let entropy = blob(context)?;
+        let mut output = CRYPT_INTEGER_BLOB {
+            cbData: 0,
+            pbData: std::ptr::null_mut(),
+        };
+        // SAFETY: the input blobs borrow live slices that DPAPI only reads,
+        // and on success `output` is a LocalAlloc buffer of `cbData` bytes
+        // that is copied and then freed exactly once.
+        unsafe {
+            let ok = if seal {
+                CryptProtectData(
+                    &input,
+                    std::ptr::null(),
+                    &entropy,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    CRYPTPROTECT_UI_FORBIDDEN,
+                    &mut output,
+                )
+            } else {
+                CryptUnprotectData(
+                    &input,
+                    std::ptr::null_mut(),
+                    &entropy,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    CRYPTPROTECT_UI_FORBIDDEN,
+                    &mut output,
+                )
+            };
+            if ok == 0 || output.pbData.is_null() {
+                let code = GetLastError();
+                log::warn!(
+                    "sealed grant {} failed (Windows error code {code})",
+                    if seal { "encryption" } else { "decryption" }
+                );
+                return Err(if seal {
+                    Error::Unavailable
+                } else {
+                    Error::Invalid
+                });
+            }
+            let length = output.cbData as usize;
+            let bytes = std::slice::from_raw_parts(output.pbData, length).to_vec();
+            // Do not leave a decrypted grant behind in freed memory.
+            std::ptr::write_bytes(output.pbData, 0, length);
+            LocalFree(output.pbData.cast());
+            Ok(bytes)
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Sealer for Dpapi {
+    fn seal(&self, secret: &[u8], context: &[u8]) -> Result<Vec<u8>, Error> {
+        Self::transform(secret, context, true)
+    }
+    fn open(&self, sealed: &[u8], context: &[u8]) -> Result<Vec<u8>, Error> {
+        Self::transform(sealed, context, false)
     }
 }
 
@@ -286,6 +622,14 @@ impl Store {
         let backend = NativeStore {
             legacy_profile: dirs.is_legacy_profile(),
             ..Default::default()
+        };
+        #[cfg(windows)]
+        let backend = WithSealedCopy {
+            primary: backend,
+            copy: SealedFiles {
+                dir: dirs.state.join("credential-storage"),
+                sealer: Dpapi,
+            },
         };
         Self::with_backend(dirs, Box::new(backend))
     }
@@ -673,6 +1017,95 @@ impl Lease {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[derive(Debug)]
+    struct Platform(&'static str);
+    impl std::fmt::Display for Platform {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+    impl std::error::Error for Platform {}
+    fn platform(text: &'static str) -> keyring_core::Error {
+        keyring_core::Error::PlatformFailure(Box::new(Platform(text)))
+    }
+
+    /// Windows error codes reach the log; no other provider text does,
+    /// since it may carry the secret.
+    #[test]
+    fn native_errors_log_windows_codes_and_never_provider_text() {
+        assert_eq!(
+            describe_native_error(&platform("Windows error code 1312")),
+            "platform failure (Windows error code 1312)"
+        );
+        assert_eq!(
+            describe_native_error(&keyring_core::Error::NoStorageAccess(Box::new(Platform(
+                "Windows ERROR_NO_SUCH_LOGON_SESSION"
+            )))),
+            "no storage access (Windows ERROR_NO_SUCH_LOGON_SESSION)"
+        );
+        for leaky in [
+            platform("Windows error code 5 dummy-secret"),
+            platform("dummy-secret"),
+            keyring_core::Error::BadEncoding(b"dummy-secret".to_vec()),
+            keyring_core::Error::Invalid("secret".into(), "dummy-secret".into()),
+        ] {
+            assert!(!describe_native_error(&leaky).contains("dummy-secret"));
+        }
+        assert_eq!(native_error("write", platform("x")), Error::Unavailable);
+        assert_eq!(
+            native_error(
+                "write",
+                keyring_core::Error::NoStorageAccess(Box::new(Platform("x")))
+            ),
+            Error::Locked
+        );
+    }
+
+    /// A refused or session-only Enterprise write falls back to Local
+    /// persistence, which survives a restart.
+    #[test]
+    fn windows_write_falls_back_to_local_persistence() {
+        let local_called = std::cell::Cell::new(0);
+        let local_ok = || {
+            local_called.set(local_called.get() + 1);
+            Ok(())
+        };
+        assert_eq!(
+            write_preferring_enterprise(|| Ok(Some("Enterprise".into())), local_ok),
+            Ok(())
+        );
+        assert_eq!(write_preferring_enterprise(|| Ok(None), local_ok), Ok(()));
+        assert_eq!(local_called.get(), 0);
+
+        assert_eq!(
+            write_preferring_enterprise(|| Err(platform("Windows error code 1312")), local_ok),
+            Ok(())
+        );
+        assert_eq!(
+            write_preferring_enterprise(|| Ok(Some("Session".into())), local_ok),
+            Ok(())
+        );
+        assert_eq!(local_called.get(), 2);
+
+        assert_eq!(
+            write_preferring_enterprise(
+                || Err(platform("Windows error code 1312")),
+                || Err(keyring_core::Error::NoStorageAccess(Box::new(Platform(
+                    "x"
+                ))))
+            ),
+            Err(Error::Locked)
+        );
+        // The session copy still serves this run when Local is refused too.
+        assert_eq!(
+            write_preferring_enterprise(
+                || Ok(Some("Session".into())),
+                || Err(platform("Windows error code 1312"))
+            ),
+            Ok(())
+        );
+    }
 
     #[derive(Default)]
     struct Fake {

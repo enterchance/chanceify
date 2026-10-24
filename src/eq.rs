@@ -372,6 +372,75 @@ pub const PRESETS: &[Preset] = &[
     },
 ];
 
+/// A heading in the equalizer's list of presets, with the presets under it
+/// by name. Every preset sits under exactly one heading.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PresetGroup {
+    pub name: &'static str,
+    pub presets: &'static [&'static str],
+}
+
+/// The presets' headings, in the order they are listed.
+pub const PRESET_GROUPS: &[PresetGroup] = &[
+    PresetGroup {
+        name: "Tone",
+        presets: &[
+            "Flat",
+            "Full Bass",
+            "Full Bass & Treble",
+            "Full Treble",
+            "Bass Booster",
+            "Bass Reducer",
+            "Treble Booster",
+            "Vocal Booster",
+            "Spoken Word",
+            "Loudness",
+            "Soft",
+            "Night Listening",
+        ],
+    },
+    PresetGroup {
+        name: "Genres",
+        presets: &[
+            "Classical",
+            "Club",
+            "Dance",
+            "Pop",
+            "Reggae",
+            "Rock",
+            "Ska",
+            "Soft Rock",
+            "Techno",
+            "Hip-Hop",
+            "Jazz",
+            "EDM",
+            "Metal",
+            "R&B",
+            "Country",
+            "Acoustic",
+            "House",
+            "Lo-fi",
+            "Phonk",
+            "Jump",
+        ],
+    },
+    PresetGroup {
+        name: "Space & speakers",
+        presets: &[
+            "Large Hall",
+            "Live",
+            "Party",
+            "Laptop Speakers / Headphones",
+            "Small Speakers",
+        ],
+    },
+];
+
+/// A preset's place in [`PRESETS`], by its name.
+pub fn preset_index(name: &str) -> Option<usize> {
+    PRESETS.iter().position(|preset| preset.name == name)
+}
+
 /// The settings as the window and the player's thread share them.
 pub type SharedEq = Arc<Mutex<EqSettings>>;
 
@@ -452,6 +521,16 @@ pub struct Processor {
 }
 
 impl Processor {
+    /// Discards the previous signal without changing the filter settings.
+    pub fn reset(&mut self) {
+        for filter in self.chains.iter_mut().flatten() {
+            filter.x1 = 0.0;
+            filter.x2 = 0.0;
+            filter.y1 = 0.0;
+            filter.y2 = 0.0;
+        }
+    }
+
     pub fn new(shared: SharedEq) -> Self {
         let mut processor = Self {
             shared,
@@ -697,6 +776,26 @@ mod tests {
             curve.db_at(19_000.0)
         );
         assert!(curve.db_at(14_000.0).abs() < 0.3);
+    }
+
+    #[test]
+    fn every_preset_is_under_exactly_one_heading() {
+        for preset in PRESETS {
+            let homes = PRESET_GROUPS
+                .iter()
+                .filter(|group| group.presets.contains(&preset.name))
+                .count();
+            assert_eq!(homes, 1, "{} is under {homes} headings", preset.name);
+        }
+        for group in PRESET_GROUPS {
+            for name in group.presets {
+                assert!(
+                    preset_index(name).is_some(),
+                    "{name} under {} is no preset",
+                    group.name
+                );
+            }
+        }
     }
 
     #[test]

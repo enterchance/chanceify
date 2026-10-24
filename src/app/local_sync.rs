@@ -7,10 +7,15 @@ use super::*;
 use crate::api::models::Track;
 use crate::local_match;
 
-/// The least time between two Spotify look-ups for files.
-const MATCH_GAP: Duration = Duration::from_millis(1500);
-/// A look-up with no answer after this long is given up on.
-const MATCH_WAIT: Duration = Duration::from_secs(30);
+/// The least time between two Spotify look-ups for files. One goes at a
+/// time, spaced out, so matching leaves the shared quota for the rest of the
+/// app.
+const MATCH_GAP: Duration = Duration::from_secs(3);
+/// A look-up with no answer after this long is given up on. The request
+/// itself waits out Spotify's cooldowns (up to half a minute each, a few
+/// times over) before it answers, so giving up sooner would only send the
+/// next one alongside it.
+const MATCH_WAIT: Duration = Duration::from_secs(150);
 /// How long to pause when Spotify asks for it.
 const MATCH_BACKOFF: Duration = Duration::from_secs(60);
 /// The answers are written to disk this often while a run goes on.
@@ -73,20 +78,50 @@ impl App {
         self.user.is_some()
     }
 
+    /// How many of the current music files are matched on Spotify, each
+    /// file once.
+    pub fn local_found(&self) -> usize {
+        self.local_matches
+            .matched_among(self.local_songs.songs.iter().map(|song| song.path.as_str()))
+    }
+
+    /// Takes a finished scan's songs and forgets the Spotify answers for
+    /// files that are gone, so the found count is of the songs there are.
+    pub fn adopt_local_songs(&mut self, library: crate::local_library::Library) {
+        self.local_songs = library;
+        self.local_sync.forget_genres();
+        let current = self.local_songs.songs.iter().map(|song| song.path.as_str());
+        if self.local_matches.forget_missing(current) {
+            self.save_local_matches();
+        }
+    }
+
     /// Starts looking every file that has not been looked up on Spotify.
+    /// The files already answered count as done from the start.
     pub(super) fn queue_spotify_matches(&mut self) {
         if !self.can_match_files() {
             self.toast("Sign in to Spotify first, then try again");
             return;
         }
         let queued: HashSet<String> = self.local_sync.queue.iter().cloned().collect();
+        let mut seen: HashSet<&str> = HashSet::new();
         let mut added = 0usize;
+        let mut answered = 0usize;
+        let mut found = 0usize;
         for song in &self.local_songs.songs {
             if song.error.is_some()
                 || song.title.trim().is_empty()
                 || song.artist.trim().is_empty()
-                || !self.local_matches.needs(&song.path)
-                || queued.contains(&song.path)
+                || !seen.insert(song.path.as_str())
+            {
+                continue;
+            }
+            if !self.local_matches.needs(&song.path) {
+                answered += 1;
+                found += usize::from(self.local_matches.uri_of(&song.path).is_some());
+                continue;
+            }
+            if queued.contains(&song.path)
                 || self.local_sync.inflight.as_deref() == Some(song.path.as_str())
             {
                 continue;
@@ -99,16 +134,32 @@ impl App {
             return;
         }
         if self.local_sync.progress().is_none() || self.local_sync.total == 0 {
-            self.local_sync.done = 0;
-            self.local_sync.found = 0;
-            self.local_sync.total = added;
+            self.local_sync.done = answered;
+            self.local_sync.found = found;
+            self.local_sync.total = answered + added;
         } else {
             self.local_sync.total += added;
         }
         self.local_sync.next = None;
         self.toast(format!(
-            "Looking {added} songs up on Spotify, a few every second, in the background"
+            "Looking {added} songs up on Spotify, one every few seconds, in the background"
         ));
+    }
+
+    /// How soon the matching run next has something to do, so the window
+    /// wakes for it even when nothing else asks for a frame.
+    pub(super) fn match_wake(&self) -> Option<Duration> {
+        self.local_sync.progress()?;
+        let now = Instant::now();
+        let at = match (self.local_sync.sent, self.local_sync.next) {
+            (Some(sent), _) => sent + MATCH_WAIT,
+            (None, Some(next)) => next,
+            (None, None) => now,
+        };
+        Some(
+            at.saturating_duration_since(now)
+                .max(Duration::from_millis(250)),
+        )
     }
 
     /// Each pass: send the next file's look-up when it is time.
@@ -166,7 +217,22 @@ impl App {
             self.local_sync.inflight = None;
             self.local_sync.sent = None;
         } else {
-            // An answer to a look-up already given up on.
+            // An answer to a look-up already given up on: the request was
+            // spent, so its answer is still kept, without counting it again.
+            if let Ok(tracks) = result
+                && self.local_matches.needs(&path)
+                && let Some(song) = self.local_songs.songs.iter().find(|song| song.path == path)
+            {
+                match local_match::pick(&tracks, &song.title, &song.artist, song.duration_ms) {
+                    Some(track) => {
+                        let uri = track.uri.clone();
+                        let isrc = track.external_ids.isrc.clone().unwrap_or_default();
+                        self.local_matches.remember(&path, &uri, &isrc);
+                    }
+                    None => self.local_matches.remember(&path, "", ""),
+                }
+                self.local_sync.unsaved += 1;
+            }
             return;
         }
         match result {

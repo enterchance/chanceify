@@ -328,6 +328,35 @@ fn folder_cover(path: &Path) -> Option<Arc<[u8]>> {
     (!bytes.is_empty() && bytes.len() < 20_000_000).then(|| Arc::from(&bytes[..]))
 }
 
+/// The picture a song file shows: the one inside it, or failing that the
+/// one beside it, read the same way as when the file is played. Only the
+/// tags are read, not the sound, so this is quick; still, it touches the
+/// disk, so call it off the UI thread.
+pub fn read_cover(path: &Path) -> Option<Arc<[u8]>> {
+    let inside = File::open(path).ok().and_then(|file| {
+        let stream = MediaSourceStream::new(Box::new(file), Default::default());
+        let mut hint = Hint::new();
+        if let Some(extension) = path.extension().and_then(|e| e.to_str()) {
+            hint.with_extension(extension);
+        }
+        let mut probed = symphonia::default::get_probe()
+            .format(
+                &hint,
+                stream,
+                &FormatOptions::default(),
+                &MetadataOptions::default(),
+            )
+            .ok()?;
+        let cover = probed.metadata.get().and_then(cover_in);
+        if cover.is_some() {
+            return cover;
+        }
+        let mut format = probed.format;
+        cover_in(format.metadata())
+    });
+    inside.or_else(|| folder_cover(path))
+}
+
 impl Reader {
     fn open(path: &Path) -> Result<Self, String> {
         let file = File::open(path).map_err(|error| error.to_string())?;
@@ -796,6 +825,7 @@ impl Engine {
         );
         let tapped = Tapped::new(
             Box::new(output),
+            Some(Arc::clone(&self.audio)),
             Arc::clone(&self.config.tap),
             ceiling,
             false,

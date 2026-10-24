@@ -32,7 +32,9 @@ pub enum ApiError {
     Status { status: u16, message: String },
     #[error("Spotify is rate limiting requests; try again in a moment")]
     RateLimited,
-    #[error("Spotify's Development Mode quota is exhausted; try again after the quota resets")]
+    #[error(
+        "Spotify's shared app is out of quota. Add your own free Spotify app in Settings, Accounts, for a quota of your own"
+    )]
     QuotaExhausted,
     #[error("your Spotify sign-in expired; please sign in again")]
     SignInExpired { api_source: ApiSource },
@@ -106,13 +108,13 @@ pub enum TokenProvider {
 impl TokenProvider {
     async fn access_token(&self) -> Result<String> {
         match self {
-            Self::Web(tokens) => tokens.access_token(false).await,
+            Self::Web(tokens) => tokens.access_token(None).await,
         }
     }
 
-    async fn invalidate(&self) {
+    async fn invalidate(&self, rejected: &str) {
         let Self::Web(tokens) = self;
-        let _ = tokens.access_token(true).await;
+        let _ = tokens.access_token(Some(rejected)).await;
     }
 }
 
@@ -157,9 +159,11 @@ impl WebTokens {
     }
 
     /// A valid access token, refreshing first when it is close to expiry or
-    /// `force` asks for a fresh one after a 401.
-    async fn access_token(&self, force: bool) -> Result<String> {
+    /// when `rejected`, the token a 401 refused, is still the current one. A
+    /// request that finds the token already replaced reuses the new one.
+    async fn access_token(&self, rejected: Option<&str>) -> Result<String> {
         let mut guard = self.token.lock().await;
+        let force = rejected.is_some_and(|token| token == guard.access_token);
         if !self.lease.current() {
             return Err(ApiError::SignInExpired {
                 api_source: self.source,
@@ -352,6 +356,7 @@ pub struct ApiClient {
     limiter: Semaphore,
     queue_writes: tokio::sync::Mutex<()>,
     cooldown_until: tokio::sync::Mutex<Instant>,
+    partner_cooldown_until: tokio::sync::Mutex<Instant>,
     search_limit: u32,
     artist_albums_limit: u32,
     source: ApiSource,
@@ -374,6 +379,7 @@ impl ApiClient {
             limiter: Semaphore::new(MAX_IN_FLIGHT),
             queue_writes: tokio::sync::Mutex::new(()),
             cooldown_until: tokio::sync::Mutex::new(Instant::now()),
+            partner_cooldown_until: tokio::sync::Mutex::new(Instant::now()),
             search_limit,
             artist_albums_limit,
             source,
@@ -405,6 +411,58 @@ impl ApiClient {
             .unwrap_or_else(|p| p.into_inner())
             .clone()
             .ok_or(ApiError::NotSignedIn)
+    }
+
+    fn http_client(&self) -> Result<reqwest::Client> {
+        self.http.client().map_err(ApiError::Network)
+    }
+
+    /// Pathfinder has a separate cooldown: a shared Web API throttle must not
+    /// block it, and a prerelease refresh must not erase its own Retry-After.
+    pub(crate) async fn partner_request(
+        &self,
+        bearer: &str,
+        client_token: &str,
+        query: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        if *self.partner_cooldown_until.lock().await > Instant::now() {
+            return Err(ApiError::RateLimited);
+        }
+        let endpoint = "https://api-partner.spotify.com/pathfinder/v2/query".to_string();
+        #[cfg(test)]
+        let endpoint = self
+            .base_url
+            .as_ref()
+            .map(|base| format!("{base}/partner"))
+            .unwrap_or(endpoint);
+        let response = self
+            .http_client()?
+            .post(endpoint)
+            .bearer_auth(bearer)
+            .header("client-token", client_token)
+            .json(query)
+            .send()
+            .await?;
+        let status = response.status();
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            let seconds = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(1);
+            let wait = Duration::from_secs(seconds).min(MAX_RETRY_AFTER);
+            let mut cooldown = self.partner_cooldown_until.lock().await;
+            *cooldown = (*cooldown).max(Instant::now() + wait);
+            return Err(ApiError::RateLimited);
+        }
+        if !status.is_success() {
+            return Err(ApiError::Status {
+                status: status.as_u16(),
+                message: "Spotify upcoming-album request failed".into(),
+            });
+        }
+        response.json().await.map_err(ApiError::from)
     }
 
     async fn wait_for_cooldown(&self) {
@@ -476,12 +534,14 @@ impl ApiClient {
         let queue_write = method == Method::POST && path == "/me/player/queue";
         loop {
             attempt = u32::saturating_add(attempt, 1);
-            self.wait_for_cooldown().await;
             let permit = self
                 .limiter
                 .acquire()
                 .await
                 .map_err(|_| ApiError::NotSignedIn)?;
+            // After the permit: a 429 answered while this request queued has
+            // extended the cooldown, and sending now would only earn another.
+            self.wait_for_cooldown().await;
             let token = provider.access_token().await?;
             let mut request = self
                 .http
@@ -504,7 +564,7 @@ impl ApiClient {
 
             if status == StatusCode::UNAUTHORIZED && attempt == 1 {
                 drop(permit);
-                provider.invalidate().await;
+                provider.invalidate(&token).await;
                 continue;
             }
             if status == StatusCode::TOO_MANY_REQUESTS {
@@ -1277,6 +1337,101 @@ impl ApiClient {
 mod tests {
     use super::*;
 
+    /// An extreme server header cannot turn a short recovery into a day-long wait.
+    #[tokio::test]
+    async fn partner_extreme_retry_after_is_bounded() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = [0u8; 4096];
+            assert!(socket.read(&mut bytes).await.unwrap() > 0);
+            socket.write_all(b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 86400\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+        });
+        let mut client = ApiClient::new(
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+            Arc::new(NetActivity::default()),
+            20,
+            50,
+            ApiSource::Personal,
+        );
+        client.base_url = Some(format!("http://{address}"));
+        assert!(matches!(
+            client
+                .partner_request("dummy", "dummy", &serde_json::json!({}))
+                .await,
+            Err(ApiError::RateLimited)
+        ));
+        server.await.unwrap();
+        let remaining = client
+            .partner_cooldown_until
+            .lock()
+            .await
+            .saturating_duration_since(Instant::now());
+        assert!(
+            remaining <= Duration::from_secs(30),
+            "a header cannot exceed the 30-second recovery bound"
+        );
+        assert!(
+            !remaining.is_zero(),
+            "a bounded cooldown must still respect rate limiting"
+        );
+    }
+
+    /// The upcoming-album cooldown is its own: the shared Web API throttle
+    /// does not hold it, and its Retry-After holds later requests.
+    #[tokio::test]
+    async fn partner_retry_after_survives_refresh_and_is_separate_from_shared_cooldown() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = [0u8; 4096];
+            let received = socket.read(&mut bytes).await.unwrap();
+            assert!(received > 0);
+            socket.write_all(b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+            assert!(
+                tokio::time::timeout(Duration::from_millis(150), listener.accept())
+                    .await
+                    .is_err(),
+                "refresh must not send a request during the cooldown"
+            );
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let received = socket.read(&mut bytes).await.unwrap();
+            assert!(received > 0);
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}").await.unwrap();
+        });
+        let mut client = ApiClient::new(
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+            Arc::new(NetActivity::default()),
+            20,
+            50,
+            ApiSource::Personal,
+        );
+        client.base_url = Some(format!("http://{address}"));
+        client.extend_cooldown(Duration::from_secs(60)).await;
+        let query = serde_json::json!({});
+        assert!(matches!(
+            client.partner_request("dummy", "dummy", &query).await,
+            Err(ApiError::RateLimited)
+        ));
+        assert!(matches!(
+            client.partner_request("dummy", "dummy", &query).await,
+            Err(ApiError::RateLimited)
+        ));
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        assert_eq!(
+            client
+                .partner_request("dummy", "dummy", &query)
+                .await
+                .unwrap()["ok"],
+            true
+        );
+        server.await.unwrap();
+    }
+
     #[tokio::test]
     async fn revoked_provider_cannot_return_or_persist_its_token() {
         let root =
@@ -1301,14 +1456,14 @@ mod tests {
             std::sync::Arc::new(|_| {}),
         );
         // Verification can use a token in memory without persisting it yet.
-        assert_eq!(tokens.access_token(false).await.unwrap(), "dummy-access");
+        assert_eq!(tokens.access_token(None).await.unwrap(), "dummy-access");
         assert!(store.lease(slot).load().await.unwrap().grant.is_none());
         tokens.remember().await.unwrap();
         assert!(store.lease(slot).load().await.unwrap().grant.is_some());
         store.revoke_spotify().unwrap();
         store.lease(slot).delete().await.unwrap();
         assert!(matches!(
-            tokens.access_token(false).await,
+            tokens.access_token(None).await,
             Err(ApiError::SignInExpired { .. })
         ));
         assert_eq!(
@@ -1317,6 +1472,83 @@ mod tests {
         );
         assert!(store.lease(slot).load().await.unwrap().grant.is_none());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn client_with_token(base_url: Option<String>, access_token: &str) -> ApiClient {
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let mut client = ApiClient::new(
+            http.clone(),
+            Arc::new(NetActivity::default()),
+            20,
+            50,
+            ApiSource::Shared,
+        );
+        client.base_url = base_url;
+        client.set_token_provider(Some(TokenProvider::Web(WebTokens::new(
+            http,
+            crate::auth::StoredToken {
+                access_token: access_token.into(),
+                expires_at: u64::MAX,
+                ..Default::default()
+            },
+            crate::credentials::Store::in_memory(crate::paths::AppDirs {
+                config: std::env::temp_dir().join("unused-client-token/config"),
+                state: std::env::temp_dir().join("unused-client-token/state"),
+                cache: std::env::temp_dir().join("unused-client-token/cache"),
+            })
+            .lease(crate::credentials::Slot::Shared),
+            ApiSource::Shared,
+            Arc::new(|_| {}),
+        ))));
+        client
+    }
+
+    #[tokio::test]
+    async fn a_request_queued_for_a_permit_waits_out_a_cooldown_set_meanwhile() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = Arc::new(client_with_token(
+            Some(format!("http://{}", listener.local_addr().unwrap())),
+            "test-only",
+        ));
+        let permits = client
+            .limiter
+            .acquire_many(MAX_IN_FLIGHT as u32)
+            .await
+            .unwrap();
+        let queued = tokio::spawn({
+            let client = Arc::clone(&client);
+            async move { client.send(Method::GET, "/ping", &[], None).await }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        client.extend_cooldown(Duration::from_millis(400)).await;
+        let cooldown_started = Instant::now();
+        drop(permits);
+        let (mut socket, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(cooldown_started.elapsed() >= Duration::from_millis(350));
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+            request.push(socket.read_u8().await.unwrap());
+        }
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+            .await
+            .unwrap();
+        assert_eq!(queued.await.unwrap().unwrap(), "{}");
+    }
+
+    #[tokio::test]
+    async fn a_rejection_of_a_token_already_replaced_reuses_the_new_one() {
+        let client = client_with_token(None, "dummy-access");
+        let TokenProvider::Web(tokens) = client.provider().unwrap();
+        // A refresh would fail here: the grant is a placeholder.
+        assert_eq!(
+            tokens.access_token(Some("dummy-stale")).await.unwrap(),
+            "dummy-access"
+        );
     }
 
     #[tokio::test]

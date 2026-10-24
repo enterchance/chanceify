@@ -78,6 +78,45 @@ pub enum Status {
     Failed(String),
 }
 
+/// What a Last.fm friend is playing, or last played.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FriendNow {
+    pub user: String,
+    /// Their profile picture, if they have one.
+    pub avatar: Option<String>,
+    pub title: String,
+    pub artist: String,
+    /// The cover of the song.
+    pub image: Option<String>,
+    /// Playing right now.
+    pub now: bool,
+    /// When they played it, in seconds since 1970 (0 while playing).
+    pub at: i64,
+    /// Why nothing could be read for them (a name Last.fm doesn't know).
+    pub error: Option<String>,
+}
+
+/// Your play count for each song, by [`crate::exportify::match_key`], read
+/// from your Last.fm top songs. Used to sort a playlist by your plays.
+static PLAYS: std::sync::RwLock<Option<Arc<std::collections::HashMap<String, u32>>>> =
+    std::sync::RwLock::new(None);
+
+/// How many times you have played this song, by Last.fm, once your top songs
+/// have been read.
+pub fn plays_of(title: &str, artist: &str) -> Option<u32> {
+    let guard = PLAYS.read().unwrap_or_else(PoisonError::into_inner);
+    let first = artist.split([',', ';', '&']).next().unwrap_or("").trim();
+    guard
+        .as_ref()?
+        .get(&crate::exportify::match_key(title, first))
+        .copied()
+}
+
+/// Whether your play counts have been read yet.
+pub fn plays_loaded() -> bool {
+    PLAYS.read().unwrap_or_else(PoisonError::into_inner).is_some()
+}
+
 /// What the window can see of Last.fm.
 #[derive(Clone, Debug, Default)]
 pub struct View {
@@ -89,6 +128,11 @@ pub struct View {
     pub queued: usize,
     /// The page the person is asked to allow chanceify™ on, while waiting.
     pub auth_url: Option<String>,
+    /// Your Last.fm friends and the names you added, with what each is
+    /// playing; `None` until first read.
+    pub friends: Option<Vec<FriendNow>>,
+    /// Reading the friends right now.
+    pub friends_loading: bool,
 }
 
 #[derive(Default)]
@@ -114,6 +158,10 @@ enum Job {
     Love(Track, bool),
     Refresh,
     Ping,
+    /// What your Last.fm friends, and these extra names, are playing.
+    Friends(Vec<String>),
+    /// Your play counts, from your top songs.
+    TopTracks,
     Quit,
 }
 
@@ -218,6 +266,19 @@ impl LastFm {
     pub fn refresh(&self) {
         self.send(Job::Refresh);
     }
+
+    /// Reads what your friends (and the names you added) are playing.
+    pub fn friends(&self, extra: Vec<String>) {
+        self.send(Job::Friends(extra));
+    }
+
+    /// Reads your play counts for sorting by plays (once a run).
+    pub fn top_tracks(&self) {
+        static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !ASKED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            self.send(Job::TopTracks);
+        }
+    }
 }
 
 impl Drop for LastFm {
@@ -227,6 +288,64 @@ impl Drop for LastFm {
             let _ = sender.send(Job::Quit);
         }
     }
+}
+
+/// Sends a prepared request and reads Last.fm's answer.
+fn send(client: &reqwest::blocking::Client, url: &str, params: &[(String, String)]) -> Reply {
+    let response = match client.post(url).form(params).send() {
+        Ok(response) => response,
+        Err(error) => return Reply::Network(error.to_string()),
+    };
+    let status = response.status();
+    let body: serde_json::Value = match response.json() {
+        Ok(body) => body,
+        Err(error) => {
+            return Reply::Network(format!("unreadable answer ({status}): {error}"));
+        }
+    };
+    if let Some(code) = body.get("error").and_then(serde_json::Value::as_i64) {
+        let message = body
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("Last.fm said no")
+            .to_string();
+        return Reply::Api(code, message);
+    }
+    Reply::Ok(body)
+}
+
+/// A Last.fm list that may come back as one object instead of an array.
+fn list_of(value: Option<&serde_json::Value>) -> Vec<serde_json::Value> {
+    match value {
+        Some(serde_json::Value::Array(items)) => items.clone(),
+        Some(item @ serde_json::Value::Object(_)) => vec![item.clone()],
+        _ => Vec::new(),
+    }
+}
+
+/// A field that is either plain text or `{"#text": ...}`.
+fn text_of(value: Option<&serde_json::Value>) -> String {
+    match value {
+        Some(serde_json::Value::String(text)) => text.clone(),
+        Some(other) => other
+            .get("#text")
+            .or_else(|| other.get("name"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        None => String::new(),
+    }
+}
+
+/// The largest picture in a Last.fm `image` list, if any is not empty.
+fn image_of(item: &serde_json::Value) -> Option<String> {
+    item.get("image")
+        .and_then(serde_json::Value::as_array)?
+        .iter()
+        .rev()
+        .filter_map(|image| image.get("#text").and_then(serde_json::Value::as_str))
+        .find(|url| !url.is_empty())
+        .map(str::to_string)
 }
 
 // ---- signing -------------------------------------------------------------
@@ -452,7 +571,147 @@ impl Worker {
             Job::Love(track, love) => self.love(&track, love),
             Job::Refresh => self.refresh(),
             Job::Ping => self.ping(),
+            Job::Friends(extra) => self.read_friends(extra),
+            Job::TopTracks => self.read_top_tracks(),
         }
+    }
+
+    /// Your friends from Last.fm (when signed in) and the names you added,
+    /// each with the song they are on.
+    fn read_friends(&mut self, extra: Vec<String>) {
+        if !self.configured() {
+            return;
+        }
+        self.with_view(|view| view.friends_loading = true);
+        let mut names: Vec<(String, Option<String>)> = Vec::new();
+        if !self.user.is_empty()
+            && let Reply::Ok(body) = self.call(
+                "user.getFriends",
+                &[("user", self.user.clone()), ("limit", "50".to_string())],
+                false,
+            )
+        {
+            for friend in list_of(body.get("friends").and_then(|f| f.get("user"))) {
+                if let Some(name) = friend.get("name").and_then(serde_json::Value::as_str) {
+                    names.push((name.to_string(), image_of(&friend)));
+                }
+            }
+        }
+        for name in extra {
+            let name = name.trim().to_string();
+            if !name.is_empty() && !names.iter().any(|(have, _)| have.eq_ignore_ascii_case(&name)) {
+                names.push((name, None));
+            }
+        }
+        // Everyone at once (eight at a time), not one after another: with
+        // dozens of friends the sequential reads took most of a minute.
+        let Some(client) = self.client().cloned() else {
+            self.with_view(|view| view.friends_loading = false);
+            return;
+        };
+        let requests: Vec<(String, Option<String>, &'static str, Vec<(String, String)>)> = names
+            .into_iter()
+            .map(|(user, avatar)| {
+                let (url, params) = self.request(
+                    "user.getRecentTracks",
+                    &[("user", user.clone()), ("limit", "1".to_string())],
+                    false,
+                );
+                (user, avatar, url, params)
+            })
+            .collect();
+        let mut friends = Vec::new();
+        for batch in requests.chunks(8) {
+            let replies: Vec<Reply> = std::thread::scope(|scope| {
+                let handles: Vec<_> = batch
+                    .iter()
+                    .map(|(_, _, url, params)| {
+                        let client = &client;
+                        scope.spawn(move || send(client, url, params))
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|handle| handle.join().unwrap_or_else(|_| Reply::Network("lost".into())))
+                    .collect()
+            });
+            for ((user, avatar, _, _), reply) in batch.iter().zip(replies) {
+                let mut now = FriendNow { user: user.clone(), avatar: avatar.clone(), ..FriendNow::default() };
+                match reply {
+                    Reply::Ok(body) => {
+                        if let Some(track) = list_of(body.get("recenttracks").and_then(|r| r.get("track"))).first() {
+                            now.title = text_of(track.get("name"));
+                            now.artist = text_of(track.get("artist"));
+                            now.image = image_of(track);
+                            now.now = track
+                                .get("@attr")
+                                .and_then(|attr| attr.get("nowplaying"))
+                                .and_then(serde_json::Value::as_str)
+                                == Some("true");
+                            now.at = track
+                                .get("date")
+                                .and_then(|date| date.get("uts"))
+                                .and_then(serde_json::Value::as_str)
+                                .and_then(|text| text.parse().ok())
+                                .unwrap_or(0);
+                        }
+                    }
+                    Reply::Api(_, message) | Reply::Network(message) => now.error = Some(message),
+                }
+                friends.push(now);
+            }
+        }
+        // Playing now first, then the most recent.
+        friends.sort_by_key(|friend| (!friend.now, std::cmp::Reverse(friend.at)));
+        self.with_view(|view| {
+            view.friends = Some(friends);
+            view.friends_loading = false;
+        });
+    }
+
+    /// Your top songs of all time (up to 3000), as play counts by song.
+    fn read_top_tracks(&mut self) {
+        if !self.configured() || self.user.is_empty() {
+            return;
+        }
+        let mut plays = std::collections::HashMap::new();
+        for page in 1..=3u32 {
+            let Reply::Ok(body) = self.call(
+                "user.getTopTracks",
+                &[
+                    ("user", self.user.clone()),
+                    ("period", "overall".to_string()),
+                    ("limit", "1000".to_string()),
+                    ("page", page.to_string()),
+                ],
+                false,
+            ) else {
+                break;
+            };
+            let tracks = list_of(body.get("toptracks").and_then(|t| t.get("track")));
+            if tracks.is_empty() {
+                break;
+            }
+            for track in &tracks {
+                let title = text_of(track.get("name"));
+                let artist = track
+                    .get("artist")
+                    .and_then(|artist| artist.get("name"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                let count = track
+                    .get("playcount")
+                    .and_then(|count| count.as_str().and_then(|text| text.parse().ok()).or_else(|| count.as_u64().map(|n| n as u32)))
+                    .unwrap_or(0u32);
+                let key = crate::exportify::match_key(&title, artist);
+                let entry = plays.entry(key).or_insert(0);
+                *entry = (*entry).max(count);
+            }
+            if tracks.len() < 1000 {
+                break;
+            }
+        }
+        *PLAYS.write().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(plays));
     }
 
     fn client(&mut self) -> Option<&reqwest::blocking::Client> {
@@ -466,8 +725,8 @@ impl Worker {
         self.http.as_ref()
     }
 
-    /// Sends one signed request.
-    fn call(&mut self, method: &str, extra: &[(&str, String)], signed_in: bool) -> Reply {
+    /// The address and form for one request, signed when not proxied.
+    fn request(&self, method: &str, extra: &[(&str, String)], signed_in: bool) -> (&'static str, Vec<(String, String)>) {
         let proxied = self.key == VIA_PROXY && !PROXY_URL.is_empty();
         let mut params: Vec<(String, String)> = vec![("method".into(), method.to_string())];
         if !proxied {
@@ -484,30 +743,16 @@ impl Worker {
             params.push(("api_sig".into(), api_sig));
         }
         params.push(("format".into(), "json".into()));
-        let url = if proxied { PROXY_URL } else { API_URL };
+        (if proxied { PROXY_URL } else { API_URL }, params)
+    }
+
+    /// Sends one signed request.
+    fn call(&mut self, method: &str, extra: &[(&str, String)], signed_in: bool) -> Reply {
+        let (url, params) = self.request(method, extra, signed_in);
         let Some(client) = self.client() else {
             return Reply::Network("could not set up the connection".into());
         };
-        let response = match client.post(url).form(&params).send() {
-            Ok(response) => response,
-            Err(error) => return Reply::Network(error.to_string()),
-        };
-        let status = response.status();
-        let body: serde_json::Value = match response.json() {
-            Ok(body) => body,
-            Err(error) => {
-                return Reply::Network(format!("unreadable answer ({status}): {error}"));
-            }
-        };
-        if let Some(code) = body.get("error").and_then(serde_json::Value::as_i64) {
-            let message = body
-                .get("message")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("Last.fm said no")
-                .to_string();
-            return Reply::Api(code, message);
-        }
-        Reply::Ok(body)
+        send(client, url, &params)
     }
 
     /// The session has stopped working: sign out and say so.

@@ -63,17 +63,7 @@ impl History {
             return;
         }
         self.dirty = false;
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        match serde_json::to_string(&self.plays) {
-            Ok(text) => {
-                if let Err(error) = std::fs::write(path, text) {
-                    log::warn!("could not write the play history: {error}");
-                }
-            }
-            Err(error) => log::warn!("could not write the play history: {error}"),
-        }
+        crate::util::save_json_in_background(self.plays.clone(), path.to_path_buf());
     }
 
     /// Writes down that `track` was played at `at`, newest first.

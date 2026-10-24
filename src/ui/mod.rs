@@ -14,6 +14,7 @@ pub mod login;
 mod lyrics;
 mod mini;
 pub mod player_bar;
+mod prerelease;
 pub mod queue;
 pub mod radio;
 pub mod search;
@@ -109,6 +110,17 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         window_resize(ui);
         return;
     }
+    // The app-wide font, handed to egui when it changes.
+    {
+        let index = player_bar::ui_font_in_use(app, ctx);
+        let wanted = crate::system_fonts::list().get(index).map(|font| font.name.clone()).unwrap_or_default();
+        let id = Id::new("ui-font-applied");
+        if ctx.data(|data| data.get_temp::<String>(id)).as_deref() != Some(wanted.as_str())
+            && player_bar::apply_ui_font(ctx, index)
+        {
+            ctx.data_mut(|data| data.insert_temp(id, wanted));
+        }
+    }
     // The mini player is a window of its own (see `mini::window`), so the
     // main window is never the mini player.
     app.mini_active = false;
@@ -141,6 +153,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         }
         lyrics::fullscreen(app, ui);
     } else {
+        // The swirl behind everything; the side panels are see-through over it.
+        if player_bar::swirl_behind_panels(app) {
+            let screen = ctx.content_rect();
+            player_bar::swirl_fill(app, ui, screen, screen);
+        }
         if app.settings.sidebar_visible {
             sidebar::show(app, ui);
         }
@@ -167,6 +184,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             ctx.request_repaint();
         }
         central(app, ui);
+        no_lyrics_marker(app, ctx);
         keep_room_for_panels(app, ctx);
     }
     devices::popup(app, ctx);
@@ -181,6 +199,48 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     tour::show(app, ctx);
     window_controls(ui, &app.palette, app.locale);
     window_resize(ui);
+}
+
+/// While the side lyrics step aside for a song with no words, a small
+/// crossed-out microphone stands where they were, so it is plain why they
+/// are gone. Clicking it (or the lyrics button) turns the panel off.
+fn no_lyrics_marker(app: &mut App, ctx: &Context) {
+    if !app.lyrics_panel_auto_off || app.show_lyrics_panel {
+        return;
+    }
+    let screen = ctx.content_rect();
+    let size = 36.0;
+    let pos = egui::pos2(
+        screen.right() - size - 14.0,
+        screen.bottom() - theme::PLAYER_BAR_HEIGHT - size - 18.0,
+    );
+    let palette = app.palette;
+    egui::Area::new(Id::new("no-lyrics-marker"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(pos)
+        .show(ctx, |ui| {
+            let (rect, response) = ui.allocate_exact_size(vec2(size, size), egui::Sense::click());
+            let fill = if response.hovered() { palette.surface_hover } else { palette.overlay };
+            ui.painter().rect_filled(rect, egui::CornerRadius::same(theme::CONTROL_RADIUS), fill);
+            ui.painter().rect_stroke(
+                rect,
+                egui::CornerRadius::same(theme::CONTROL_RADIUS),
+                egui::Stroke::new(1.0, palette.outline),
+                egui::StrokeKind::Inside,
+            );
+            theme::paint_icon(ui, Icon::Mic, rect, 18.0, palette.secondary);
+            let slash = rect.shrink(9.0);
+            ui.painter().line_segment(
+                [slash.left_top(), slash.right_bottom()],
+                egui::Stroke::new(2.0, palette.secondary),
+            );
+            let response = response
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text("Lyrics are hidden: this song has none. They come back for the next song that has some. Click to turn the lyrics panel off.");
+            if response.clicked() {
+                app.actions.push(Action::ToggleLyricsPanel);
+            }
+        });
 }
 
 /// The main window's narrowest width with these panels open: their least
@@ -384,8 +444,16 @@ fn header_art(app: &App) -> Option<String> {
 fn central(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let tint = page_tint(app);
+    // With the swirl behind everything, the page lets it through too,
+    // unless the page shows its own cover background.
+    let backdrop_page = app.settings.page_backdrop && matches!(app.page(), Page::Playlist(_) | Page::Album(_));
+    let page_fill = if player_bar::swirl_behind_panels(app) && !backdrop_page {
+        palette.window.gamma_multiply(0.55)
+    } else {
+        palette.window
+    };
     egui::CentralPanel::default()
-        .frame(Frame::new().fill(palette.window))
+        .frame(Frame::new().fill(page_fill))
         .show(ui, |ui| {
             let rect = ui.max_rect();
             if !app.is_connected() {
@@ -394,7 +462,7 @@ fn central(app: &mut App, ui: &mut egui::Ui) {
                 ui.vertical_centered(|ui| {
                     theme::spinner(ui, 22.0, palette.accent);
                     ui.add_space(10.0);
-                    theme::text(ui, "Connecting to Spotify…", theme::medium(15.0), palette.secondary);
+                    theme::text(ui, "Connecting to Spotify…", theme::medium(theme::BODY_TEXT), palette.secondary);
                 });
                 return;
             }
@@ -508,6 +576,14 @@ fn central(app: &mut App, ui: &mut egui::Ui) {
                     .max_rect(bar_rect)
                     .layout(egui::Layout::top_down(egui::Align::Min)),
             );
+            // The top bar's strip shows the swirl too, over the page that
+            // scrolls under it, lined up with the swirl behind the panels.
+            if player_bar::swirl_behind_panels(app) {
+                let screen = ui.ctx().content_rect();
+                ui.painter().rect_filled(bar_rect, 0.0, palette.window);
+                player_bar::swirl_fill(app, ui, screen, bar_rect);
+                ui.painter().rect_filled(bar_rect, 0.0, palette.window.gamma_multiply(0.35));
+            }
             topbar::show(app, &mut bar);
         });
 }
@@ -778,8 +854,8 @@ fn guest_banner(app: &mut App, ctx: &egui::Context) {
                 .inner_margin(Margin::symmetric(12, 6))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        theme::text(ui, "Not signed in to Spotify", theme::regular(12.5), palette.secondary);
-                        if theme::link(ui, "Sign in", theme::medium(12.5), palette.accent).clicked() {
+                        theme::text(ui, "Not signed in to Spotify", theme::regular(theme::SMALL_TEXT), palette.secondary);
+                        if theme::link(ui, "Sign in", theme::medium(theme::SMALL_TEXT), palette.accent).clicked() {
                             sign_in = true;
                         }
                     });
@@ -820,7 +896,7 @@ fn hint_banner(app: &mut App, ctx: &egui::Context) {
                 .corner_radius(CornerRadius::same(theme::RADIUS))
                 .inner_margin(Margin::symmetric(14, 8))
                 .show(ui, |ui| {
-                    theme::text(ui, &label, theme::medium(13.5), palette.text);
+                    theme::text(ui, &label, theme::medium(theme::BODY_TEXT), palette.text);
                 });
         });
 }
@@ -853,7 +929,7 @@ fn undo_bar(app: &mut App, ctx: &egui::Context, bottom_offset: f32) {
                         } else {
                             format!("Removed {count} songs")
                         };
-                        theme::text(ui, &text, theme::medium(13.5), palette.text);
+                        theme::text(ui, &text, theme::medium(theme::BODY_TEXT), palette.text);
                         if theme::pill_button(ui, &palette, "Undo", true).clicked() {
                             clicked = true;
                         }
@@ -911,7 +987,7 @@ fn toasts(app: &mut App, ctx: &egui::Context, bottom_offset: f32) {
                             // long messages on every word.
                             let galley = ui.painter().layout(
                                 toast.message.clone(),
-                                theme::medium(13.5),
+                                theme::medium(theme::BODY_TEXT),
                                 palette.text,
                                 280.0,
                             );

@@ -81,7 +81,7 @@ your app is `target\release\chanceify.exe`. copy it into a folder of its own, li
 ---
 
 <p align="center">
-  built with love by <a href="https://github.com/madlygeeked">chance</a> <img src="https://madlygeeked.github.io/assets/favicon.png" alt="" width="20"><br>
+  built with love by <a href="https://github.com/madlygeeked">chance</a> <img src="https://madlygeeked.github.io/assets/favicon.png?v=3" alt="" width="20"><br>
   inspired by <a href="https://www.spotify.com">Spotify</a>, <a href="https://spotifast.rocks/">Spotifast</a> and <a href="https://spicetify.app">Spicetify</a><br>
   licensed AGPL-3.0, see <a href="LICENSE">LICENSE</a> and <a href="NOTICE.md">NOTICE</a>
 </p>

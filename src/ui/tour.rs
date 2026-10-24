@@ -189,12 +189,12 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 })
                 .show(ui, |ui| {
                     ui.set_width(card_width);
-                    theme::text(ui, &step.title, theme::bold(18.0), palette.text);
+                    theme::text(ui, &step.title, theme::bold(theme::SECTION_TEXT), palette.text);
                     ui.add_space(6.0);
                     ui.add(
                         egui::Label::new(
                             egui::RichText::new(&step.text)
-                                .font(theme::regular(13.5))
+                                .font(theme::regular(theme::BODY_TEXT))
                                 .color(palette.secondary),
                         )
                         .wrap(),
@@ -204,7 +204,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         theme::text(
                             ui,
                             &format!("{} / {}", step_index + 1, total),
-                            theme::regular(12.0),
+                            theme::regular(theme::SMALL_TEXT),
                             palette.dim,
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -265,7 +265,7 @@ fn demo_right_click(
     let t = (now - started) as f32;
     let screen = ctx.content_rect();
     let row_h = 26.0;
-    let font = theme::regular(13.0);
+    let font = theme::regular(theme::BODY_TEXT);
     // About 7.3 pixels a letter at this size; close enough for a pretend menu.
     let width = items
         .iter()

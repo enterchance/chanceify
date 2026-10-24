@@ -199,6 +199,8 @@ pub enum QueueTab {
     #[default]
     Queue,
     Recents,
+    /// What your Last.fm friends are playing.
+    Friends,
 }
 
 impl QueueTab {
@@ -206,6 +208,7 @@ impl QueueTab {
         match self {
             Self::Queue => "queue",
             Self::Recents => "recents",
+            Self::Friends => "friends",
         }
     }
 
@@ -213,6 +216,7 @@ impl QueueTab {
         match text {
             "queue" => Some(Self::Queue),
             "recents" => Some(Self::Recents),
+            "friends" => Some(Self::Friends),
             // Backward compatibility with the old tab name.
             "recently_played" => Some(Self::Recents),
             _ => None,
@@ -603,6 +607,12 @@ pub struct HomeData {
     pub top_songs_loading: bool,
     pub top_songs_complete: bool,
     pub recommendations: Loadable<Vec<Track>>,
+    /// The seeds (artist and title, then the songs' links) the
+    /// recommendations were last asked for with, to ask again with.
+    pub recs_seeds: (Vec<(String, String)>, Vec<String>),
+    /// When to ask for the recommendations again, after an answer that
+    /// failed or came back cut short.
+    pub recs_retry_at: Option<Instant>,
     pub discover: HashMap<String, Loadable<Vec<Playlist>>>,
     pub discover_pending: HashMap<String, Loadable<Vec<Playlist>>>,
     /// Saved podcasts with their newest episodes, in library order, for the
@@ -753,6 +763,9 @@ pub struct PlaylistCachePending {
 pub struct AlbumPage {
     pub generation: u64,
     pub album: Loadable<Album>,
+    /// Set when the page came from an upcoming album's countdown link; the
+    /// album then draws as its native upcoming page instead.
+    pub prerelease: Option<crate::prerelease::Prerelease>,
     pub tracks: PagedList<Track>,
 }
 
@@ -973,6 +986,11 @@ pub enum SortColumn {
     /// The song's genres (from MusicBrainz), by the first one's name. A
     /// song with none sorts last whichever way this runs.
     Genre,
+    /// How many times you have played the song, by Last.fm. Sort only: it
+    /// has no column. A song you never played sorts last.
+    Plays,
+    /// How popular the song is on Spotify. Sort only: it has no column.
+    Popularity,
 }
 
 /// Playback and action context for a track row.
@@ -1067,6 +1085,8 @@ pub enum Dialog {
     PremiumNeeded,
     /// Introduce personal Spotify apps to eligible listeners once.
     PersonalAppIntro,
+    /// Offers, once, to start chanceify with the computer.
+    StartWithComputer,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1208,9 +1228,20 @@ pub enum Action {
         label: String,
     },
     ToggleSaved(String),
+    /// Every song on an artist's albums and singles, queued in release order.
+    QueueArtistSongs {
+        id: String,
+        name: String,
+    },
     /// Queue several songs in order and show one notification.
     QueueMany {
         songs: Vec<(String, String)>,
+    },
+    /// Move several rows of "Playing next" together, keeping their order, to
+    /// before the row at `to` (as numbered before any of them moved).
+    MoveManyInQueue {
+        froms: Vec<usize>,
+        to: usize,
     },
     /// Move a row within the manually queued "Playing next" section, from a
     /// drag dropped back on the queue. Only applied while the local player
@@ -1225,6 +1256,13 @@ pub enum Action {
     InsertInQueue {
         items: Vec<PlayableItem>,
         position: usize,
+    },
+    /// Take rows out of the manually queued "Playing next" section, each
+    /// named by its index in the queue and the song it holds there. Only
+    /// applied while the local player is the active target; see
+    /// [`crate::app::App::queue_locally_reorderable`].
+    RemoveFromQueue {
+        rows: Vec<(usize, String)>,
     },
     /// Set saved state for several songs explicitly.
     SetSavedMany {
@@ -1251,6 +1289,10 @@ pub enum Action {
     RemoveFromPlaylist {
         playlist_id: String,
         uris: Vec<String>,
+        /// The picked rows' server positions, one for each of `uris`, when
+        /// the view knows them; empty otherwise. With them, a song the list
+        /// holds more than once loses only the picked copies.
+        positions: Vec<u32>,
     },
     MoveInPlaylist {
         playlist_id: String,
@@ -1283,6 +1325,12 @@ pub enum Action {
     SaveQueueAsPlaylist,
     /// Save a radio page's songs to a new playlist, by the seed's URI.
     SaveRadio(String),
+    /// Hide a song in one of Spotify's playlists, or show it again.
+    SetHiddenInPlaylist {
+        playlist_uri: String,
+        track_uri: String,
+        hidden: bool,
+    },
     RefreshQueue,
     CopyLink(String),
     /// Copy a line about the playing song, with its Spotify link, to paste in Discord.
@@ -1454,6 +1502,9 @@ pub enum Action {
     MoveViewsDisc(Option<[f32; 2]>),
     /// Queues the song under the pointer; `true` puts it at the top of the queue.
     QueueHovered(bool),
+    /// Takes the queued song under the pointer (or every picked one, when it
+    /// is one of them) out of the queue.
+    RemoveHoveredFromQueue,
     /// Likes or unlikes the playing song.
     LikePlaying,
     /// -1 smaller, 1 bigger, 0 back to 100%.
@@ -1578,6 +1629,18 @@ pub enum Action {
     ScanMusic,
     /// Look the music files up on Spotify, in the background.
     MatchSpotify,
+    /// Make a local playlist (Local songs page) with this name and these
+    /// song files in it.
+    CreateLocalPlaylist { name: String, paths: Vec<String> },
+    /// Give the local playlist at this place a new name.
+    RenameLocalPlaylist(usize, String),
+    /// Delete the local playlist at this place.
+    DeleteLocalPlaylist(usize),
+    /// Add song files to the end of a local playlist (ones already in it
+    /// are left where they are).
+    AddToLocalPlaylist { playlist: usize, paths: Vec<String> },
+    /// Take song files out of a local playlist.
+    RemoveFromLocalPlaylist { playlist: usize, paths: Vec<String> },
     /// Last.fm: open the browser to allow chanceify™, then wait for it.
     LastfmSignIn,
     LastfmCancel,
@@ -1680,8 +1743,18 @@ pub enum Action {
     ApplyCustomEq(usize),
     RemoveCustomEq(usize),
     ToggleEqHideDefaults,
+    /// Folds one of the equalizer's preset headings shut, or opens it, by
+    /// its name in `crate::eq::PRESET_GROUPS`.
+    ToggleEqGroup(&'static str),
+    /// Moves one of your curves from one place in the list to another.
+    MoveCustomEq(usize, usize),
     ExportEq,
     ImportEq,
+    /// Copies a share code for one of your curves (`Some`), or for the curve
+    /// in use (`None`).
+    CopyEqCode(Option<usize>),
+    /// Adds the curves in pasted share codes, and uses the last one.
+    ImportEqCode(String),
     /// The balance, -1 all left to 1 all right.
     SetBalance(f32),
     ToggleMono,

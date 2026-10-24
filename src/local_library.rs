@@ -462,12 +462,18 @@ impl Scan {
         let file = library_file(index);
         std::thread::spawn(move || {
             std::fs::create_dir_all(&root).ok();
-            let mut files = find_files(&root);
-            for folder in &extra {
-                for found in find_files(folder) {
-                    if !files.contains(&found) {
-                        files.push(found);
-                    }
+            // Each file once, even when two folders in the list overlap or
+            // name the same place differently (case or separators on
+            // Windows), so no song is counted twice.
+            let mut files: Vec<PathBuf> = Vec::new();
+            let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+            for found in std::iter::once(&root)
+                .chain(extra.iter())
+                .flat_map(|folder| find_files(folder))
+            {
+                let key = std::fs::canonicalize(&found).unwrap_or_else(|_| found.clone());
+                if seen.insert(key) {
+                    files.push(found);
                 }
             }
             shared.lock().view.total = files.len();
@@ -512,6 +518,175 @@ impl Scan {
             guard.view.current.clear();
             guard.finished = Some(library);
         });
+    }
+}
+
+// ---- the pictures in the files -------------------------------------------
+
+/// Pictures bigger than this are not kept (the artwork loader refuses them).
+const MAX_COVER_BYTES: usize = 8 * 1024 * 1024;
+
+/// `index/local_covers_none.json`: the files known to hold no picture, so
+/// they are not opened again each time the app starts.
+fn no_cover_file(index: &Path) -> PathBuf {
+    index.join("local_covers_none.json")
+}
+
+/// What a file's picture is known by: its path, size and date, so a file
+/// that is changed (a picture added to it) is looked at again.
+fn cover_key(path: &str, size: u64, modified: u64) -> String {
+    use sha1::Digest;
+    let digest = sha1::Sha1::digest(format!("{path}\0{size}\0{modified}").as_bytes());
+    let mut key = String::with_capacity(16);
+    for byte in digest.iter().take(8) {
+        use std::fmt::Write;
+        let _ = write!(key, "{byte:02x}");
+    }
+    key
+}
+
+/// The address a file's picture is shown under. The artwork loader holds
+/// the bytes (see `ArtLoader::seed`) and keeps them in its disk cache, so
+/// this is never fetched; the `.invalid` name makes sure of it.
+fn cover_address(key: &str) -> String {
+    format!("https://local.chanceify.invalid/song-cover/{key}")
+}
+
+#[derive(Default)]
+struct CoversShared {
+    /// By key: the address of the picture, or `None` for a file with none.
+    known: std::collections::HashMap<String, Option<String>>,
+    /// Files waiting to be looked at; the newest asked for goes first, so
+    /// the rows on screen fill in before the ones scrolled past.
+    queue: Vec<(String, PathBuf)>,
+    queued: std::collections::HashSet<String>,
+    running: bool,
+    /// Keys of files with no picture, as saved in [`no_cover_file`].
+    none: Option<std::collections::HashSet<String>>,
+}
+
+/// The pictures inside the song files, read in the background the first
+/// time a row wants one, and handed to the artwork loader so they are drawn
+/// like any other cover. The window never waits for a file.
+#[derive(Clone, Default)]
+pub struct Covers {
+    shared: Arc<Mutex<CoversShared>>,
+}
+
+impl Covers {
+    fn lock(&self) -> std::sync::MutexGuard<'_, CoversShared> {
+        self.shared.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// The address of the picture in the file at `path`: `Some(Some(_))`
+    /// once it is ready, `Some(None)` when the file has none, and `None`
+    /// while it is still being looked at (it is asked for here).
+    pub fn lookup(
+        &self,
+        ctx: &egui::Context,
+        art: &crate::images::ArtLoader,
+        index: &Path,
+        path: &str,
+        size: u64,
+        modified: u64,
+    ) -> Option<Option<String>> {
+        let key = cover_key(path, size, modified);
+        let mut shared = self.lock();
+        if let Some(known) = shared.known.get(&key) {
+            return Some(known.clone());
+        }
+        if shared.queued.insert(key.clone()) {
+            shared.queue.push((key, PathBuf::from(path)));
+        }
+        if !shared.running {
+            shared.running = true;
+            drop(shared);
+            self.start(ctx.clone(), art.clone(), index.to_path_buf());
+        }
+        None
+    }
+
+    fn start(&self, ctx: egui::Context, art: crate::images::ArtLoader, index: PathBuf) {
+        let covers = self.clone();
+        let spawned = std::thread::Builder::new()
+            .name("local-covers".into())
+            .spawn(move || covers.work(&ctx, &art, &index));
+        if spawned.is_err() {
+            self.lock().running = false;
+        }
+    }
+
+    fn work(&self, ctx: &egui::Context, art: &crate::images::ArtLoader, index: &Path) {
+        let file = no_cover_file(index);
+        if self.lock().none.is_none() {
+            let none: std::collections::HashSet<String> = std::fs::read(&file)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .unwrap_or_default();
+            self.lock().none = Some(none);
+        }
+        let mut found_none = false;
+        loop {
+            let job = {
+                let mut shared = self.lock();
+                match shared.queue.pop() {
+                    Some(job) => job,
+                    None => {
+                        shared.running = false;
+                        break;
+                    }
+                }
+            };
+            let (key, path) = job;
+            let known_none = self
+                .lock()
+                .none
+                .as_ref()
+                .is_some_and(|none| none.contains(&key));
+            let address = cover_address(&key);
+            let result = if known_none {
+                None
+            } else if art.cached_file(&address).is_some() {
+                // Read on an earlier day: the loader has it on disk.
+                Some(address)
+            } else {
+                match crate::file_deck::read_cover(&path)
+                    .filter(|bytes| bytes.len() <= MAX_COVER_BYTES)
+                {
+                    Some(bytes) => {
+                        art.seed(&address, bytes);
+                        Some(address)
+                    }
+                    None => {
+                        found_none = true;
+                        if let Some(none) = self.lock().none.as_mut() {
+                            none.insert(key.clone());
+                        }
+                        None
+                    }
+                }
+            };
+            {
+                let mut shared = self.lock();
+                shared.queued.remove(&key);
+                shared.known.insert(key, result);
+            }
+            ctx.request_repaint();
+        }
+        if found_none {
+            let none: Vec<String> = self
+                .lock()
+                .none
+                .as_ref()
+                .map(|none| none.iter().cloned().collect())
+                .unwrap_or_default();
+            if let Ok(bytes) = serde_json::to_vec(&none) {
+                let temporary = file.with_extension("json.tmp");
+                if std::fs::write(&temporary, bytes).is_ok() {
+                    std::fs::rename(&temporary, &file).ok();
+                }
+            }
+        }
     }
 }
 

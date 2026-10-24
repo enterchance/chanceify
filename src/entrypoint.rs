@@ -1302,7 +1302,7 @@ impl Drop for Shell {
 fn app_icon() -> egui::IconData {
     // The Vinyl icon, which is also the default choice in Settings; the
     // chosen one replaces it on the first frame.
-    chanceify::app_icons::icon_data(3)
+    chanceify::app_icons::icon_data(1)
 }
 
 #[cfg(test)]

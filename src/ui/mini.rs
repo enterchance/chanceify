@@ -657,7 +657,7 @@ pub(super) fn volume_row(app: &mut App, ui: &mut egui::Ui, width: f32, now: Opti
         pos2(row.right(), row.center().y),
         egui::Align2::RIGHT_CENTER,
         format!("{shown}%"),
-        theme::regular(12.0),
+        theme::regular(theme::SMALL_TEXT),
         palette.secondary,
     );
     let width = (width - 38.0).max(30.0);

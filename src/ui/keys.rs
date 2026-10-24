@@ -132,6 +132,7 @@ pub const BINDABLE: &[Bindable] = &[
     Bindable { id: "closeextras", label: "Close extra window", default: Key::End, action: || Action::CloseExtraWindows },
     Bindable { id: "queuehover", label: "Queue the song under the pointer", default: UNSET, action: || Action::QueueHovered(false) },
     Bindable { id: "queuehovertop", label: "Queue the song under the pointer, to play next", default: UNSET, action: || Action::QueueHovered(true) },
+    Bindable { id: "removehover", label: "Remove the queued song under the pointer", default: UNSET, action: || Action::RemoveHoveredFromQueue },
     Bindable { id: "likehover", label: "Like the song under the pointer", default: UNSET, action: || Action::LikeHovered },
     Bindable { id: "likeplaying", label: "Like the playing song", default: UNSET, action: || Action::LikePlaying },
     Bindable { id: "tap", label: "Bass jump", default: UNSET, action: || Action::TapTempo },
@@ -330,6 +331,7 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
     if ctx.data(|data| data.get_temp::<u64>(pass_id)) != Some(pass) {
         app.hover_snapshot = app.hovered_track.take();
         app.hover_playable_snapshot = app.hovered_playable.take();
+        app.hover_queue_snapshot = app.hovered_queue_row.take();
         ctx.data_mut(|data| data.insert_temp(pass_id, pass));
     }
     if capture_rebind(app, ctx) {

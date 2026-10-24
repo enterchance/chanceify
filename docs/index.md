@@ -6,7 +6,7 @@ tagline: music reimagined
 
 a spotify player for windows.  
 needs spotify premium to stream.  
-local library works great with no premium.
+local library works without it.
 
 ## get it
 
@@ -33,8 +33,6 @@ local library works great with no premium.
 
 ## setup
 
-**getting rate limited?** (optional) get more api requests with your own spotify app.
-
 1. open the [spotify developer dashboard](https://developer.spotify.com/dashboard) and sign in.
 2. create an app. any name.
 3. redirect uri: `http://127.0.0.1:8989/login`
@@ -45,7 +43,7 @@ local library works great with no premium.
 
 ## questions
 
-**do i need premium?** only to stream spotify (blame spotify). your local library works great without it.
+**do i need premium?** only to stream, blame spotify.
 
 **where is everything saved?** in the folder beside `chanceify.exe`.
 

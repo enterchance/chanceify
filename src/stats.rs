@@ -28,6 +28,10 @@ pub struct Play {
     pub artist_id: String,
     /// The song's length, so hours listened can be added up.
     pub ms: u32,
+    /// The song's album, when it was known, so a new release can tell it
+    /// has been heard.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub album_id: String,
 }
 
 #[derive(Default)]
@@ -83,6 +87,117 @@ impl Range {
             Self::Ever => None,
         }
     }
+}
+
+/// A stretch of the reader's days, as day numbers counted from 1970-01-01
+/// in the reader's time: `first` is in it, `end` is the first day after it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Days {
+    pub first: i64,
+    pub end: i64,
+}
+
+impl Days {
+    /// The days `range` looks back over, up to and including today.
+    pub fn last(range: Range, now: i64, offset: i64) -> Self {
+        let today = (now + offset).div_euclid(DAY);
+        Self {
+            first: range.days().map_or(i64::MIN, |days| today - days + 1),
+            end: today + 1,
+        }
+    }
+
+    /// Every day of one calendar month.
+    pub fn month(month: Month) -> Self {
+        let next = month.next();
+        Self {
+            first: days_from_civil(month.year, month.month),
+            end: days_from_civil(next.year, next.month),
+        }
+    }
+
+    fn holds(self, t: i64, offset: i64) -> bool {
+        let day = (t + offset).div_euclid(DAY);
+        self.first <= day && day < self.end
+    }
+}
+
+/// A calendar month, January being 1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Month {
+    pub year: i32,
+    pub month: u8,
+}
+
+const MONTH_NAMES: [&str; 12] = [
+    "January", "February", "March", "April", "May", "June", "July", "August", "September",
+    "October", "November", "December",
+];
+
+impl Month {
+    /// From the saved number, year * 100 + month (202610); 0 is none.
+    pub fn from_saved(value: u32) -> Option<Self> {
+        let month = (value % 100) as u8;
+        (value != 0 && (1..=12).contains(&month)).then(|| Self {
+            year: (value / 100) as i32,
+            month,
+        })
+    }
+
+    pub fn saved(self) -> u32 {
+        self.year.max(0) as u32 * 100 + u32::from(self.month)
+    }
+
+    /// "October 2026".
+    pub fn label(self) -> String {
+        let index = usize::from(self.month.clamp(1, 12) - 1);
+        format!("{} {}", MONTH_NAMES[index], self.year)
+    }
+
+    fn next(self) -> Self {
+        if self.month >= 12 {
+            Self {
+                year: self.year + 1,
+                month: 1,
+            }
+        } else {
+            Self {
+                year: self.year,
+                month: self.month + 1,
+            }
+        }
+    }
+
+    fn of_day(day: i64) -> Self {
+        let (year, month) = civil_from_days(day);
+        Self { year, month }
+    }
+}
+
+/// The year and month of a day number (days since 1970-01-01), after
+/// Howard Hinnant's `civil_from_days`.
+fn civil_from_days(day: i64) -> (i32, u8) {
+    let z = day + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    (year as i32, month as u8)
+}
+
+/// The day number of the first of a month, after `days_from_civil`.
+fn days_from_civil(year: i32, month: u8) -> i64 {
+    let month = i64::from(month);
+    let year = i64::from(year) - i64::from(month <= 2);
+    let era = year.div_euclid(400);
+    let yoe = year.rem_euclid(400);
+    let shifted = if month > 2 { month - 3 } else { month + 9 };
+    let doy = (153 * shifted + 2) / 5;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -154,28 +269,54 @@ impl Stats {
             return;
         }
         self.dirty = false;
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let Ok(text) = serde_json::to_string(&self.plays) else {
-            return;
-        };
-        // Written beside, then moved into place, so a power cut never leaves
-        // half a file.
-        let scratch = path.with_extension("json.tmp");
-        if std::fs::write(&scratch, text).is_ok() && std::fs::rename(&scratch, path).is_err() {
-            log::warn!("could not write the listening statistics");
-        }
+        crate::util::save_json_in_background(self.plays.clone(), path.to_path_buf());
     }
 
     /// The artists and the songs heard most within `range`, most first.
     pub fn ranking(&self, now: i64, offset: i64, range: Range) -> (Vec<Ranked>, Vec<Ranked>) {
-        let today = (now + offset).div_euclid(DAY);
+        self.ranking_in(offset, Days::last(range, now, offset))
+    }
+
+    /// How many songs were heard within `days`, and for how many minutes.
+    pub fn totals_in(&self, offset: i64, days: Days) -> (u32, u64) {
+        self.plays
+            .iter()
+            .filter(|play| days.holds(play.t, offset))
+            .fold((0, 0), |(plays, minutes), play| {
+                (plays + 1, minutes + u64::from(play.ms) / 60_000)
+            })
+    }
+
+    /// The months that have a play, the newest first.
+    pub fn months(&self, offset: i64) -> Vec<Month> {
+        let mut months: Vec<Month> = Vec::new();
+        for play in &self.plays {
+            let month = Month::of_day((play.t + offset).div_euclid(DAY));
+            if months.last() != Some(&month) && !months.contains(&month) {
+                months.push(month);
+            }
+        }
+        months.sort_by(|a, b| b.cmp(a));
+        months
+    }
+
+    /// The albums of the songs heard since `since` (seconds since 1970).
+    pub fn albums_heard_since(&self, since: i64) -> std::collections::HashSet<&str> {
+        self.plays
+            .iter()
+            .rev()
+            .take_while(|play| play.t >= since)
+            .filter(|play| !play.album_id.is_empty())
+            .map(|play| play.album_id.as_str())
+            .collect()
+    }
+
+    /// The artists and the songs heard most within `days`, most first.
+    pub fn ranking_in(&self, offset: i64, days: Days) -> (Vec<Ranked>, Vec<Ranked>) {
         let mut artists: HashMap<&str, Ranked> = HashMap::new();
         let mut songs: HashMap<String, Ranked> = HashMap::new();
         for play in &self.plays {
-            let age = today - (play.t + offset).div_euclid(DAY);
-            if age < 0 || range.days().is_some_and(|days| age >= days) {
+            if !days.holds(play.t, offset) {
                 continue;
             }
             if !play.artist.is_empty() {
@@ -279,7 +420,55 @@ mod tests {
             artist: artist.into(),
             artist_id: String::new(),
             ms: 180_000,
+            album_id: String::new(),
         }
+    }
+
+    #[test]
+    fn days_and_months_line_up() {
+        assert_eq!(days_from_civil(1970, 1), 0);
+        assert_eq!(civil_from_days(0), (1970, 1));
+        assert_eq!(civil_from_days(days_from_civil(2026, 10)), (2026, 10));
+        assert_eq!(civil_from_days(days_from_civil(2024, 3) - 1), (2024, 2));
+        let october = Month { year: 2026, month: 10 };
+        assert_eq!(Month::from_saved(october.saved()), Some(october));
+        assert_eq!(Month::from_saved(0), None);
+        assert_eq!(october.label(), "October 2026");
+        let december = Days::month(Month { year: 2025, month: 12 });
+        assert_eq!(december.end - december.first, 31);
+    }
+
+    #[test]
+    fn a_month_counts_only_its_own_plays() {
+        let october = days_from_civil(2026, 10) * DAY;
+        let mut stats = Stats::default();
+        stats.record(play(october - 3600, "a", "X"));
+        stats.record(play(october + 3600, "b", "Y"));
+        stats.record(play(october + 20 * DAY, "b", "Y"));
+        let days = Days::month(Month { year: 2026, month: 10 });
+        assert_eq!(stats.totals_in(0, days), (2, 6));
+        let (artists, _) = stats.ranking_in(0, days);
+        assert_eq!((artists[0].name.as_str(), artists.len()), ("Y", 1));
+        assert_eq!(
+            stats.months(0),
+            [Month { year: 2026, month: 10 }, Month { year: 2026, month: 9 }]
+        );
+        // Two hours west, the first play of October is still in September.
+        assert_eq!(stats.totals_in(-2 * 3600, days).0, 1);
+    }
+
+    #[test]
+    fn heard_albums_come_from_recent_plays() {
+        let mut stats = Stats::default();
+        let mut old = play(10, "a", "X");
+        old.album_id = "old".into();
+        let mut new = play(100, "b", "X");
+        new.album_id = "new".into();
+        stats.record(old);
+        stats.record(new);
+        stats.record(play(200, "c", "X"));
+        let heard = stats.albums_heard_since(50);
+        assert!(heard.contains("new") && !heard.contains("old"));
     }
 
     #[test]

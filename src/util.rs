@@ -394,8 +394,72 @@ pub(crate) fn replace_file(
     }
 }
 
+/// Words that mark a re-edit of a song: its slowed, sped up or reverb
+/// version, not another song.
+const VERSION_WORDS: [&str; 9] = [
+    "slowed",
+    "sped up",
+    "speed up",
+    "sped-up",
+    "reverb",
+    "nightcore",
+    "daycore",
+    "8d audio",
+    "slow ver",
+];
+
+fn names_a_version(text: &str) -> bool {
+    VERSION_WORDS.iter().any(|word| text.contains(word))
+}
+
+/// A song's title without a trailing version mark ("(Sped Up)", "[Slowed +
+/// Reverb]", "- Slowed"), in lower case, and whether it had one. A title that
+/// is only a version word is a song's own name and stays whole.
+pub fn split_version(title: &str) -> (String, bool) {
+    let mut base = title.trim().to_lowercase();
+    let mut version = false;
+    loop {
+        let trimmed = base.trim_end();
+        let closing = trimmed.chars().last().filter(|c| matches!(c, ')' | ']'));
+        let opening = closing.map(|c| if c == ')' { '(' } else { '[' });
+        let cut = if let (Some(_), Some(open)) = (closing, opening)
+            && let Some(at) = trimmed.rfind(open)
+            && names_a_version(&trimmed[at..])
+            && !trimmed[..at].trim().is_empty()
+        {
+            Some(at)
+        } else if let Some((left, right)) = trimmed.rsplit_once(" - ")
+            && names_a_version(right)
+            && !left.trim().is_empty()
+        {
+            Some(left.len())
+        } else {
+            None
+        };
+        match cut {
+            Some(at) => {
+                base = trimmed[..at].trim_end().to_string();
+                version = true;
+            }
+            None => return (base, version),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn version_marks_are_split_off_a_title() {
+        use super::split_version;
+        assert_eq!(split_version("Broken Angel Hardtekk - SLOWED"), ("broken angel hardtekk".into(), true));
+        assert_eq!(split_version("DEATHTEKK (SPED UP)"), ("deathtekk".into(), true));
+        assert_eq!(split_version("Song [Slowed + Reverb]"), ("song".into(), true));
+        assert_eq!(split_version("Song (Sped Up) - Slowed"), ("song".into(), true));
+        assert_eq!(split_version("Monster (Hardstyle)"), ("monster (hardstyle)".into(), false));
+        assert_eq!(split_version("Slowed Down"), ("slowed down".into(), false));
+        assert_eq!(split_version("Song - Remastered"), ("song - remastered".into(), false));
+    }
+
     use super::*;
 
     fn pixel(rgba: &[u8], size: usize, x: usize, y: usize) -> [u8; 4] {
@@ -629,4 +693,114 @@ pub fn memory_used_mb() -> Option<u64> {
     {
         None
     }
+}
+
+/// Writes `value` as JSON to `path` on a background thread, through a
+/// scratch file moved into place. The caller hands over a copy, so a
+/// large file never holds up a frame. One writer at a time, so two saves
+/// of the same file cannot collide on the scratch name; the newest copy is
+/// always the last to be written.
+pub(crate) fn save_json_in_background<T>(value: T, path: std::path::PathBuf)
+where
+    T: serde::Serialize + Send + 'static,
+{
+    static WRITER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let write = move || {
+        let Ok(text) = serde_json::to_string(&value) else {
+            return;
+        };
+        let _guard = WRITER.lock().unwrap_or_else(|lock| lock.into_inner());
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let scratch = path.with_extension("json.tmp");
+        if std::fs::write(&scratch, text).is_ok()
+            && replace_file(&scratch, &path).is_err()
+        {
+            log::warn!("could not write {}", path.display());
+        }
+    };
+    // Tests read the file straight back.
+    if cfg!(test) {
+        write();
+    } else {
+        std::thread::spawn(write);
+    }
+}
+
+/// Holds the computer awake while music plays on it, or lets it sleep
+/// again. Only the sleep the system takes on its own is blocked: the
+/// display still turns off, the screen still locks, and a sleep the person
+/// asks for still happens. Windows ties the hold to the calling thread, so
+/// this is always called from the interface thread.
+#[cfg(windows)]
+pub fn keep_system_awake(on: bool) {
+    use windows_sys::Win32::System::Power::{
+        ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState,
+    };
+    let state = if on {
+        ES_CONTINUOUS | ES_SYSTEM_REQUIRED
+    } else {
+        ES_CONTINUOUS
+    };
+    // SAFETY: a plain call with a flags value; no pointers are involved.
+    unsafe {
+        SetThreadExecutionState(state);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn keep_system_awake(_on: bool) {}
+
+/// Adds or removes the app's entry in the current user's startup list, so
+/// Windows starts it when the person signs in. Returns whether the list now
+/// holds what was asked for.
+#[cfg(windows)]
+pub fn set_start_with_computer(on: bool) -> bool {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::System::Registry::{
+        HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ, RegCloseKey, RegDeleteValueW,
+        RegOpenKeyExW, RegSetValueExW,
+    };
+    const NOT_FOUND: u32 = 2;
+    fn wide(text: &OsStr) -> Vec<u16> {
+        text.encode_wide().chain(Some(0)).collect()
+    }
+    let subkey = wide(OsStr::new("Software\\Microsoft\\Windows\\CurrentVersion\\Run"));
+    let name = wide(OsStr::new("Chanceify"));
+    let mut key: HKEY = std::ptr::null_mut();
+    // SAFETY: the strings are NUL-terminated and outlive the calls, and the
+    // key is closed before returning.
+    unsafe {
+        if RegOpenKeyExW(HKEY_CURRENT_USER, subkey.as_ptr(), 0, KEY_SET_VALUE, &mut key) != 0 {
+            return false;
+        }
+        let ok = if on {
+            match std::env::current_exe() {
+                Ok(exe) => {
+                    let command = wide(OsStr::new(&format!("\"{}\"", exe.display())));
+                    RegSetValueExW(
+                        key,
+                        name.as_ptr(),
+                        0,
+                        REG_SZ,
+                        command.as_ptr().cast(),
+                        (command.len() * 2) as u32,
+                    ) == 0
+                }
+                Err(_) => false,
+            }
+        } else {
+            let status = RegDeleteValueW(key, name.as_ptr());
+            status == 0 || status == NOT_FOUND
+        };
+        RegCloseKey(key);
+        ok
+    }
+}
+
+#[cfg(not(windows))]
+pub fn set_start_with_computer(_on: bool) -> bool {
+    false
 }

@@ -1,0 +1,54 @@
+name: Windows build check
+
+# Compiles chanceify on Windows for every push, so a version that does not
+# build is caught before it reaches the PC. Checks only (no exe made).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "assets/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "build.rs"
+      - ".github/workflows/check.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  CMAKE_GENERATOR: Ninja
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: check-windows
+      # The errors go into an annotation too, so they can be read without
+      # downloading the log.
+      - name: Check
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          cargo check --profile fast --features lights-feed 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath check.log
+          if ($LASTEXITCODE -ne 0) {
+            $lines = Get-Content check.log
+            $hits = $lines | Select-String -Pattern '^error' -Context 0,12 | ForEach-Object { $_.Context.PreContext + $_.Line + $_.Context.PostContext }
+            if (-not $hits) { $hits = $lines | Select-Object -Last 60 }
+            $msg = (($hits | Select-Object -First 150) -join "`n").Replace('%','%25').Replace("`r",'').Replace("`n",'%0A')
+            Write-Output "::error title=build failed::$msg"
+            exit 1
+          }

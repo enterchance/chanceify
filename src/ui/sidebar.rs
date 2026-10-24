@@ -412,7 +412,7 @@ fn library_menu_body(app: &mut App, ui: &mut egui::Ui, shelf: Filter, selected: 
     let mut widest = 140.0_f32;
     let measure = |ui: &egui::Ui, label: &str| {
         ui.painter()
-            .layout_no_wrap(label.to_string(), theme::regular(13.5), app.palette.text)
+            .layout_no_wrap(label.to_string(), theme::regular(theme::BODY_TEXT), app.palette.text)
             .size()
             .x
     };
@@ -573,7 +573,7 @@ fn sort_chip(
             ui.painter().line_segment([c, c + vec2(3.5, 1.5)], stroke);
         }
         LibrarySort::Name => {
-            ui.painter().text(c, egui::Align2::CENTER_CENTER, "A-Z", theme::regular(10.0), ink);
+            ui.painter().text(c, egui::Align2::CENTER_CENTER, "A-Z", theme::regular(theme::TINY_TEXT), ink);
         }
         LibrarySort::Local => {
             // A key: a ring and a shaft with two teeth.
@@ -795,7 +795,32 @@ fn first_ranks<'a>(
 fn order_entries(app: &App, shelf: Filter, sort: LibrarySort, entries: &mut [Entry]) {
     match sort {
         LibrarySort::Name => {
-            entries.sort_by_cached_key(|entry| (entry.name.to_lowercase(), entry.uri.clone()))
+            // Each row sorts under the folders that hold it: its key is the
+            // path of names down to it, so a folder's rows follow the folder
+            // in name order and the folders sort among their siblings.
+            let mut folders: Vec<(String, String)> = Vec::new();
+            let paths: Vec<Vec<(String, String)>> = entries
+                .iter()
+                .map(|entry| {
+                    folders.truncate(entry.depth as usize);
+                    let key = (
+                        entry.name.to_lowercase(),
+                        match &entry.folder {
+                            Some((id, _, _)) => id.clone(),
+                            None => entry.uri.clone(),
+                        },
+                    );
+                    let mut path = folders.clone();
+                    path.push(key.clone());
+                    if entry.folder.is_some() {
+                        folders.push(key);
+                    }
+                    path
+                })
+                .collect();
+            let mut order: Vec<usize> = (0..entries.len()).collect();
+            order.sort_by(|a, b| paths[*a].cmp(&paths[*b]));
+            permute(entries, &order);
         }
         LibrarySort::RecentlyPlayed => {
             let ranks = first_ranks(app.recent_contexts.iter().map(String::as_str));
@@ -854,6 +879,21 @@ fn order_entries(app: &App, shelf: Filter, sort: LibrarySort, entries: &mut [Ent
     }
 }
 
+/// Puts `entries[order[i]]` at position `i`.
+fn permute<T>(entries: &mut [T], order: &[usize]) {
+    let mut place: Vec<usize> = vec![0; order.len()];
+    for (to, &from) in order.iter().enumerate() {
+        place[from] = to;
+    }
+    for start in 0..entries.len() {
+        while place[start] != start {
+            let to = place[start];
+            entries.swap(start, to);
+            place.swap(start, to);
+        }
+    }
+}
+
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let expanded_art = has_expanded_art(app);
@@ -879,7 +919,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         .default_size(app.settings.sidebar_width)
         .size_range(fit.range.clone())
         .show_separator_line(false)
-        .frame(Frame::new().fill(palette.panel).inner_margin(Margin {
+        .frame(Frame::new().fill(if super::player_bar::swirl_behind_panels(app) { palette.panel.gamma_multiply(0.45) } else { palette.panel }).inner_margin(Margin {
             left: 12,
             right: 8,
             top,
@@ -1177,7 +1217,7 @@ fn nav_row(
             pos2(rect.left() + 46.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
             label,
-            theme::bold(15.0),
+            theme::bold(theme::BODY_TEXT),
             color,
         );
     }
@@ -1388,7 +1428,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, grid_art: Option<Rect>) {
             .width(250.0)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
-                ui.set_max_width(290.0);
+                super::widgets::fit_menu(ui, 290.0);
                 let _ = (filter, sort);
                 library_menu_body(app, ui, filter, sort);
             });
@@ -1460,7 +1500,17 @@ fn contents(app: &mut App, ui: &mut egui::Ui, grid_art: Option<Rect>) {
             if needle.is_empty() || liked.name.to_lowercase().contains(&needle) {
                 entries.push(liked);
             }
-            let show_folders = sort == LibrarySort::Spotify && needle.is_empty();
+            // Name keeps playlists inside their folders, as Spotify does, and
+            // sorts each folder on its own.
+            let show_folders = needle.is_empty()
+                && match sort {
+                    LibrarySort::Spotify => true,
+                    LibrarySort::Name => app
+                        .rootlist
+                        .iter()
+                        .any(|row| matches!(row, crate::player::RootlistEntry::FolderStart { .. })),
+                    _ => false,
+                };
             if show_folders {
                 folder_rows(app, &user_id, &mut entries);
             }
@@ -1739,7 +1789,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, grid_art: Option<Rect>) {
                             pos2(rect.left() + LIBRARY_ITEM_PADDING, rect.bottom() - 11.0),
                             egui::Align2::LEFT_CENTER,
                             entry.name.to_uppercase(),
-                            theme::medium(11.5),
+                            theme::medium(theme::SMALL_TEXT),
                             palette.dim,
                         );
                         ui.painter().hline(
@@ -1875,7 +1925,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, grid_art: Option<Rect>) {
                                 text_right,
                                 rect.center().y + 10.0,
                                 &entry.subtitle,
-                                theme::regular(12.5),
+                                theme::regular(theme::SMALL_TEXT),
                                 palette.secondary,
                             );
                         }
@@ -1981,7 +2031,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, grid_art: Option<Rect>) {
                                 text_right,
                                 rect.center().y + 10.0,
                                 &entry.subtitle,
-                                theme::regular(12.5),
+                                theme::regular(theme::SMALL_TEXT),
                                 palette.secondary,
                             );
                         }
@@ -2583,8 +2633,7 @@ fn entry_menu(app: &mut App, response: &egui::Response, entry: &Entry, custom_or
             .show(|ui| {
                 // The same width as every other menu; without it the menu
                 // stretches as wide as the window.
-                ui.set_min_width(200.0);
-                ui.set_max_width(300.0);
+                super::widgets::fit_menu(ui, 300.0);
                 if super::widgets::menu_item(
                     ui,
                     &app.palette,

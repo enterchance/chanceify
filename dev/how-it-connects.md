@@ -31,6 +31,12 @@ consent dialog. The playback session uses the account ID verified by either
 Web API grant. A verified personal app can complete sign-in while the shared
 app's verification is still waiting.
 
+Playback setup opens the browser only after its local callback port, 8898, is
+available. If another app holds it, Settings shows the error, the browser
+stays closed, and a saved playback approval is kept. The callback listener
+gives each incoming connection five seconds and 8 KiB to send its request
+line, so a stalled connection cannot hold up the browser's redirect.
+
 Since 0.8.0, local playback retains the artist IDs
 already supplied by librespot. Artist links in the player bar work before the
 Web API's track metadata arrives, without an extra request.
@@ -100,6 +106,11 @@ current-track pickup.
   Secret Service on Linux, Keychain on macOS, and Credential Manager on
   Windows. Librespot retains its reusable credential in memory; Spotifast
   owns persistence. Flatpak can talk to `org.freedesktop.secrets` for this.
+  On Windows, grants are saved with Enterprise persistence; if Credential
+  Manager refuses that, or keeps the grant only until you sign out of Windows,
+  the grant is saved again with Local persistence, which also survives a
+  restart. Store failures are logged with their kind and Windows error code,
+  never with the grant.
   Version 0.7.1 still uses the older unencrypted files.
   See [migration, sign-out, and storage protection](/settings-and-files/).
 - Downloaded audio and artwork, in the cache directory, within the budget
@@ -297,6 +308,15 @@ uses the Web API for subsequent control requests.
 Playback runs on a separate runtime. Librespot maintains the Spotify Connect
 session, exposes this computer as a device, receives transfers, and reports
 playback state. If the session drops, it reconnects with the stored credential.
+
+A playback connection that fails for another reason, for example with a
+connection reset after the computer wakes, is tried again with the saved
+playback approval: after 5 and 15 seconds, 1, 2 and 5 minutes, and then every
+10 minutes until it connects. These attempts keep the error on screen instead
+of flickering through "Connecting", and they stop when Spotify rejects the
+approval, playback is set up again, or you sign out. **Set up playback here**
+first reconnects with the saved approval; the browser opens only when there is
+none or Spotify rejects it.
 
 Since 0.9.0, selecting this computer in the device picker asks
 librespot to transfer playback from the active Connect device. Spotify supplies

@@ -65,6 +65,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                                 shift: 0.0,
                                 picked: false,
                                 picked_songs: &[],
+                                picked_positions: &[],
+                                position: None,
                             },
                         );
                     }
@@ -91,7 +93,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     theme::subtle(ui, &palette, &gettext(locale, "No popular songs to show."));
                 }
                 Loadable::Loading | Loadable::NotLoaded => {
-                    widgets::loading_row(ui, &palette, app.locale)
+                    widgets::skeleton_rows(ui, &palette, app.locale, 5)
                 }
                 Loadable::Failed(error) => {
                     let error = error.clone();
@@ -196,7 +198,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                         }
                     }
                 }
-                None => widgets::loading_row(ui, &palette, app.locale),
+                None => widgets::grid(ui, |ui| {
+                    widgets::skeleton_cards(ui, &palette, app.locale, 6, false)
+                }),
             }
             ui.add_space(20.0);
 
@@ -366,6 +370,15 @@ fn artist_actions(app: &mut App, ui: &mut egui::Ui, artist: &Artist) {
         .clicked()
         {
             app.actions.push(Action::ToggleSaved(artist.uri.clone()));
+        }
+        if theme::soft_button(ui, &palette, Some(Icon::ListEnd), &gettext(locale, "Queue all songs"), false)
+            .on_hover_text(gettext(locale, "Add every song from their albums and singles to the queue, oldest first"))
+            .clicked()
+        {
+            app.actions.push(Action::QueueArtistSongs {
+                id: artist.id.clone(),
+                name: artist.name.clone(),
+            });
         }
         let more = theme::icon_button(
             ui,

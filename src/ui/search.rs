@@ -47,7 +47,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         Loadable::Loaded(results) => results.clone(),
         Loadable::Loading | Loadable::NotLoaded => {
             if !pending {
-                widgets::loading_row(ui, &palette, app.locale);
+                widgets::skeleton_rows(ui, &palette, app.locale, 6);
             }
             return;
         }
@@ -291,16 +291,16 @@ fn result_rows(app: &mut App, ui: &mut egui::Ui, results: &SearchResults, limit:
         let text_right = (tag_x - 12.0).max(rect.left() + 80.0);
         let clip = Rect::from_min_max(pos2(cover.right() + 12.0, rect.top()), pos2(text_right, rect.bottom()));
         let painter = ui.painter().with_clip_rect(clip);
-        crate::bidi::paint_line(&painter, clip.left(), clip.right(), rect.top() + 19.0, &track.name, theme::medium(15.0), palette.text);
+        crate::bidi::paint_line(&painter, clip.left(), clip.right(), rect.top() + 19.0, &track.name, theme::medium(theme::BODY_TEXT), palette.text);
         let artists = crate::api::models::join_names(track.artists.iter().map(|a| a.name.as_str()));
-        crate::bidi::paint_line(&painter, clip.left(), clip.right(), rect.top() + 40.0, &artists, theme::regular(13.0), palette.secondary);
+        crate::bidi::paint_line(&painter, clip.left(), clip.right(), rect.top() + 40.0, &artists, theme::regular(theme::BODY_TEXT), palette.secondary);
         // What it is: Song, Single, EP or Album.
         let tag = match track.album.as_ref().and_then(|album| album.album_type.as_deref()) {
             Some("single") => "Single",
             Some("compilation") => "Album",
             _ => "Song",
         };
-        let tag_galley = crate::bidi::layout_line(ui.painter(), tag, theme::medium(11.5), palette.secondary);
+        let tag_galley = crate::bidi::layout_line(ui.painter(), tag, theme::medium(theme::SMALL_TEXT), palette.secondary);
         let tag_rect = Rect::from_min_size(
             pos2(tag_x, rect.center().y - 9.0),
             vec2(tag_galley.size().x + 10.0, 18.0),
@@ -394,7 +394,7 @@ fn top_result(
             text_clip.right(),
             text_clip.top() + 26.0,
             title,
-            theme::bold(22.0),
+            theme::bold(theme::HEADING_TEXT),
             palette.text,
         );
         match subtitle {
@@ -414,14 +414,14 @@ fn top_result(
                     &mut child,
                     // Translators: Precedes the song's artist names, which follow as links.
                     gettext(app.locale, "Song • ").as_ref(),
-                    theme::regular(13.5),
+                    theme::regular(theme::BODY_TEXT),
                     palette.secondary,
                 );
                 subtitle_clicked = widgets::artist_links(
                     &mut child,
                     app,
                     artists,
-                    theme::regular(13.5),
+                    theme::regular(theme::BODY_TEXT),
                     palette.secondary,
                 );
             }
@@ -432,7 +432,7 @@ fn top_result(
                     text_clip.right(),
                     text_clip.top() + 56.0,
                     subtitle,
-                    theme::regular(13.5),
+                    theme::regular(theme::BODY_TEXT),
                     palette.secondary,
                 );
             }
@@ -545,6 +545,8 @@ fn songs(app: &mut App, ui: &mut egui::Ui, results: &SearchResults, limit: usize
                 shift: 0.0,
                 picked: false,
                 picked_songs: &[],
+                picked_positions: &[],
+                position: None,
             },
         );
     }

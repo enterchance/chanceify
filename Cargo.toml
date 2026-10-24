@@ -1,7 +1,7 @@
 [package]
 name = "chanceify"
 default-run = "chanceify"
-version = "0.9.65"
+version = "0.9.104"
 edition = "2024"
 rust-version = "1.98"
 license = "AGPL-3.0-only"
@@ -35,6 +35,9 @@ keyring-core = "1"
 # AccessKit connects egui's control names, states, and actions to native screen readers.
 eframe = { version = "0.36", default-features = false, features = ["accesskit", "glow", "default_fonts", "links", "wayland", "x11", "persistence"] }
 egui = "0.36"
+# Reads installed fonts' family names for the font pickers (already in the
+# tree through egui's text stack).
+ttf-parser = "0.25"
 egui_extras = { version = "0.36", features = ["image", "svg"] }
 # The shared foundation of Chanceify, ZapFast, RekordFlash and TonePush
 # (crmne/fastframe). Every crate comes from the same revision; move them
@@ -146,7 +149,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 [target.'cfg(windows)'.dependencies]
 windows-native-keyring-store = { version = "1.1", default-features = false }
 # A hidden window for the media controls to belong to, and message loops.
-windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_System_ProcessStatus", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Accessibility", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_System_ProcessStatus", "Win32_System_Power", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Accessibility", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Reuses the zbus/Tokio stack already used for desktop integration.
@@ -250,16 +253,26 @@ hyper-proxy2 = { git = "https://github.com/crmne/hyper-proxy2", rev = "efca48113
 # when Spotify refuses an audio key, bounded socket setup with DNS address
 # fallback, an in-memory credential cache for platform storage, full
 # playback-state recovery after a session disconnect, the desktop platform
-# signature for Windows on ARM, and a volume set while the device is inactive.
+# signature for Windows on ARM, a volume set while the device is inactive,
+# (from Spotifast's ef27e12) the dealer through the proxy, tokens kept out of
+# Debug output, a bounded handshake packet, IPv6/IPv4 racing, a CDN fallback
+# on non-206 replies, removal of one upcoming track and live remote state.
 # Recovery is proposed upstream in librespot-org/librespot#1765 and the
 # volume in librespot-org/librespot#1770; the ARM signature answers
 # librespot-org/librespot#1737.
 # Every librespot crate comes from the
 # fork so one copy exists. Drop patches as upstream takes them.
-librespot-audio = { git = "https://github.com/crmne/librespot", rev = "23fc42cff37848e51f0d8eaefad1a93941b71e59" }
-librespot-connect = { git = "https://github.com/crmne/librespot", rev = "23fc42cff37848e51f0d8eaefad1a93941b71e59" }
-librespot-core = { git = "https://github.com/crmne/librespot", rev = "23fc42cff37848e51f0d8eaefad1a93941b71e59" }
-librespot-metadata = { git = "https://github.com/crmne/librespot", rev = "23fc42cff37848e51f0d8eaefad1a93941b71e59" }
-librespot-oauth = { git = "https://github.com/crmne/librespot", rev = "23fc42cff37848e51f0d8eaefad1a93941b71e59" }
-librespot-playback = { git = "https://github.com/crmne/librespot", rev = "23fc42cff37848e51f0d8eaefad1a93941b71e59" }
-librespot-protocol = { git = "https://github.com/crmne/librespot", rev = "23fc42cff37848e51f0d8eaefad1a93941b71e59" }
+librespot-audio = { git = "https://github.com/crmne/librespot", rev = "d04729018248f11c954b50ff6a3405801ff5af08" }
+librespot-connect = { git = "https://github.com/crmne/librespot", rev = "d04729018248f11c954b50ff6a3405801ff5af08" }
+librespot-core = { git = "https://github.com/crmne/librespot", rev = "d04729018248f11c954b50ff6a3405801ff5af08" }
+librespot-metadata = { git = "https://github.com/crmne/librespot", rev = "d04729018248f11c954b50ff6a3405801ff5af08" }
+librespot-oauth = { git = "https://github.com/crmne/librespot", rev = "d04729018248f11c954b50ff6a3405801ff5af08" }
+# Vendored from the fork at the same revision, with ahead-of-time audio
+# key requests turned off (see PREFETCH_MAX_TRACKS in its player.rs).
+librespot-playback = { path = "vendor/librespot-playback" }
+librespot-protocol = { git = "https://github.com/crmne/librespot", rev = "d04729018248f11c954b50ff6a3405801ff5af08" }
+
+# librespot-connect takes librespot-playback from inside the fork itself,
+# so the vendored copy has to replace it there too.
+[patch."https://github.com/crmne/librespot"]
+librespot-playback = { path = "vendor/librespot-playback" }

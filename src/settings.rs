@@ -390,9 +390,14 @@ pub struct HomeSettings {
     pub recommendations: HomeShelfSettings,
     /// Which tab of Home is open: 0 For you, 1 Your music and stats.
     pub tab: u8,
-    /// Top artists and songs: 0 last 30 days, 1 last 7 days, 2 all time.
-    pub artist_range: u8,
-    pub song_range: u8,
+    /// The period of the stats tab, for top artists and songs alike: 0 last
+    /// 30 days, 1 last 7 days, 2 all time. Older files kept one per list;
+    /// the artists' one carries over.
+    #[serde(alias = "artist_range")]
+    pub stats_range: u8,
+    /// One calendar month for the stats tab instead of the period, written
+    /// as year * 100 + month (202610); 0 for none.
+    pub stats_month: u32,
     /// Top artists and songs as one column (true) or a grid of small tiles.
     pub stats_list: bool,
     /// How many recommended songs show: 0 is the usual 20.
@@ -401,6 +406,14 @@ pub struct HomeSettings {
     pub recent_all: bool,
     /// Whether the New from your artists list is folded away.
     pub releases_folded: bool,
+    /// New from your artists leaves out a release once one of its songs
+    /// has been heard.
+    pub releases_hide_heard: bool,
+    /// New from your artists as a grid of covers instead of a list.
+    pub releases_grid: bool,
+    /// New from your artists grouped under each artist instead of the
+    /// newest first.
+    pub releases_by_artist: bool,
 }
 
 /// What moves behind the player bar's controls.
@@ -771,6 +784,15 @@ pub struct MyView {
     pub window: Option<[f32; 2]>,
 }
 
+/// A playlist of song files made on the Local songs page: a name and the
+/// files in it, in order, by path.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LocalPlaylist {
+    pub name: String,
+    pub paths: Vec<String>,
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -873,6 +895,10 @@ pub struct Settings {
     pub hidden_presets: Vec<String>,
     /// The built-in equalizer presets are left out of the equalizer's list.
     pub eq_hide_defaults: bool,
+    /// The equalizer's preset headings the reader folded shut, by name
+    /// (see `crate::eq::PRESET_GROUPS`). Every heading starts open.
+    #[serde(default)]
+    pub eq_closed_groups: Vec<String>,
     /// Which of the cover's colours the bars take: 0 is the main one.
     pub player_bar_vis_colour_pick: u8,
     /// How many sheets the flow folds together, front to back.
@@ -973,6 +999,17 @@ pub struct Settings {
     /// cover's colours.
     #[serde(default)]
     pub swirl_colours_fixed: bool,
+    /// Default view: the swirl also fills the window behind the library,
+    /// the queue, the side lyrics and the top bar.
+    pub swirl_behind_panels: bool,
+    /// The local songs table's columns, in order: (column id, width). The
+    /// title, artist, album and genre columns store their share of the room
+    /// left over; the others store their width in points, or a value of 1
+    /// or less (older files kept shares there too) for "fit the content".
+    pub local_columns: Vec<(u8, f32)>,
+    /// Playlists of song files made on the Local songs page.
+    #[serde(default)]
+    pub local_playlists: Vec<LocalPlaylist>,
     /// How many ripples run across the swirl; 0 (never set) means the default.
     #[serde(default)]
     pub swirl_waves: u8,
@@ -1061,6 +1098,10 @@ pub struct Settings {
     /// Which of `system_fonts::VIS_FONTS` it is drawn in.
     #[serde(default)]
     pub vis_text_font: u8,
+    /// The title's face by name (see `system_fonts`); empty for Inter.
+    pub vis_text_font_name: String,
+    /// The bass jump picks what to follow for each song by itself.
+    pub vis_jump_auto: bool,
     /// Hide the artist name under the full-screen title.
     pub vis_text_no_artist: bool,
     /// A thin border round the album art in the full screen visualizer.
@@ -1095,6 +1136,11 @@ pub struct Settings {
     pub calm_look: u8,
     /// The pop-out controls: [x, y, width]. None = not shown.
     pub float_controls: Option<[f32; 3]>,
+    /// How tall the cover on the card above the controls is, once the
+    /// reader has resized it.
+    pub float_card_side: Option<f32>,
+    /// The volume is labelled in decibels instead of percent.
+    pub volume_db: bool,
     /// Where the controls panel sits while the album art is big, and in full-screen lyrics.
     pub float_hide_bar: bool,
     /// The pop-out controls live in a window of their own, off the app.
@@ -1262,6 +1308,8 @@ pub struct Settings {
     pub queue_show_icons: bool,
     /// Whether queue rows show the cover.
     pub queue_show_cover: bool,
+    /// The full Queue and Recent page: tiles (true) or a list.
+    pub queue_page_grid: bool,
     /// The Recent tab keeps its own look, apart from the queue's, so each
     /// can be set up the way its reader wants it.
     pub recents_show_numbers: bool,
@@ -1331,6 +1379,20 @@ pub struct Settings {
     pub lastfm_secret: String,
     pub lastfm_user: String,
     pub lastfm_session: String,
+    /// Last.fm names added by hand to the Friends tab.
+    pub lastfm_friends: Vec<String>,
+    /// The face every bit of text in the app uses (0: the built-in Inter),
+    /// from the same list as the visualizer title's.
+    pub ui_font: u8,
+    /// The app's face by name; empty for Inter.
+    pub ui_font_name: String,
+    /// A different app face for every song.
+    pub ui_font_random: bool,
+    /// Hovering a face in the app font list shows it on the whole app.
+    pub ui_font_live_preview: bool,
+    /// Save every album cover and artist picture, not only the ones
+    /// Last.fm is missing.
+    pub lastfm_art_all: bool,
     /// Count what is played on Last.fm.
     pub lastfm_scrobble: bool,
     /// Tell Last.fm what is playing right now.
@@ -1372,6 +1434,8 @@ pub struct Settings {
     pub personal_app_nudge_at: Option<String>,
     /// The listener has dismissed or followed the personal-app introduction.
     pub personal_app_intro_seen: bool,
+    /// Whether starting with the computer has been offered: it is asked once.
+    pub start_asked: bool,
     /// Local playback has been authorized at least once on this machine, so
     /// the app can resume it silently instead of prompting.
     pub playback_authorized: bool,
@@ -1382,6 +1446,8 @@ pub struct Settings {
     /// its tray menu stay, so the old behaviour is one toggle away in
     /// Settings → Playback.
     pub keep_playing_in_background: bool,
+    /// Whether Windows starts the app when the person signs in.
+    pub start_with_computer: bool,
     /// Ask GitHub once a day whether a newer release exists.
     pub check_for_updates: bool,
     pub download_updates_automatically: bool,
@@ -1497,6 +1563,7 @@ impl Default for Settings {
             custom_scenes: Vec::new(),
             hidden_presets: Vec::new(),
             eq_hide_defaults: false,
+            eq_closed_groups: Vec::new(),
             player_bar_vis_colour_pick: 0,
             player_bar_vis_flow_sheets: crate::ui::player_bar::FLOW_SHEETS as u8,
             player_bar_vis_flow_depth: 0.86,
@@ -1530,6 +1597,9 @@ impl Default for Settings {
             seek_time_mode: 0,
             swirl_warp: 0.0,
             swirl_colours_fixed: false,
+            swirl_behind_panels: false,
+            local_columns: vec![(0, 0.0), (1, 0.36), (2, 0.24), (3, 0.22), (4, 0.0), (5, 0.0), (7, 0.0)],
+            local_playlists: Vec::new(),
             swirl_waves: 0,
             swirl_tune: Vec::new(),
             swirl_art_scroll: false,
@@ -1561,6 +1631,8 @@ impl Default for Settings {
             vis_live_preview: true,
             vis_font_random: false,
             vis_text_font: 0,
+            vis_text_font_name: String::new(),
+            vis_jump_auto: true,
             vis_text_no_artist: false,
             vis_art_border: false,
             extra_show_title: true,
@@ -1577,6 +1649,8 @@ impl Default for Settings {
             disc_dim: 0.2,
             calm_look: 1,
             float_controls: None,
+            float_card_side: None,
+            volume_db: false,
             float_hide_bar: false,
             views_width: 316.0,
             views_height: 0.0,
@@ -1650,6 +1724,7 @@ impl Default for Settings {
             queue_show_artist: true,
             queue_show_icons: true,
             queue_show_cover: true,
+            queue_page_grid: true,
             recents_show_numbers: true,
             recents_show_artist: true,
             recents_show_icons: true,
@@ -1683,6 +1758,12 @@ impl Default for Settings {
             lastfm_secret: String::new(),
             lastfm_user: String::new(),
             lastfm_session: String::new(),
+            lastfm_friends: Vec::new(),
+            ui_font: 0,
+            ui_font_name: String::new(),
+            ui_font_random: false,
+            ui_font_live_preview: true,
+            lastfm_art_all: false,
             lastfm_scrobble: true,
             lastfm_now_playing: true,
             lastfm_files: true,
@@ -1700,8 +1781,10 @@ impl Default for Settings {
             web_client_id: None,
             personal_app_nudge_at: None,
             personal_app_intro_seen: false,
+            start_asked: false,
             playback_authorized: false,
             keep_playing_in_background: false,
+            start_with_computer: false,
             check_for_updates: true,
             download_updates_automatically: false,
             pinned_contexts: Vec::new(),
@@ -1788,6 +1871,52 @@ impl Settings {
 
     /// Every one of the reader's own equalizers and scenes as plain text, one
     /// per line: `EQ|name|ten gains` and `SCENE|name|speed|ten gains`.
+    /// One equalizer curve as a line of text to share: `CEQ:name:g1,...,g10`
+    /// (gains in dB). Anyone can paste it back in with [`Self::import_eq_codes`].
+    pub fn eq_code(name: &str, bands: &[f32; 10]) -> String {
+        let gains = bands
+            .iter()
+            .map(|gain| {
+                let text = format!("{gain:.1}");
+                text.strip_suffix(".0").map(str::to_string).unwrap_or(text)
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("CEQ:{}:{gains}", name.replace(':', " ").trim())
+    }
+
+    /// Adds every curve in `text` that is a share code (or an exported line),
+    /// replacing any of the same name. Returns the names added.
+    pub fn import_eq_codes(&mut self, text: &str) -> Vec<String> {
+        let mut added = Vec::new();
+        for code in text.split("CEQ:").skip(1) {
+            let code = code.trim();
+            let Some((name, gains)) = code.rsplit_once(':') else {
+                continue;
+            };
+            let gains = gains.split_whitespace().next().unwrap_or("");
+            let values: Vec<f32> = gains
+                .split(',')
+                .filter_map(|part| part.trim().parse::<f32>().ok())
+                .filter(|gain| gain.is_finite())
+                .collect();
+            let Ok(array) = <[f32; 10]>::try_from(values) else {
+                continue;
+            };
+            let array = array.map(|gain| gain.clamp(-crate::eq::RANGE_DB, crate::eq::RANGE_DB));
+            let name = name.trim();
+            let name = if name.is_empty() { "Shared curve" } else { name };
+            let name: String = name.chars().take(40).collect();
+            self.custom_eqs.retain(|(other, _)| *other != name);
+            self.custom_eqs.push((name.clone(), array));
+            added.push(name);
+        }
+        if added.is_empty() && self.import_presets(text) > 0 {
+            added.push("curves".to_string());
+        }
+        added
+    }
+
     pub fn export_presets(&self) -> String {
         let gains = |bands: &[f32; 10]| {
             bands
@@ -1952,10 +2081,17 @@ impl Settings {
         SwayPreset { name: "Shake", lean: 1.0, speed: 3.0, bass: 3.0, bob: 0.0, stalk: 0.0, kind: 4, amp: 0.07 },
     ];
 
-    /// How solid the window is: 1 is opaque, down to 0.3.
+    /// How solid the window is: 1 is opaque, down to 0.3. It goes in whole
+    /// percents, the way the slider shows it: a drag that stops a hair short
+    /// of the end reads "100%" and must be solid, not 99.6% see-through
+    /// (which left the visualizer showing the desktop with no way back).
     pub fn window_solidity(&self) -> f32 {
         let value = self.window_opacity;
-        if value.is_finite() && value > 0.0 { value.clamp(0.3, 1.0) } else { 1.0 }
+        if value.is_finite() && value > 0.0 {
+            ((value * 100.0).round() / 100.0).clamp(0.3, 1.0)
+        } else {
+            1.0
+        }
     }
 
     /// Whether the window lets the desktop show through at all.
@@ -2056,11 +2192,11 @@ impl Settings {
         "queue_show_cover", "queue_show_icons", "queue_show_length", "queue_show_numbers", "queue_show_time",
         "queue_width", "float_hide_bar", "calm_blur", "recents_show_artist", "recents_show_cover", "recents_show_icons", "recents_show_numbers", "vis_title_layout", "jump_shake", "mini_queue", "mini_volume", "mini_vis", "queue_click", "vis_reverse", "missing_mark_big", "row_order", "seek_anchor", "seek_custom_width", "seek_time_joined", "seek_time_mode",
         "seek_width", "show_shortcut_hints", "sidebar_compact", "sidebar_grid", "sidebar_order",
-        "sidebar_width", "swirl_art_scroll", "swirl_art_single", "swirl_art_edge", "swirl_colours_fixed", "swirl_drift", "swirl_peaks",
+        "sidebar_width", "swirl_art_scroll", "swirl_art_single", "swirl_art_edge", "swirl_colours_fixed", "swirl_behind_panels", "swirl_drift", "swirl_peaks",
         "swirl_scale", "swirl_tune", "swirl_warp", "swirl_waves", "theme", "theme_from_cover", "custom_bg", "custom_accent",
         "track_columns", "tracklist_compact", "vis", "vis_bar_sides", "vis_flow_sides", "vis_shapes",
         "vis_shapes_last", "vis_shapes_set", "volume_presets", "zoom",
-        "volume_custom_width", "vis_no_gradient", "vis_lyrics", "vis_text_still", "vis_sway", "vis_sway_amount", "vis_sway_react", "sway_sens", "vis_text_no_outline", "vis_text_back", "vis_back_alpha", "vis_back_round", "vis_back_pad", "vis_back_block", "vis_live_preview", "vis_font_random", "vis_text_font", "vis_text_no_artist", "vis_lyrics_no_back", "vis_bars_stay", "lyrics_vis", "lyrics_vis_dark", "lyrics_vis_mode", "window_opacity", "anchor_controls", "anchor_volume", "bar_stacked", "bar_layout", "bar_free", "lyrics_ctl_off", "vis_bars_opacity", "vis_flow_opacity", "swirl_react_mode", "vis_jump_react", "vis_jump_on", "float_idle",
+        "volume_custom_width", "vis_no_gradient", "vis_lyrics", "vis_text_still", "vis_sway", "vis_sway_amount", "vis_sway_react", "sway_sens", "vis_text_no_outline", "vis_text_back", "vis_back_alpha", "vis_back_round", "vis_back_pad", "vis_back_block", "vis_live_preview", "vis_font_random", "vis_text_font", "vis_text_font_name", "vis_text_no_artist", "vis_lyrics_no_back", "vis_bars_stay", "lyrics_vis", "lyrics_vis_dark", "lyrics_vis_mode", "window_opacity", "anchor_controls", "anchor_volume", "bar_stacked", "bar_layout", "bar_free", "lyrics_ctl_off", "vis_bars_opacity", "vis_flow_opacity", "swirl_react_mode", "vis_jump_react", "vis_jump_on", "vis_jump_auto", "float_idle",
         "jump_sens", "jump_gap", "jump_floor", "jump_adapt", "vis_sway_beat", "vis_depth", "vis_art_border", "calm_look", "disc_dim", "vis_views", "vis_view_mini", "vis_reverse_flow", "vis_reverse_swirl", "extra_show_title", "extra_show_artist", "extra_show_heart",
     ];
 
@@ -2205,7 +2341,8 @@ impl Settings {
         let speed = if self.swirl_drift.is_finite() && self.swirl_drift > 0.0 {
             self.swirl_drift.clamp(0.2, 4.0)
         } else {
-            1.0
+            // Unset: a gentle drift (faster than about 2 moves too quickly).
+            1.5
         };
         9.0 / f64::from(speed)
     }
@@ -2910,6 +3047,12 @@ mod tests {
         assert!(!settings.window_see_through());
         settings.window_opacity = 0.01;
         assert!((settings.window_solidity() - 0.3).abs() < 1e-6);
+        assert!(settings.window_see_through());
+        // The slider shows whole percents; "100%" is solid whatever the drag left.
+        settings.window_opacity = 0.996;
+        assert!((settings.window_solidity() - 1.0).abs() < 1e-6);
+        assert!(!settings.window_see_through());
+        settings.window_opacity = 0.99;
         assert!(settings.window_see_through());
     }
 
@@ -3709,6 +3852,9 @@ pub struct SessionState {
     pub rootlist: Option<CachedRootlist>,
     /// Shuffle mode saved across contexts and restarts.
     pub shuffle_on: bool,
+    /// Local repeat mode ("off", "context" or "track") saved across
+    /// restarts. Sessions saved before it existed read as off.
+    pub repeat: String,
     /// Each table's chosen sort, by encoded page, restored at start.
     pub sorts: Vec<(String, crate::model::TableSort)>,
     /// Last window inner size, to restore on next launch.
@@ -3772,6 +3918,25 @@ mod session_tests {
         let state: SessionState = serde_json::from_str(r#"{"last_page":"home"}"#).unwrap();
         assert_eq!(state.last_page.as_deref(), Some("home"));
         assert_eq!(state.rootlist, None);
+        assert_eq!(
+            crate::player::RepeatMode::from_api(&state.repeat),
+            crate::player::RepeatMode::Off,
+            "no saved repeat mode is off"
+        );
+    }
+
+    #[test]
+    fn the_repeat_mode_round_trips() {
+        let state = SessionState {
+            repeat: crate::player::RepeatMode::Track.api_name().into(),
+            ..SessionState::default()
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        let read = serde_json::from_str::<SessionState>(&json).unwrap();
+        assert_eq!(
+            crate::player::RepeatMode::from_api(&read.repeat),
+            crate::player::RepeatMode::Track
+        );
     }
 
     #[test]

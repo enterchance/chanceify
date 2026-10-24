@@ -81,7 +81,7 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
         .show_separator_line(false)
         .frame(
             Frame::new()
-                .fill(palette.panel)
+                .fill(if super::player_bar::swirl_behind_panels(app) { palette.panel.gamma_multiply(0.45) } else { palette.panel })
                 .inner_margin(Margin::symmetric(12, 12)),
         );
     let response = panel.show(ui, |ui| {
@@ -756,7 +756,7 @@ fn track_heading(app: &App, ui: &mut egui::Ui) {
                     ui.add(
                         egui::Label::new(
                             egui::RichText::new(&now.subtitle)
-                                .font(theme::regular(13.0))
+                                .font(theme::regular(theme::BODY_TEXT))
                                 .color(Color32::from_gray(235)),
                         )
                         .truncate(),
@@ -1471,7 +1471,9 @@ pub(super) fn controls_box_inner(app: &mut App, ui: &mut egui::Ui, top_left: egu
     let drag_flag = egui::Id::new(("popout-bar-dragging", viewport));
     let mut dragging = ctx.data(|data| data.get_temp::<bool>(drag_flag)).unwrap_or(false);
     if pressed {
-        dragging = pos.is_some_and(|p| bars.iter().any(|bar| bar.contains(p)));
+        // A press on a bar's dot sets the value; it never moves the panel.
+        dragging = pos.is_some_and(|p| bars.iter().any(|bar| bar.contains(p)))
+            && !super::widgets::window_drag_blocked(&ctx);
     }
     if !down {
         dragging = false;

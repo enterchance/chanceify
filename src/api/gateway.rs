@@ -283,6 +283,15 @@ impl ApiGateway {
         matches!(self.state(ApiSource::Personal), SessionState::Ready { .. })
     }
 
+    /// Reuse configured HTTP transport only after verifying the account.
+    /// Pathfinder itself receives the playback session's Login5 credentials.
+    pub(crate) fn prerelease_http_client(&self) -> Option<Arc<ApiClient>> {
+        [ApiSource::Personal, ApiSource::Shared]
+            .into_iter()
+            .find(|source| matches!(self.state(*source), SessionState::Ready { .. }))
+            .map(|source| self.verification_client(source))
+    }
+
     /// The shared app's client, for a read a personal app was refused.
     ///
     /// Routing the account's own playlists to the reader's own app is a

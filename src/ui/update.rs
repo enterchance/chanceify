@@ -40,7 +40,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         .show(ctx, |ui| {
             ui.set_width(420.0_f32.min((ctx.content_rect().width() - 64.0).max(240.0)));
             ui.horizontal(|ui| {
-                theme::text(ui, title.as_ref(), theme::bold(20.0), palette.text);
+                theme::text(ui, title.as_ref(), theme::bold(theme::HEADING_TEXT), palette.text);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     close |= theme::icon_button(
                         ui,
@@ -57,7 +57,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             theme::text(
                 ui,
                 format!("{} → {}", env!("CARGO_PKG_VERSION"), release.version),
-                theme::regular(14.0),
+                theme::regular(theme::BODY_TEXT),
                 palette.secondary,
             );
             ui.add_space(20.0);
@@ -73,7 +73,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         } else {
                             gettext(locale, "Downloading update…")
                         },
-                        theme::medium(14.0),
+                        theme::medium(theme::BODY_TEXT),
                         palette.text,
                     );
                     ui.add_space(8.0);
@@ -93,7 +93,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                                     &format!("{:.1}", *received as f64 / 1_000_000.0),
                                 )
                                 .replace("{total}", &format!("{:.1}", *total as f64 / 1_000_000.0)),
-                            theme::regular(12.0),
+                            theme::regular(theme::SMALL_TEXT),
                             palette.secondary,
                         );
                     } else {
@@ -104,7 +104,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     theme::text(
                         ui,
                         gettext(locale, "Ready to install"),
-                        theme::semibold(14.0),
+                        theme::semibold(theme::BODY_TEXT),
                         palette.text,
                     );
                     ui.add_space(6.0);
@@ -114,7 +114,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                                 locale,
                                 "Music playing on this computer will stop when chanceify™ restarts.",
                             ))
-                            .font(theme::regular(14.0))
+                            .font(theme::regular(theme::BODY_TEXT))
                             .color(palette.secondary),
                         )
                         .wrap(),
@@ -127,7 +127,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         theme::text(
                             ui,
                             gettext(locale, "Preparing to restart…"),
-                            theme::regular(14.0),
+                            theme::regular(theme::BODY_TEXT),
                             palette.text,
                         );
                     });
@@ -137,7 +137,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         ui.add(
                             egui::Label::new(
                                 RichText::new(error)
-                                    .font(theme::regular(14.0))
+                                    .font(theme::regular(theme::BODY_TEXT))
                                     .color(palette.danger),
                             )
                             .wrap(),
@@ -152,7 +152,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                             ui.add(
                                 egui::Label::new(
                                     RichText::new(reason)
-                                        .font(theme::regular(14.0))
+                                        .font(theme::regular(theme::BODY_TEXT))
                                         .color(palette.secondary),
                                 )
                                 .wrap(),
@@ -183,7 +183,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     ui.add_space(8.0);
                     ui.add(egui::Hyperlink::from_label_and_url(
                         RichText::new(release_link)
-                            .font(theme::medium(13.0))
+                            .font(theme::medium(theme::BODY_TEXT))
                             .color(palette.secondary),
                         &release.url,
                     ));

@@ -43,10 +43,10 @@ const QUEUE_LIMIT: usize = 12;
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Length of each side of an interrupted-track fade.
-const INTERRUPT_FADE: Duration = Duration::from_millis(10);
+const INTERRUPT_FADE: Duration = Duration::from_millis(50);
 
 /// How long Play takes to come up, and Pause to go down.
-const TRANSPORT_FADE: Duration = Duration::from_millis(250);
+const TRANSPORT_FADE: Duration = Duration::from_millis(50);
 
 /// How often playback looks at which output the system calls its default.
 const DEFAULT_CHECK_INTERVAL: Duration = Duration::from_secs(2);
@@ -74,6 +74,8 @@ pub struct AudioControl {
     target: Mutex<AudioTarget>,
     waiting_for_track: AtomicBool,
     reset_output: AtomicBool,
+    /// The equalizer and limiter history is dropped too (Spotifast #686).
+    reset_processing: AtomicBool,
     buffer_ms: u32,
 }
 
@@ -89,6 +91,7 @@ impl AudioControl {
             target: Mutex::new(AudioTarget::default()),
             waiting_for_track: AtomicBool::new(false),
             reset_output: AtomicBool::new(false),
+            reset_processing: AtomicBool::new(false),
             buffer_ms: buffer_ms.clamp(*BUFFER_MS_RANGE.start(), *BUFFER_MS_RANGE.end()),
         })
     }
@@ -104,6 +107,7 @@ impl AudioControl {
                     sink.stop();
                 }
                 self.reset_output.store(true, Ordering::SeqCst);
+                self.reset_processing.store(true, Ordering::SeqCst);
                 // Previous can rewind the current track after interrupting
                 // it. Release that gate, but never close it for a seek:
                 // the decoder is already sending audio from the new position.
@@ -137,6 +141,14 @@ impl AudioControl {
             sink.stop();
         }
         self.reset_output.store(true, Ordering::SeqCst);
+        self.reset_processing.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether the equalizer and limiter should forget the previous song.
+    /// Kept pending while old decoder packets are still being discarded, so
+    /// a fragment of the old song never reaches a new one's quiet intro.
+    pub(crate) fn take_processing_reset(&self) -> bool {
+        !self.waiting_for_track() && self.reset_processing.swap(false, Ordering::SeqCst)
     }
 
     /// Opens the write gate once librespot has left the old decoder behind.
@@ -498,6 +510,9 @@ impl RodioSink {
 
     /// Opens the output if it is not open, or if it died since.
     fn open_if_needed(&mut self) -> Result<(), OpenError> {
+        // Sound can arrive without a Play; ask for the priority here too
+        // (once per thread, then a thread-local check; upstream #785).
+        take_precedence();
         if self.output.as_ref().is_some_and(Output::failed) {
             log::warn!("the audio output stopped working; reopening it");
             self.output = None;
@@ -844,9 +859,16 @@ fn open_stream(
 /// Linux requires rtkit; CoreAudio owns its real-time callback on macOS.
 #[cfg(windows)]
 fn take_precedence() {
+    use std::cell::Cell;
     use windows_sys::Win32::System::Threading::{
         GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
     };
+    thread_local! {
+        static RAISED: Cell<bool> = const { Cell::new(false) };
+    }
+    if RAISED.with(|raised| raised.replace(true)) {
+        return;
+    }
     // SAFETY: the current thread's pseudo-handle needs no closing, and the
     // call takes nothing else.
     unsafe {
@@ -1270,7 +1292,7 @@ mod tests {
             librespot_core::SpotifyUri::from_uri("spotify:track:14XWXWv5FoCbFzLksawpEe").unwrap();
         let item = AudioItem {
             track_id: track_id.clone(),
-            uri: track_id.to_uri().unwrap(),
+            uri: track_id.to_uri(),
             files: Default::default(),
             name: "Next song".into(),
             covers: vec![],

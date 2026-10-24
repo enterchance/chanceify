@@ -33,15 +33,35 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             }
             match dialog {
                 Dialog::PersonalAppIntro => {
-                    theme::text(ui, gettext(locale, "Spotify is making you wait"), theme::bold(20.0), palette.text);
+                    theme::text(ui, gettext(locale, "Spotify is making you wait"), theme::bold(theme::HEADING_TEXT), palette.text);
                     ui.add_space(10.0);
-                    ui.add(egui::Label::new(egui::RichText::new(gettext(locale, "When it gets busy, Spotify slows down shared connections. With Premium, you can set up your own faster one.")).font(theme::regular(14.0)).color(palette.secondary)).wrap());
+                    ui.add(egui::Label::new(egui::RichText::new(gettext(locale, "When it gets busy, Spotify slows down shared connections. With Premium, you can set up your own faster one.")).font(theme::regular(theme::BODY_TEXT)).color(palette.secondary)).wrap());
                     ui.add_space(14.0);
                     ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 34.0), Layout::right_to_left(Align::Center), |ui| {
                         if theme::pill_button(ui, &palette, &gettext(locale, "Set up personal app"), true).clicked() {
                             app.actions.push(Action::OpenPersonalAppSetup);
                         }
                         if theme::pill_button(ui, &palette, &gettext(locale, "Not now"), false).clicked() {
+                            app.actions.push(Action::CloseDialog);
+                        }
+                    });
+                }
+                Dialog::StartWithComputer => {
+                    theme::text(ui, "Start chanceify with your computer?", theme::bold(theme::HEADING_TEXT), palette.text);
+                    ui.add_space(14.0);
+                    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 34.0), Layout::right_to_left(Align::Center), |ui| {
+                        if theme::pill_button(ui, &palette, "Start automatically", true).clicked() {
+                            if crate::util::set_start_with_computer(true) {
+                                app.settings.start_with_computer = true;
+                                app.mark_settings_dirty();
+                                app.toast("chanceify starts with your computer. Turn it off in Settings, About.");
+                            } else {
+                                app.toast_error("Couldn't change the startup entry");
+                            }
+                            app.actions.push(Action::CloseDialog);
+                        }
+                        if theme::pill_button(ui, &palette, "Don't start automatically", false).clicked() {
+                            app.toast("You can turn it on in Settings, About.");
                             app.actions.push(Action::CloseDialog);
                         }
                     });
@@ -56,7 +76,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         } else {
                             gettext(locale, "Remove from Your Library?")
                         },
-                        theme::bold(20.0),
+                        theme::bold(theme::HEADING_TEXT),
                         palette.text,
                     );
                     ui.add_space(8.0);
@@ -71,7 +91,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     ui.add(
                         egui::Label::new(
                             egui::RichText::new(body)
-                                .font(theme::regular(14.0))
+                                .font(theme::regular(theme::BODY_TEXT))
                                 .color(palette.secondary),
                         )
                         .wrap(),
@@ -112,7 +132,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         } else {
                             gettext(locale, "Song already in this playlist")
                         },
-                        theme::bold(20.0),
+                        theme::bold(theme::HEADING_TEXT),
                         palette.text,
                     );
                     ui.add_space(8.0);
@@ -120,7 +140,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     ui.add(
                         egui::Label::new(
                             egui::RichText::new(body)
-                                .font(theme::regular(14.0))
+                                .font(theme::regular(theme::BODY_TEXT))
                                 .color(palette.secondary),
                         )
                         .wrap(),
@@ -146,7 +166,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         theme::text(
                             ui,
                             "Press a key (Shift and Ctrl count too), or right-click it to clear. Escape cancels.",
-                            theme::regular(12.5),
+                            theme::regular(theme::SMALL_TEXT),
                             palette.accent,
                         );
                     } else {
@@ -222,7 +242,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                                 ui.set_width(lane_width);
                                 for index in lane {
                                     let (group_name, bindables) = shown[*index];
-                                    theme::text(ui, *group_name, theme::semibold(14.0), palette.text);
+                                    theme::text(ui, *group_name, theme::semibold(theme::BODY_TEXT), palette.text);
                                     ui.add_space(4.0);
                                     for bindable in bindables {
                                         ui.horizontal(|ui| {
@@ -255,7 +275,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                                                 ui.add(
                                                     egui::Label::new(
                                                         egui::RichText::new(bindable.label)
-                                                            .font(theme::regular(12.5))
+                                                            .font(theme::regular(theme::SMALL_TEXT))
                                                             .color(palette.text),
                                                     )
                                                     .truncate()
@@ -282,14 +302,14 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                                                 key_box.center(),
                                                 egui::Align2::CENTER_CENTER,
                                                 keys,
-                                                theme::semibold(12.0),
+                                                theme::semibold(theme::SMALL_TEXT),
                                                 palette.dim,
                                             );
                                             ui.allocate_ui_with_layout(egui::vec2((lane_width - 120.0).max(60.0), 26.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                                                 ui.add(
                                                     egui::Label::new(
                                                         egui::RichText::new(what)
-                                                            .font(theme::regular(12.5))
+                                                            .font(theme::regular(theme::SMALL_TEXT))
                                                             .color(palette.secondary),
                                                     )
                                                     .truncate()
@@ -310,8 +330,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     // fit the footer.
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new("Ctrl+click a song queues it. Shift+Ctrl+click plays it next. Or bind a key under Playback.")
-                                .font(theme::regular(13.0))
+                            egui::RichText::new("Ctrl+click picks songs. Queue a song with the key bound here.")
+                                .font(theme::regular(theme::BODY_TEXT))
                                 .color(palette.secondary),
                         )
                         .wrap()
@@ -340,7 +360,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     ctx.data_mut(|data| data.insert_temp(footer_id, used.max(40.0)));
                 }
                 Dialog::Views => {
-                    theme::text(ui, "Views", theme::bold(20.0), palette.text);
+                    theme::text(ui, "Views", theme::bold(theme::HEADING_TEXT), palette.text);
                     ui.add_space(4.0);
                     ui.add_space(10.0);
                     let rows: [(&str, bool, Action); 10] = [
@@ -377,7 +397,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     theme::text(
                         ui,
                         gettext(locale, "This account cannot play music here"),
-                        theme::bold(20.0),
+                        theme::bold(theme::HEADING_TEXT),
                         palette.text,
                     );
                     ui.add_space(8.0);
@@ -387,7 +407,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                                 locale,
                                 "Playback needs Spotify Premium. Free accounts can browse and search, but cannot play music through chanceify™.",
                             ))
-                            .font(theme::regular(14.0))
+                            .font(theme::regular(theme::BODY_TEXT))
                             .color(palette.secondary),
                         )
                         .wrap(),
@@ -529,7 +549,7 @@ fn text_field(
                 egui::TextEdit::singleline(text)
                     .id(egui::Id::new(id))
                     .hint_text(egui::RichText::new(hint).color(palette.dim))
-                    .font(theme::regular(14.0))
+                    .font(theme::regular(theme::BODY_TEXT))
                     .frame(egui::Frame::NONE)
                     .desired_width(f32::INFINITY),
             )
@@ -556,14 +576,14 @@ fn create_playlist(app: &mut App, ui: &mut egui::Ui) {
     theme::text(
         ui,
         gettext(locale, "New playlist"),
-        theme::bold(20.0),
+        theme::bold(theme::HEADING_TEXT),
         palette.text,
     );
     ui.add_space(12.0);
     theme::text(
         ui,
         gettext(locale, "Name"),
-        theme::medium(13.0),
+        theme::medium(theme::BODY_TEXT),
         palette.secondary,
     );
     let field = text_field(
@@ -581,7 +601,7 @@ fn create_playlist(app: &mut App, ui: &mut egui::Ui) {
         theme::text(
             ui,
             gettext(locale, "Public playlist"),
-            theme::regular(14.0),
+            theme::regular(theme::BODY_TEXT),
             palette.text,
         );
     });
@@ -598,7 +618,7 @@ fn create_playlist(app: &mut App, ui: &mut egui::Ui) {
                 count as u32,
             )
             .replace("{count}", &count.to_string()),
-            theme::regular(13.0),
+            theme::regular(theme::BODY_TEXT),
             palette.secondary,
         );
     }
@@ -655,7 +675,7 @@ fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
     theme::text(
         ui,
         gettext(locale, "Edit details"),
-        theme::bold(20.0),
+        theme::bold(theme::HEADING_TEXT),
         palette.text,
     );
     ui.add_space(12.0);
@@ -688,7 +708,7 @@ fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
                             } else {
                                 gettext(locale, "Choosing cover…")
                             },
-                            theme::regular(13.0),
+                            theme::regular(theme::BODY_TEXT),
                             palette.secondary,
                         );
                     } else {
@@ -718,7 +738,7 @@ fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
             theme::text(
                 ui,
                 gettext(locale, "Name"),
-                theme::medium(13.0),
+                theme::medium(theme::BODY_TEXT),
                 palette.secondary,
             );
             text_field(
@@ -734,7 +754,7 @@ fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
             theme::text(
                 ui,
                 gettext(locale, "Description"),
-                theme::medium(13.0),
+                theme::medium(theme::BODY_TEXT),
                 palette.secondary,
             );
             Frame::new()
@@ -751,7 +771,7 @@ fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
                                 egui::RichText::new(gettext(locale, "Optional description"))
                                     .color(palette.dim),
                             )
-                            .font(theme::regular(14.0))
+                            .font(theme::regular(theme::BODY_TEXT))
                             .frame(egui::Frame::NONE)
                             .desired_rows(3)
                             .desired_width(f32::INFINITY),
@@ -775,7 +795,7 @@ fn edit_playlist(app: &mut App, ui: &mut egui::Ui) {
                 theme::text(
                     ui,
                     gettext(locale, "Public playlist"),
-                    theme::regular(14.0),
+                    theme::regular(theme::BODY_TEXT),
                     palette.text,
                 );
             });

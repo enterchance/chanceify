@@ -342,6 +342,26 @@ pub fn catalog_detail(
     }
 }
 
+/// The only text sizes chanceify uses, so every page reads alike. Text
+/// grows and shrinks with the zoom setting like everything else.
+/// Badges and counters inside small shapes.
+pub const TINY_TEXT: f32 = 10.0;
+/// Notes, hints and second lines.
+pub const SMALL_TEXT: f32 = 12.0;
+/// Rows, controls and menu items: most text.
+pub const BODY_TEXT: f32 = 13.5;
+/// Section headings.
+pub const SECTION_TEXT: f32 = 17.0;
+/// Dialog and panel titles.
+pub const HEADING_TEXT: f32 = 20.0;
+/// Page titles.
+pub const TITLE_TEXT: f32 = 28.0;
+
+/// The height every button, chip and slider row shares.
+pub const CONTROL_HEIGHT: f32 = 28.0;
+/// The roundness every button, chip and slider row shares.
+pub const CONTROL_RADIUS: u8 = 8;
+
 pub const RADIUS: u8 = 8;
 pub const RADIUS_SMALL: u8 = 4;
 pub const ROW_HEIGHT: f32 = 56.0;
@@ -570,6 +590,8 @@ fastframe_icons::icons! {
         Disc => "disc-3",
         Ellipsis => lucide "ellipsis",
         Expand => "expand",
+        Eye => lucide "eye",
+        EyeOff => lucide "eye-off",
         ExternalLink => lucide "external-link",
         Gamepad => "gamepad-2",
         Globe => "globe",
@@ -820,15 +842,15 @@ pub fn circle_spinner(
 
 /// A pill-shaped text button: filled for the primary action, outlined otherwise.
 pub fn pill_button(ui: &mut egui::Ui, palette: &Palette, label: &str, primary: bool) -> Response {
-    let font = semibold(13.0);
+    let font = semibold(BODY_TEXT);
     let color = if primary {
         palette.on_accent
     } else {
         palette.text
     };
     let galley = ui.painter().layout_no_wrap(label.to_string(), font, color);
-    let padding = Vec2::new(18.0, 8.0);
-    let size = galley.size() + padding * 2.0;
+    let padding = Vec2::new(16.0, 6.0);
+    let size = (galley.size() + padding * 2.0).max(Vec2::new(0.0, CONTROL_HEIGHT));
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
@@ -884,7 +906,7 @@ pub fn soft_button_dismiss(
 /// The width `soft_button` gives a button without an icon, for laying out
 /// a row of them before drawing it.
 pub fn soft_button_width(ui: &egui::Ui, label: &str) -> f32 {
-    let galley = crate::bidi::layout_line(ui.painter(), label, medium(13.0), Color32::WHITE);
+    let galley = crate::bidi::layout_line(ui.painter(), label, medium(BODY_TEXT), Color32::WHITE);
     galley.size().x + 24.0
 }
 
@@ -910,7 +932,7 @@ pub fn soft_button_tall(
     height: f32,
 ) -> Response {
     let color = if active { palette.window } else { palette.text };
-    let galley = crate::bidi::layout_line(ui.painter(), label, medium(13.0), color);
+    let galley = crate::bidi::layout_line(ui.painter(), label, medium(BODY_TEXT), color);
     let size = Vec2::new(
         width.max(galley.size().x + 24.0),
         (galley.size().y + 14.0).max(height),
@@ -946,7 +968,7 @@ fn soft_button_inner(
     active: bool,
     dismissible: bool,
 ) -> (Response, bool) {
-    let font = medium(13.0);
+    let font = medium(BODY_TEXT);
     let color = if active { palette.window } else { palette.text };
     let galley = crate::bidi::layout_line(ui.painter(), label, font, color);
     let icon_size = 15.0;
@@ -1118,11 +1140,11 @@ pub fn link(
 }
 
 pub fn section_title(ui: &mut egui::Ui, palette: &Palette, label: &str) -> Response {
-    text(ui, label, bold(17.0), palette.text)
+    text(ui, label, bold(SECTION_TEXT), palette.text)
 }
 
 pub fn subtle(ui: &mut egui::Ui, palette: &Palette, label: &str) -> Response {
-    text(ui, label, regular(13.0), palette.secondary)
+    text(ui, label, regular(BODY_TEXT), palette.secondary)
 }
 
 /// One line explaining what the group under it is for.
@@ -1131,7 +1153,7 @@ pub fn subtle(ui: &mut egui::Ui, palette: &Palette, label: &str) -> Response {
 /// with a sentence under it tells them what the rows below it do, which is
 /// the difference between a list of options and a panel of settings.
 pub fn hint(ui: &mut egui::Ui, palette: &Palette, label: &str) -> Response {
-    ui.add(egui::Label::new(egui::RichText::new(label).size(11.5).color(palette.dim)).truncate())
+    ui.add(egui::Label::new(egui::RichText::new(label).size(SMALL_TEXT).color(palette.dim)).truncate())
 }
 
 #[cfg(test)]
@@ -1267,7 +1289,7 @@ mod tests {
             };
             let mut output = ctx.run_ui(input, |ui| {
                 rects.0 = pill_button(ui, &palette, "Play", true).rect;
-                rects.1 = link(ui, "Bonobo", regular(14.0), palette.text).rect;
+                rects.1 = link(ui, "Bonobo", regular(BODY_TEXT), palette.text).rect;
             });
             output.textures_delta.clear();
             (rects, output.platform_output.cursor_icon)
@@ -1310,7 +1332,7 @@ mod tests {
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             let galley = ui.painter().layout_no_wrap(
                 "Rosewood 🔥 Otomo 🎵 ❤️ 🚀".to_string(),
-                regular(14.0),
+                regular(BODY_TEXT),
                 Color32::WHITE,
             );
             assert!(galley.rows[0].glyphs.len() >= 5);
@@ -1345,7 +1367,7 @@ mod tests {
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             let galley = ui.painter().layout_no_wrap(
                 "Track 87: 恋におちて -Fall in love- (Live)".to_string(),
-                regular(14.0),
+                regular(BODY_TEXT),
                 Color32::WHITE,
             );
             assert!(!galley.rows.is_empty());

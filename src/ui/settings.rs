@@ -140,7 +140,7 @@ fn slider_value_style(style: &mut egui::Style, palette: &Palette) {
     }
     style
         .text_styles
-        .insert(egui::TextStyle::Button, theme::medium(13.0));
+        .insert(egui::TextStyle::Button, theme::medium(theme::BODY_TEXT));
     style.spacing.button_padding = Vec2::new(12.0, 6.0);
 }
 
@@ -187,11 +187,11 @@ const TABS: [&str; 6] = ["Accounts", "Playback", "Look", "Library", "Network", "
 fn tab_of(title: &str) -> Option<u8> {
     let title = title.to_lowercase();
     let has = |words: &[&str]| words.iter().any(|word| title.contains(word));
-    if has(&["account", "last.fm", "discord", "lights"]) {
+    if has(&["account", "last.fm", "discord"]) {
         Some(0)
     } else if has(&["playback", "equalizer"]) {
         Some(1)
-    } else if has(&["appearance", "song lists", "gradient", "lyrics", "app icon"]) {
+    } else if has(&["appearance", "song lists", "gradient", "app icon", "lights", "font"]) {
         Some(2)
     } else if has(&["storage", "unavailable"]) {
         Some(3)
@@ -238,7 +238,7 @@ fn section(
                 16.0,
                 palette.secondary,
             );
-            theme::text(ui, crate::i18n::ui_text(title), theme::bold(18.0), palette.text);
+            theme::text(ui, crate::i18n::ui_text(title), theme::bold(theme::SECTION_TEXT), palette.text);
         })
         .response;
     let head_click = ui
@@ -295,7 +295,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
     theme::text(
         ui,
         gettext(locale, "Settings"),
-        theme::bold(28.0),
+        theme::bold(theme::TITLE_TEXT),
         palette.text,
     );
     ui.add_space(4.0);
@@ -413,7 +413,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                             .as_ref()
                             .map(|user| user.name().to_string())
                             .unwrap_or_default();
-                        theme::text(ui, name, theme::semibold(16.0), palette.text);
+                        theme::text(ui, name, theme::semibold(theme::SECTION_TEXT), palette.text);
                         let product = app
                             .user
                             .as_ref()
@@ -427,7 +427,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                                 other => other.to_string(),
                             })
                             .unwrap_or_default();
-                        theme::text(ui, product, theme::regular(13.0), palette.secondary);
+                        theme::text(ui, product, theme::regular(theme::BODY_TEXT), palette.secondary);
                         if let Some(username) =
                             app.local.connected.then(|| app.local.username.clone())
                             && !username.is_empty()
@@ -437,7 +437,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                                 // Translators: {username} is the Spotify account's user name.
                                 gettext(locale, "Connected as {username}")
                                     .replace("{username}", &username),
-                                theme::regular(12.0),
+                                theme::regular(theme::SMALL_TEXT),
                                 palette.dim,
                             );
                         }
@@ -466,7 +466,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                                     egui::RichText::new(gettext(locale, "Client ID"))
                                         .color(palette.dim),
                                 )
-                                .font(theme::regular(13.0))
+                                .font(theme::regular(theme::BODY_TEXT))
                                 .frame(egui::Frame::NONE)
                                 .desired_width(200.0),
                         )
@@ -483,15 +483,6 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     let trimmed = client_id.trim().to_string();
                     app.settings.web_client_id = (!trimmed.is_empty()).then_some(trimmed);
                     changed = true;
-                }
-            });
-            filtered_row(ui, &palette, &needle, &account, &account_rows[1], |ui| {
-                if theme::pill_button(ui, &palette, &gettext(locale, "Setup guide"), false)
-                    .clicked()
-                {
-                    app.actions.push(Action::OpenUrl(
-                        "https://madlygeeked.github.io/chanceify/#setup".into(),
-                    ));
                 }
             });
             if in_use {
@@ -518,21 +509,75 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
             }
+            filtered_row(ui, &palette, &needle, &account, &account_rows[1], |ui| {
+                if theme::pill_button(ui, &palette, &gettext(locale, "Setup guide"), false)
+                    .clicked()
+                {
+                    app.actions.push(Action::OpenUrl(
+                        "https://madlygeeked.github.io/chanceify/#setup".into(),
+                    ));
+                }
+            });
             if needle.is_empty() && !in_use {
                 ui.add_space(8.0);
-                theme::text(ui, "How to connect your own Spotify app (Premium)", theme::semibold(13.0), palette.text);
-                for line in [
-                    "1. Open developer.spotify.com/dashboard and log in with your Spotify account.",
-                    "2. Press Create app. Any name and description will do.",
-                    "3. Under Redirect URIs add exactly: http://127.0.0.1:8989/login",
-                    "4. Tick Web API, accept the terms and press Save.",
-                    "5. Open the app's Settings and copy the Client ID. Paste it in the box above, then press Authorize.",
-                ] {
-                    note(ui, &palette, line);
-                }
-                if theme::soft_button(ui, &palette, Some(Icon::ExternalLink), "Open the Spotify dashboard", false).clicked() {
-                    app.actions.push(Action::OpenUrl("https://developer.spotify.com/dashboard".into()));
-                }
+                // Word for word the setup on the chanceify site, with the
+                // dashboard a link and the redirect address copied on a click.
+                theme::text(ui, "setup", theme::semibold(theme::BODY_TEXT), palette.text);
+                let body = |text: &str| {
+                    egui::RichText::new(text)
+                        .font(theme::regular(theme::BODY_TEXT))
+                        .color(palette.secondary)
+                };
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.label(body("1. open the "));
+                    let link = ui
+                        .add(
+                            egui::Label::new(
+                                egui::RichText::new("spotify developer dashboard")
+                                    .font(theme::regular(theme::BODY_TEXT))
+                                    .color(palette.accent)
+                                    .underline(),
+                            )
+                            .sense(egui::Sense::click()),
+                        )
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text("developer.spotify.com/dashboard");
+                    if link.clicked() {
+                        app.actions.push(Action::OpenUrl(
+                            "https://developer.spotify.com/dashboard".into(),
+                        ));
+                    }
+                    ui.label(body(" and sign in."));
+                });
+                note(ui, &palette, "2. create an app. any name.");
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.label(body("3. redirect uri: "));
+                    const REDIRECT: &str = "http://127.0.0.1:8989/login";
+                    let copy = ui
+                        .add(
+                            egui::Label::new(
+                                egui::RichText::new(REDIRECT)
+                                    .font(theme::regular(theme::BODY_TEXT))
+                                    .color(palette.text)
+                                    .background_color(palette.surface),
+                            )
+                            .sense(egui::Sense::click()),
+                        )
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text("click to copy");
+                    if copy.clicked() {
+                        ui.ctx().copy_text(REDIRECT.to_owned());
+                        app.toast("Copied");
+                    }
+                });
+                note(ui, &palette, "4. tick web api, save, copy the client id.");
+                note(
+                    ui,
+                    &palette,
+                    "5. in chanceify: settings, personal spotify app. paste it and authorize.",
+                );
             }
         });
     }
@@ -629,11 +674,11 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
             audio_cache.clone(),
             gettext(
                 locale,
-                "Keeps songs you have played on this computer, so replaying one never downloads it again. The slider is the most disk space it may use (2 GB holds roughly 400 songs). When it is full, the oldest songs are deleted. It lives in the chanceify folder beside the program.",
+                "Keeps songs you have played on this computer, so replaying one never downloads it again. The slider is the most disk space it may use (2 GB holds roughly 400 songs). When it is full, the oldest songs are deleted.",
             ),
         ),
         RowText::new(apply_playback.clone(), apply_playback_note.clone()).when(playback_dirty),
-        RowText::new(gettext(locale, "Playback settings applied"), "").when(!playback_dirty),
+        RowText::new(gettext(locale, "Playback settings applied"), "").when(false),
         RowText::new(
             download_updates.clone(),
             gettext(
@@ -674,7 +719,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                             ui,
                             locale,
                             egui::TextEdit::singleline(&mut app.settings.device_name)
-                                .font(theme::regular(14.0))
+                                .font(theme::regular(theme::BODY_TEXT))
                                 .frame(egui::Frame::NONE)
                                 .desired_width(200.0),
                         )
@@ -787,6 +832,35 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
             });
+            if needle.is_empty() || "crossfade between my own song files fade".contains(needle.as_str()) {
+                widgets::setting_row_sized(
+                    ui,
+                    &palette,
+                    "Crossfade between my own song files",
+                    "",
+                    330.0,
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            let current = app.settings.crossfade_secs;
+                            for seconds in [12u8, 8, 6, 4, 2, 0] {
+                                let label = if seconds == 0 {
+                                    "Off".to_string()
+                                } else {
+                                    format!("{seconds} s")
+                                };
+                                if theme::soft_button(ui, &palette, None, &label, current == seconds)
+                                    .clicked()
+                                    && current != seconds
+                                {
+                                    app.settings.crossfade_secs = seconds;
+                                    changed = true;
+                                }
+                            }
+                        });
+                    },
+                );
+            }
             #[cfg(windows)]
             filtered_row(ui, &palette, &needle, &playback, &playback_rows[9], |ui| {
                 ui.horizontal(|ui| {
@@ -862,51 +936,14 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     });
                 });
             }
-            if needle.is_empty() {
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    theme::text(
-                        ui,
-                        "Crossfade between my own song files",
-                        theme::regular(13.5),
-                        palette.text,
-                    );
-                    let current = app.settings.crossfade_secs;
-                    for seconds in [0u8, 2, 4, 6, 8, 12] {
-                        let label = if seconds == 0 {
-                            "Off".to_string()
-                        } else {
-                            format!("{seconds} s")
-                        };
-                        if theme::soft_button(ui, &palette, None, &label, current == seconds).clicked()
-                            && current != seconds
-                        {
-                            app.settings.crossfade_secs = seconds;
-                            changed = true;
-                        }
-                    }
-                });
-                theme::subtle(
-                    ui,
-                    &palette,
-                    "Only for songs from your own files. It starts with the next list you play.",
-                );
-            }
             ui.add_space(4.0);
-            if playback_dirty
-                || playback_rows[11].matches(&needle, &playback)
-                || playback_rows[12].matches(&needle, &playback)
-            {
+            if playback_dirty {
                 ui.horizontal(|ui| {
-                    if playback_dirty {
-                        if theme::pill_button(ui, &palette, &apply_playback, true).clicked() {
-                            app.actions.push(Action::RestartEngine);
-                            playback_dirty = false;
-                        }
-                        theme::subtle(ui, &palette, &apply_playback_note);
-                    } else {
-                        theme::subtle(ui, &palette, &gettext(locale, "Playback settings applied."));
+                    if theme::pill_button(ui, &palette, &apply_playback, true).clicked() {
+                        app.actions.push(Action::RestartEngine);
+                        playback_dirty = false;
                     }
+                    theme::subtle(ui, &palette, &apply_playback_note);
                 });
             }
         });
@@ -1008,7 +1045,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                                     if ui.color_edit_button_srgb(colour).changed() {
                                         picked = true;
                                     }
-                                    theme::text(ui, label, theme::regular(13.0), palette.secondary);
+                                    theme::text(ui, label, theme::regular(theme::BODY_TEXT), palette.secondary);
                                 });
                             }
                             if picked {
@@ -1017,7 +1054,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                         }
                         let mut solid = app.settings.window_solidity() * 100.0;
                         ui.horizontal(|ui| {
-                            theme::text(ui, "See-through window (works with every theme: 100% solid, 50% like frosted glass)", theme::regular(13.0), palette.secondary);
+                            theme::text(ui, "Transparency", theme::regular(theme::BODY_TEXT), palette.secondary);
                             if setting_slider(
                                 ui,
                                 &palette,
@@ -1219,29 +1256,8 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     app.actions.push(Action::ApplyEqPreset(picked));
                 }
                 ui.add_space(10.0);
-                eq_curve(ui, &palette, &crate::app::eq_settings(&app.settings));
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 14.0;
-                    let on = app.settings.eq_on;
-                    let mut preamp = app.settings.eq_preamp_db;
-                    if eq_slider(
-                        ui,
-                        &palette,
-                        // Translators: short label under the equalizer's preamplifier slider.
-                        &pgettext(locale, "equalizer", "Pre"),
-                        &mut preamp,
-                        on,
-                    ) {
-                        app.actions.push(Action::SetEqPreamp(preamp));
-                    }
-                    for (band, hz) in crate::eq::BANDS.iter().enumerate() {
-                        let mut gain = app.settings.eq_bands_db[band];
-                        if eq_slider(ui, &palette, &hertz(*hz), &mut gain, on) {
-                            app.actions.push(Action::SetEqBand(band, gain));
-                        }
-                    }
-                });
+                let width = ui.available_width().min(470.0);
+                eq_graph_and_sliders(app, ui, width);
             }
         });
     }
@@ -1293,7 +1309,6 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     app.actions.push(Action::ClearPlayHistory);
                 }
             });
-            note(ui, &palette, "Everything chanceify saves lives in the chanceify folder beside the program. Nothing is uploaded.");
         });
     }
 
@@ -1306,9 +1321,9 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
             ui.add(
                 egui::Label::new(
                     egui::RichText::new(
-                        "Songs in your playlists that Spotify has removed or that are not available where you are.\nFind them elsewhere before you remove them, so they are not lost.",
+                        "Find them elsewhere before you remove them, so they are not lost.",
                     )
-                    .font(theme::regular(13.0))
+                    .font(theme::regular(theme::BODY_TEXT))
                     .color(palette.secondary),
                 )
                 .wrap(),
@@ -1332,7 +1347,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                         theme::text(
                             ui,
                             format!("Scanning your playlists… {done} of {total}"),
-                            theme::regular(13.0),
+                            theme::regular(theme::BODY_TEXT),
                             palette.secondary,
                         );
                     }
@@ -1351,7 +1366,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                             theme::text(
                                 ui,
                                 format!("Last scan: {}", when.get(..10).unwrap_or(when)),
-                                theme::regular(12.5),
+                                theme::regular(theme::SMALL_TEXT),
                                 palette.dim,
                             );
                         }
@@ -1369,7 +1384,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     theme::text(
                         ui,
                         format!("{} songs are in a playlist twice or more", doubled.len()),
-                        theme::semibold(14.0),
+                        theme::semibold(theme::BODY_TEXT),
                         palette.text,
                     );
                     egui::ScrollArea::vertical()
@@ -1382,7 +1397,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                                     theme::text(
                                         ui,
                                         format!("{} - {} (x{}) in {}", dup.artists, dup.title, dup.copies, dup.playlist_name),
-                                        theme::regular(12.5),
+                                        theme::regular(theme::SMALL_TEXT),
                                         palette.secondary,
                                     );
                                     if theme::soft_button(ui, &palette, None, "Open", false).clicked() {
@@ -1397,7 +1412,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     theme::text(
                         ui,
                         format!("{} pairs of playlists hold mostly the same songs", same.len()),
-                        theme::semibold(14.0),
+                        theme::semibold(theme::BODY_TEXT),
                         palette.text,
                     );
                     egui::ScrollArea::vertical()
@@ -1410,7 +1425,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                                     theme::text(
                                         ui,
                                         format!("{} and {}: {} songs shared ({}%)", pair.a_name, pair.b_name, pair.shared, pair.percent),
-                                        theme::regular(12.5),
+                                        theme::regular(theme::SMALL_TEXT),
                                         palette.secondary,
                                     );
                                     if theme::soft_button(ui, &palette, None, "Open first", false).clicked() {
@@ -1430,7 +1445,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     theme::text(
                         ui,
                         "None found. Every song in your playlists can be played.",
-                        theme::regular(13.0),
+                        theme::regular(theme::BODY_TEXT),
                         palette.secondary,
                     );
                 }
@@ -1440,7 +1455,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
             theme::text(
                 ui,
                 format!("{} unavailable songs", entries.len()),
-                theme::semibold(14.0),
+                theme::semibold(theme::BODY_TEXT),
                 palette.text,
             );
             ui.add_space(4.0);
@@ -1458,7 +1473,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                 theme::text(
                     ui,
                     "Confirm removal",
-                    theme::regular(13.0),
+                    theme::regular(theme::BODY_TEXT),
                     palette.secondary,
                 );
                 let mut ask = app.settings.unavailable_confirm_one;
@@ -1484,7 +1499,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                             ui.add(
                                 egui::Label::new(
                                     egui::RichText::new(line)
-                                        .font(theme::medium(13.5))
+                                        .font(theme::medium(theme::BODY_TEXT))
                                         .color(palette.text),
                                 )
                                 .wrap(),
@@ -1494,7 +1509,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                             theme::text(
                                 ui,
                                 format!("in {} (#{})", entry.playlist_name, entry.position),
-                                theme::regular(12.0),
+                                theme::regular(theme::SMALL_TEXT),
                                 palette.secondary,
                             );
                             if entry.has_title() {
@@ -1513,7 +1528,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                                     uri: entry.uri.clone(),
                                 };
                                 if asking {
-                                    theme::text(ui, "Remove it?", theme::regular(12.0), palette.warning);
+                                    theme::text(ui, "Remove it?", theme::regular(theme::SMALL_TEXT), palette.warning);
                                     if theme::soft_button(ui, &palette, Some(Icon::Trash), "Yes", true).clicked() {
                                         app.actions.push(remove);
                                         ui.data_mut(|data| data.insert_temp(ask_id, false));
@@ -1544,7 +1559,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                             egui::RichText::new(format!(
                                 "Last check: remove all {removable} songs now? This cannot be undone."
                             ))
-                            .font(theme::semibold(13.0))
+                            .font(theme::semibold(theme::BODY_TEXT))
                             .color(palette.warning),
                         )
                         .wrap(),
@@ -1566,7 +1581,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                             egui::RichText::new(format!(
                                 "This takes {removable} songs out of every playlist they are in. Make sure you have found them elsewhere first."
                             ))
-                            .font(theme::regular(13.0))
+                            .font(theme::regular(theme::BODY_TEXT))
                             .color(palette.warning),
                         )
                         .wrap(),
@@ -1598,10 +1613,13 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
 
     let about = gettext(locale, "About");
     let source_code = gettext(locale, "Source code");
-    let about_rows = [RowText::new(
-        format!("{} {}", crate::build_info::DISPLAY_NAME, crate::build_info::version()),
-        source_code.clone(),
-    )];
+    let about_rows = [
+        RowText::new(
+            format!("{} {}", crate::build_info::DISPLAY_NAME, crate::build_info::DISPLAY_VERSION),
+            source_code.clone(),
+        ),
+        RowText::new("Start with your computer", "startup login automatically").when(cfg!(windows)),
+    ];
     if section_matches(&needle, &about, &about_rows) {
         any_visible = true;
         section(ui, &palette, &about, |ui| {
@@ -1614,16 +1632,24 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                         format!(
                             "{} {}",
                             crate::build_info::DISPLAY_NAME,
-                            crate::build_info::version()
+                            crate::build_info::DISPLAY_VERSION
                         ),
-                        theme::semibold(15.0),
+                        theme::semibold(theme::BODY_TEXT),
                         palette.text,
                     );
+                    if let Some(built) = crate::build_info::built_at() {
+                        theme::text(
+                            ui,
+                            format!("built {built} UTC"),
+                            theme::regular(theme::SMALL_TEXT),
+                            palette.dim,
+                        );
+                    }
                     if let Some(mb) = crate::util::memory_used_mb() {
                         theme::text(
                             ui,
                             format!("memory used: {mb} MB"),
-                            theme::regular(12.0),
+                            theme::regular(theme::SMALL_TEXT),
                             palette.dim,
                         );
                         ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
@@ -1631,13 +1657,25 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                 });
             });
             ui.add_space(8.0);
+            if cfg!(windows) {
+                let mut on = app.settings.start_with_computer;
+                if widgets::switch_labeled(ui, &palette, "Start with your computer", &mut on).changed() {
+                    if crate::util::set_start_with_computer(on) {
+                        app.settings.start_with_computer = on;
+                        app.settings.start_asked = true;
+                        app.mark_settings_dirty();
+                    } else {
+                        app.toast_error("Couldn't change the startup entry");
+                    }
+                }
+            }
             ui.add_space(8.0);
             ui.label(
                 egui::RichText::new(format!(
                     "Index folder: {}",
                     app.dirs.index_dir().display()
                 ))
-                .font(theme::regular(12.0))
+                .font(theme::regular(theme::SMALL_TEXT))
                 .color(palette.secondary),
             );
             ui.horizontal_wrapped(|ui| {
@@ -1726,26 +1764,6 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
         });
     }
 
-    if needle.is_empty() || "lyrics timestamps line size".contains(needle.as_str()) {
-        any_visible = true;
-        section(ui, &palette, "Lyrics", |ui| {
-            use crate::settings::Settings;
-            let mut stamps = !app.settings.side_lyrics_flag(Settings::LYRICS_HIDE_STAMPS);
-            if widgets::switch_labeled(ui, &palette, "Timestamps beside the lyrics", &mut stamps).changed() {
-                app.actions.push(Action::ToggleSideLyricsFlag(Settings::LYRICS_HIDE_STAMPS));
-            }
-            ui.horizontal(|ui| {
-                theme::subtle(ui, &palette, "Side lyrics size");
-                for (value, label) in [(1u8, "Smaller"), (0, "Normal"), (2, "Larger")] {
-                    if theme::pill_button(ui, &palette, label, app.settings.side_lyrics_size == value).clicked() {
-                        app.actions.push(Action::SetSideLyricsSize(value));
-                    }
-                }
-            });
-            ui.add_space(8.0);
-        });
-    }
-
     if cfg!(feature = "lights-feed") && (needle.is_empty() || "lights feed keyboard microphone led colours rgb".contains(needle.as_str())) {
         any_visible = true;
         section(ui, &palette, "Lights feed", |ui| {
@@ -1758,7 +1776,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
             note(ui, &palette, "Writes the colours on screen (cover colours, Auto drift, your swatch pick, gradient) to one small file, many times a second, so a keyboard or microphone light app can match them. Nothing goes over the network. Off by default; the file is removed when this is off.");
             ui.horizontal_wrapped(|ui| {
                 theme::subtle(ui, &palette, "File:");
-                ui.label(egui::RichText::new(path.display().to_string()).font(theme::regular(12.0)).color(palette.secondary));
+                ui.label(egui::RichText::new(path.display().to_string()).font(theme::regular(theme::SMALL_TEXT)).color(palette.secondary));
             });
             ui.add_space(8.0);
         });
@@ -1785,10 +1803,10 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                                 palette.secondary,
                             ),
                         };
-                        theme::text(ui, text, theme::regular(12.5), colour);
+                        theme::text(ui, text, theme::regular(theme::SMALL_TEXT), colour);
                         let problem = crate::discord::last_error();
                         if !problem.is_empty() {
-                            theme::text(ui, &problem, theme::regular(12.0), palette.warning);
+                            theme::text(ui, &problem, theme::regular(theme::SMALL_TEXT), palette.warning);
                         }
                         ui.ctx().request_repaint_after(std::time::Duration::from_secs(2));
                     }
@@ -1852,7 +1870,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                 ui.add_space(4.0);
             }
             if crate::lastfm::DEFAULT_API_KEY.is_empty() {
-                theme::text(ui, "Set up Last.fm in 4 steps", theme::semibold(13.0), palette.text);
+                theme::text(ui, "Set up Last.fm in 4 steps", theme::semibold(theme::BODY_TEXT), palette.text);
                 for line in [
                     "1. Open the Last.fm page below and sign in.",
                     "2. Type any name (chanceify) and a short description. Leave the callback box empty.",
@@ -1992,6 +2010,18 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                         app.settings.lastfm_art_auto = !app.settings.lastfm_art_auto;
                         app.mark_settings_dirty();
                     }
+                    let all_label = if app.settings.lastfm_art_all {
+                        "Save: every cover and picture"
+                    } else {
+                        "Save: only the ones Last.fm is missing"
+                    };
+                    if theme::soft_button(ui, &palette, None, all_label, app.settings.lastfm_art_all)
+                        .on_hover_text("Only missing: saves just what Last.fm lacks (to upload). Every: also keeps a copy of all the others.")
+                        .clicked()
+                    {
+                        app.settings.lastfm_art_all = !app.settings.lastfm_art_all;
+                        app.mark_settings_dirty();
+                    }
                     let sweep_label = if app.art_sweep { "Stop checking my library" } else { "Check my whole library" };
                     if theme::soft_button(ui, &palette, None, sweep_label, app.art_sweep)
                         .on_hover_text("Asks Last.fm about the picture of every album and artist you have saved, a few at a time. The ones it lacks go in the missing lists.")
@@ -2025,7 +2055,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
                     egui::RichText::new(
                         "A short guided tour that lights up parts of the window. Change the steps below; they are saved in your index folder (tour.json).",
                     )
-                    .font(theme::regular(13.0))
+                    .font(theme::regular(theme::BODY_TEXT))
                     .color(palette.secondary),
                 )
                 .wrap(),
@@ -2038,7 +2068,7 @@ fn show_inner(app: &mut App, ui: &mut egui::Ui) {
             for index in 0..count {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    theme::text(ui, format!("Step {}", index + 1), theme::semibold(13.0), palette.text);
+                    theme::text(ui, format!("Step {}", index + 1), theme::semibold(theme::BODY_TEXT), palette.text);
                     if index > 0 && theme::pill_button(ui, &palette, "Up", false).clicked() {
                         swap = Some((index, index - 1));
                     }
@@ -2144,6 +2174,7 @@ fn flag_picture(locale: crate::i18n::Locale) -> (&'static str, &'static [u8]) {
         L::Russian => ("bytes://flag-ru.png", include_bytes!("../../assets/flags/ru.png")),
         L::Italian => ("bytes://flag-it.png", include_bytes!("../../assets/flags/it.png")),
         L::Japanese => ("bytes://flag-jp.png", include_bytes!("../../assets/flags/jp.png")),
+        L::Korean => ("bytes://flag-kr.png", include_bytes!("../../assets/flags/kr.png")),
         L::ChineseSimplified => ("bytes://flag-cn.png", include_bytes!("../../assets/flags/cn.png")),
         L::ChineseTraditional => ("bytes://flag-tw.png", include_bytes!("../../assets/flags/tw.png")),
         L::Turkish => ("bytes://flag-tr.png", include_bytes!("../../assets/flags/tr.png")),
@@ -2209,22 +2240,90 @@ fn hertz(hz: f32) -> String {
     }
 }
 
-/// One vertical slider in the app's own style: the track filled from
-/// 0 dB, the handle in the middle when flat, a double-click to put it
-/// back there. Returns whether it moved.
 /// The equalizer, as a tab of the visualizer's settings (the volume bar no
 /// longer opens it): the switch, the presets, the curve, the preamp and the
 /// ten bands.
 pub(super) fn eq_panel(app: &mut App, ui: &mut egui::Ui) {
+    // Right-click anywhere on the equalizer: share codes to copy and paste.
+    let response = ui
+        .scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| eq_panel_body(app, ui))
+        .response;
+    let palette = app.palette;
+    egui::Popup::context_menu(&response)
+        .frame(widgets::menu_frame(&palette))
+        .show(|ui| {
+            widgets::fit_menu(ui, 320.0);
+            if widgets::menu_item(ui, &palette, Some(Icon::Copy), "Copy code for this curve") {
+                app.actions.push(Action::CopyEqCode(None));
+            }
+            let own: Vec<String> = app.settings.custom_eqs.iter().map(|(name, _)| name.clone()).collect();
+            for (index, name) in own.iter().enumerate() {
+                if widgets::menu_item(ui, &palette, Some(Icon::Copy), &format!("Copy code: {name}")) {
+                    app.actions.push(Action::CopyEqCode(Some(index)));
+                }
+            }
+            widgets::menu_separator(ui, &palette);
+            if widgets::menu_item(ui, &palette, Some(Icon::ListPlus), "Paste a code…") {
+                ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("eq-code-open"), true));
+            }
+        });
+    // The paste box, under the equalizer while it is open.
+    let open_id = egui::Id::new("eq-code-open");
+    if ui.ctx().data(|data| data.get_temp::<bool>(open_id)).unwrap_or(false) {
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let id = egui::Id::new("eq-code-text");
+            let mut text = ui.data(|data| data.get_temp::<String>(id)).unwrap_or_default();
+            let field = egui::TextEdit::singleline(&mut text)
+                .hint_text("Paste a CEQ: code")
+                .desired_width(260.0)
+                .show(ui)
+                .response;
+            let enter = field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            if theme::soft_button(ui, &palette, None, "Add", false).clicked() || enter {
+                app.actions.push(Action::ImportEqCode(text.clone()));
+                text.clear();
+                ui.ctx().data_mut(|data| data.insert_temp(open_id, false));
+            }
+            if theme::soft_button(ui, &palette, None, "Cancel", false).clicked() {
+                text.clear();
+                ui.ctx().data_mut(|data| data.insert_temp(open_id, false));
+            }
+            ui.data_mut(|data| data.insert_temp(id, text));
+        });
+    }
+}
+
+fn eq_panel_body(app: &mut App, ui: &mut egui::Ui) {
+    ui.set_width(470.0);
+    let width = ui.available_width().min(470.0);
+    ui.spacing_mut().item_spacing.y = 6.0;
+    eq_controls(app, ui);
+    if !app.settings.eq_hide_defaults {
+        eq_presets(app, ui);
+    }
+    eq_custom_curves(app, ui);
+    eq_save_field(app, ui);
+    ui.add_space(2.0);
+    eq_graph_and_sliders(app, ui, width);
+}
+
+/// The top row: the switch, the curves file, and whether the built-in
+/// presets are listed.
+fn eq_controls(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let locale = app.locale;
-    ui.set_width(470.0);
-    let mut on = app.settings.eq_on;
-    ui.horizontal_wrapped(|ui| {
+    ui.horizontal(|ui| {
+        ui.set_min_height(theme::CONTROL_HEIGHT);
         ui.spacing_mut().item_spacing.x = 8.0;
-        if widgets::switch(ui, &palette, &gettext(locale, "On"), &mut on).changed() {
+        let label = gettext(locale, "On");
+        let mut on = app.settings.eq_on;
+        if widgets::switch(ui, &palette, &label, &mut on).changed() {
             app.actions.push(Action::ToggleEq);
         }
+        theme::text(ui, label, theme::regular(theme::BODY_TEXT), palette.text);
+        ui.add_space(8.0);
         if theme::soft_button(ui, &palette, None, "Export", false)
             .on_hover_text("Save your own curves to eq-presets.txt in the index settings folder, and copy them")
             .clicked()
@@ -2237,189 +2336,375 @@ pub(super) fn eq_panel(app: &mut App, ui: &mut egui::Ui) {
         {
             app.actions.push(Action::ImportEq);
         }
-        let mut hide = app.settings.eq_hide_defaults;
-        if widgets::switch(ui, &palette, "Hide defaults", &mut hide).changed() {
-            app.actions.push(Action::ToggleEqHideDefaults);
-        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            theme::text(ui, "Hide defaults", theme::regular(theme::BODY_TEXT), palette.text);
+            let mut hide = app.settings.eq_hide_defaults;
+            if widgets::switch(ui, &palette, "Hide defaults", &mut hide)
+                .on_hover_text("Leave the built-in presets out and list only your own curves")
+                .changed()
+            {
+                app.actions.push(Action::ToggleEqHideDefaults);
+            }
+        });
     });
-    ui.add_space(6.0);
-    if !app.settings.eq_hide_defaults {
-        let names: Vec<(usize, &str)> = crate::eq::PRESETS
+}
+
+/// The built-in presets under their headings, each heading folding shut.
+fn eq_presets(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    let current = crate::eq::PRESETS
+        .iter()
+        .position(|preset| preset.bands_db == app.settings.eq_bands_db);
+    for group in crate::eq::PRESET_GROUPS {
+        let open = !app
+            .settings
+            .eq_closed_groups
             .iter()
-            .enumerate()
-            .map(|(index, preset)| (index, preset.name))
-            .collect();
-        let current = crate::eq::PRESETS
-            .iter()
-            .position(|preset| preset.bands_db == app.settings.eq_bands_db)
-            .unwrap_or(usize::MAX);
-        if let Some(picked) = widgets::chips(ui, &palette, &names, current) {
-            app.actions.push(Action::ApplyEqPreset(picked));
+            .any(|name| name == group.name);
+        // A folded heading still says which of its presets is in use.
+        let in_use = current
+            .map(|index| crate::eq::PRESETS[index].name)
+            .filter(|name| group.presets.contains(name));
+        if eq_group_heading(ui, &palette, group.name, open, in_use) {
+            app.actions.push(Action::ToggleEqGroup(group.name));
+        }
+        if open {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                for name in group.presets {
+                    let Some(index) = crate::eq::preset_index(name) else {
+                        continue;
+                    };
+                    if theme::soft_button(ui, &palette, None, name, current == Some(index)).clicked() {
+                        app.actions.push(Action::ApplyEqPreset(index));
+                    }
+                }
+            });
         }
     }
-    // The reader's own curves: click to use, x to remove.
-    if !app.settings.custom_eqs.is_empty() {
-        ui.add_space(4.0);
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            let mut apply = None;
-            let mut remove = None;
-            for (index, (name, bands)) in app.settings.custom_eqs.iter().enumerate() {
-                let active = *bands == app.settings.eq_bands_db;
+}
+
+/// A small heading over a group of presets, with the chevron that says
+/// whether it is open. Returns whether it was clicked.
+fn eq_group_heading(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    label: &str,
+    open: bool,
+    in_use: Option<&str>,
+) -> bool {
+    let row = ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let chevron = if open { Icon::ChevronDown } else { Icon::ChevronRight };
+        theme::icon(ui, chevron, 14.0, palette.secondary);
+        theme::subtle(ui, palette, label);
+        if !open && let Some(name) = in_use {
+            ui.add_space(4.0);
+            theme::text(ui, name, theme::regular(theme::SMALL_TEXT), palette.accent);
+        }
+    });
+    // Over the words, so the whole heading is the button.
+    ui.interact(
+        row.response.rect,
+        egui::Id::new(("eq-group", label)),
+        egui::Sense::click(),
+    )
+    .on_hover_cursor(egui::CursorIcon::PointingHand)
+    .clicked()
+}
+
+/// The reader's own curves, always listed: click one to use it. The pencil
+/// shows the arrows that move a curve and the cross that removes it.
+fn eq_custom_curves(app: &mut App, ui: &mut egui::Ui) {
+    if app.settings.custom_eqs.is_empty() {
+        return;
+    }
+    let palette = app.palette;
+    let edit_id = egui::Id::new("eq-edit-curves");
+    let mut editing = ui.data(|data| data.get_temp::<bool>(edit_id)).unwrap_or(false);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        theme::subtle(ui, &palette, "Your curves");
+        let label = if editing { "Done" } else { "Edit" };
+        if theme::soft_button(ui, &palette, Some(Icon::Pencil), label, editing)
+            .on_hover_text("Reorder or remove your curves")
+            .clicked()
+        {
+            editing = !editing;
+        }
+    });
+    ui.data_mut(|data| data.insert_temp(edit_id, editing));
+    let count = app.settings.custom_eqs.len();
+    let mut apply = None;
+    let mut remove = None;
+    let mut shift = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+        for (index, (name, bands)) in app.settings.custom_eqs.iter().enumerate() {
+            let active = *bands == app.settings.eq_bands_db;
+            if !editing {
                 if theme::soft_button(ui, &palette, None, name, active).clicked() {
                     apply = Some(index);
                 }
-                if theme::soft_button(ui, &palette, None, "\u{d7}", false)
-                    .on_hover_text("Remove this curve")
-                    .clicked()
-                {
+                continue;
+            }
+            // One block per curve, sized up front, so a wrap never parts a
+            // curve from its arrows.
+            let arrow = 14.0 + 12.0;
+            let size = egui::vec2(
+                theme::soft_button_width(ui, name) + 3.0 * arrow + 3.0 * 2.0,
+                theme::CONTROL_HEIGHT + 4.0,
+            );
+            ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                let left = ui
+                    .add_enabled_ui(index > 0, |ui| {
+                        theme::icon_button(ui, Icon::ChevronLeft, 14.0, palette.secondary, palette.text, "Move left")
+                    })
+                    .inner;
+                if left.clicked() {
+                    shift = Some((index, index.saturating_sub(1)));
+                }
+                if theme::soft_button(ui, &palette, None, name, active).clicked() {
+                    apply = Some(index);
+                }
+                let right = ui
+                    .add_enabled_ui(index + 1 < count, |ui| {
+                        theme::icon_button(ui, Icon::ChevronRight, 14.0, palette.secondary, palette.text, "Move right")
+                    })
+                    .inner;
+                if right.clicked() {
+                    shift = Some((index, index + 1));
+                }
+                if theme::icon_button(ui, Icon::X, 14.0, palette.secondary, palette.warning, "Remove this curve").clicked() {
                     remove = Some(index);
                 }
-                ui.add_space(6.0);
-            }
-            if let Some(index) = apply {
-                app.actions.push(Action::ApplyCustomEq(index));
-            }
-            if let Some(index) = remove {
-                app.actions.push(Action::RemoveCustomEq(index));
-            }
-        });
+            });
+        }
+    });
+    if let Some(index) = apply {
+        app.actions.push(Action::ApplyCustomEq(index));
     }
-    ui.add_space(6.0);
+    if let Some((from, to)) = shift {
+        app.actions.push(Action::MoveCustomEq(from, to));
+    }
+    if let Some(index) = remove {
+        app.actions.push(Action::RemoveCustomEq(index));
+    }
+}
+
+/// The field that keeps the curve in use under a name.
+fn eq_save_field(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         let id = egui::Id::new("eq-save-name");
         let mut name = ui.data(|data| data.get_temp::<String>(id)).unwrap_or_default();
-        egui::TextEdit::singleline(&mut name)
+        let field = egui::TextEdit::singleline(&mut name)
             .hint_text("Name this curve")
             .desired_width(180.0)
-            .show(ui);
-        if theme::soft_button(ui, &palette, None, "Save curve", false).clicked() {
+            .show(ui)
+            .response;
+        let enter = field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+        if (theme::soft_button(ui, &palette, None, "Save curve", false).clicked() || enter)
+            && !name.trim().is_empty()
+        {
             app.actions.push(Action::SaveCustomEq(name.clone()));
             name.clear();
         }
         ui.data_mut(|data| data.insert_temp(id, name));
     });
-    ui.add_space(8.0);
-    eq_curve(ui, &palette, &crate::app::eq_settings(&app.settings));
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
-        let on = app.settings.eq_on;
-        let mut preamp = app.settings.eq_preamp_db;
-        if eq_slider(ui, &palette, &pgettext(locale, "equalizer", "Pre"), &mut preamp, on) {
-            app.actions.push(Action::SetEqPreamp(preamp));
-        }
-        for (band, hz) in crate::eq::BANDS.iter().enumerate() {
-            let mut gain = app.settings.eq_bands_db[band];
-            if eq_slider(ui, &palette, &hertz(*hz), &mut gain, on) {
-                app.actions.push(Action::SetEqBand(band, gain));
-            }
-        }
-    });
 }
 
-fn eq_slider(ui: &mut egui::Ui, palette: &Palette, label: &str, value: &mut f32, on: bool) -> bool {
-    use egui::{Rect, Stroke, pos2, vec2};
+/// The gap between the equalizer's columns.
+const EQ_GAP: f32 = 6.0;
+
+/// Column `index` of the equalizer's row, `width` wide from `row`'s left:
+/// 0 is the preamp, 1 to 10 the bands. The curve and the sliders share
+/// these, so each band's point on the curve sits over its slider.
+fn eq_column(row: egui::Rect, index: usize) -> egui::Rect {
+    let pitch = (row.width() + EQ_GAP) / 11.0;
+    let left = row.left() + index as f32 * pitch;
+    egui::Rect::from_x_y_ranges(left..=left + pitch - EQ_GAP, row.y_range())
+}
+
+/// The curve over the preamp and the ten bands, both exactly `width` wide.
+fn eq_graph_and_sliders(app: &mut App, ui: &mut egui::Ui, width: f32) {
+    let palette = app.palette;
+    let locale = app.locale;
+    let on = app.settings.eq_on;
+    eq_curve(ui, &palette, &crate::app::eq_settings(&app.settings), width);
+    let (row, _) = ui.allocate_exact_size(egui::vec2(width, 104.0), egui::Sense::hover());
+    // Translators: short label under the equalizer's preamplifier slider.
+    let pre = pgettext(locale, "equalizer", "Pre");
+    let mut preamp = app.settings.eq_preamp_db;
+    if eq_slider(ui, &palette, eq_column(row, 0), egui::Id::new("eq-slider-pre"), &pre, &mut preamp, on) {
+        app.actions.push(Action::SetEqPreamp(preamp));
+    }
+    for (band, hz) in crate::eq::BANDS.iter().enumerate() {
+        let mut gain = app.settings.eq_bands_db[band];
+        let id = egui::Id::new(("eq-slider", band));
+        if eq_slider(ui, &palette, eq_column(row, band + 1), id, &hertz(*hz), &mut gain, on) {
+            app.actions.push(Action::SetEqBand(band, gain));
+        }
+    }
+}
+
+/// One vertical slider in the app's own style, in `rect` with its label
+/// along the bottom: the track filled from 0 dB, the handle in the middle
+/// when flat, a double-click to put it back there. Returns whether it moved.
+fn eq_slider(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    rect: egui::Rect,
+    id: egui::Id,
+    label: &str,
+    value: &mut f32,
+    on: bool,
+) -> bool {
+    use egui::{Rect, Stroke, pos2};
     let range = crate::eq::RANGE_DB;
-    ui.vertical(|ui| {
-        let (rect, response) =
-            ui.allocate_exact_size(vec2(30.0, 118.0), egui::Sense::click_and_drag());
-        let track = Rect::from_center_size(rect.center(), vec2(4.0, rect.height() - 20.0));
-        let y_of = |db: f32| track.bottom() - (db + range) / (2.0 * range) * track.height();
-        let mut changed = false;
-        if response.double_clicked() {
-            *value = 0.0;
+    let response = ui.interact(rect, id, egui::Sense::click_and_drag());
+    let label_height = 16.0;
+    let track = Rect::from_min_max(
+        pos2(rect.center().x - 2.0, rect.top() + 10.0),
+        pos2(rect.center().x + 2.0, rect.bottom() - label_height - 8.0),
+    );
+    let y_of = |db: f32| track.bottom() - (db + range) / (2.0 * range) * track.height();
+    let mut changed = false;
+    if response.double_clicked() {
+        *value = 0.0;
+        changed = true;
+    } else if (response.dragged() || response.clicked())
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        let db = (track.bottom() - pos.y) / track.height() * 2.0 * range - range;
+        let db = (db.clamp(-range, range) * 10.0).round() / 10.0;
+        if db != *value {
+            *value = db;
             changed = true;
-        } else if (response.dragged() || response.clicked())
-            && let Some(pos) = response.interact_pointer_pos()
-        {
-            let db = (track.bottom() - pos.y) / track.height() * 2.0 * range - range;
-            let db = (db.clamp(-range, range) * 10.0).round() / 10.0;
-            if db != *value {
-                *value = db;
-                changed = true;
-            }
         }
-        if ui.is_rect_visible(rect) {
-            let painter = ui.painter();
-            painter.rect_filled(track, 2.0, palette.surface_active);
-            let fill = if on { palette.accent } else { palette.dim };
-            let (top, bottom) = (y_of(value.max(0.0)), y_of(value.min(0.0)));
-            painter.rect_filled(
-                Rect::from_min_max(pos2(track.left(), top), pos2(track.right(), bottom)),
-                2.0,
-                fill,
+    }
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        painter.rect_filled(track, 2.0, palette.surface_active);
+        let fill = if on { palette.accent } else { palette.dim };
+        let (top, bottom) = (y_of(value.max(0.0)), y_of(value.min(0.0)));
+        painter.rect_filled(
+            Rect::from_min_max(pos2(track.left(), top), pos2(track.right(), bottom)),
+            2.0,
+            fill,
+        );
+        painter.hline(
+            (track.left() - 3.0)..=(track.right() + 3.0),
+            y_of(0.0),
+            Stroke::new(1.0, palette.dim),
+        );
+        let handle = pos2(track.center().x, y_of(*value));
+        painter.circle_filled(handle, 7.0, palette.text);
+        if response.hovered() || response.dragged() {
+            painter.text(
+                pos2(track.center().x, rect.top() - 2.0),
+                egui::Align2::CENTER_TOP,
+                format!("{value:+.1}"),
+                theme::regular(theme::SMALL_TEXT),
+                palette.secondary,
             );
-            painter.hline(
-                (track.left() - 3.0)..=(track.right() + 3.0),
-                y_of(0.0),
-                Stroke::new(1.0, palette.dim),
-            );
-            let handle = pos2(track.center().x, y_of(*value));
-            painter.circle_filled(handle, 7.0, palette.text);
-            if response.hovered() || response.dragged() {
-                painter.text(
-                    pos2(track.center().x, rect.top() + 2.0),
-                    egui::Align2::CENTER_TOP,
-                    format!("{value:+.1}"),
-                    theme::regular(11.0),
-                    palette.secondary,
-                );
-            }
         }
-        theme::text(ui, label, theme::regular(11.5), palette.secondary);
-        changed
-    })
-    .inner
+        painter.text(
+            pos2(rect.center().x, rect.bottom()),
+            egui::Align2::CENTER_BOTTOM,
+            label,
+            theme::regular(theme::SMALL_TEXT),
+            palette.secondary,
+        );
+    }
+    changed
 }
 
-/// The equalizer's response over the audible range, the bands marked on
-/// it: the shape says what a row of numbers cannot.
-fn eq_curve(ui: &mut egui::Ui, palette: &Palette, settings: &crate::eq::EqSettings) {
+/// The equalizer's response over the audible range, `width` wide, the
+/// bands marked on it over their sliders (see [`eq_column`]); the first
+/// column holds the preamp's level. The shape says what a row of numbers
+/// cannot.
+fn eq_curve(ui: &mut egui::Ui, palette: &Palette, settings: &crate::eq::EqSettings, width: f32) {
     use egui::{Shape, Stroke, pos2, vec2};
-    // The width of the panel's own column, never what the page around it
-    // happens to offer (that ran past the window's right edge).
-    let width = ui.available_width().min(470.0);
-    let (rect, _) = ui.allocate_exact_size(vec2(width, 120.0), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(width, 96.0), egui::Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
     let painter = ui.painter();
     painter.rect_filled(rect, theme::RADIUS as f32, palette.surface);
-    let plot = rect.shrink2(vec2(10.0, 12.0));
-    let (low, high) = (20f32.log10(), 20_000f32.log10());
-    let x_of = |hz: f32| plot.left() + (hz.log10() - low) / (high - low) * plot.width();
+    let (top, bottom) = (rect.top() + 10.0, rect.bottom() - 10.0);
     let y_of = |db: f32| {
-        plot.center().y
+        (top + bottom) / 2.0
             - db.clamp(-crate::eq::RANGE_DB, crate::eq::RANGE_DB) / crate::eq::RANGE_DB
-                * plot.height()
+                * (bottom - top)
                 / 2.0
     };
-    for db in [-12.0, -6.0, 0.0, 6.0, 12.0] {
-        let color = if db == 0.0 {
-            palette.dim
-        } else {
-            palette.outline
-        };
-        painter.hline(plot.x_range(), y_of(db), Stroke::new(1.0, color));
-    }
-    for hz in crate::eq::BANDS {
-        painter.vline(x_of(hz), plot.y_range(), Stroke::new(1.0, palette.outline));
-    }
-    let curve = settings.curve();
-    let points: Vec<egui::Pos2> = (0..=240)
-        .map(|step| {
-            let t = step as f32 / 240.0;
-            let hz = 10f32.powf(low + t * (high - low));
-            pos2(plot.left() + t * plot.width(), y_of(curve.db_at(hz)))
-        })
-        .collect();
+    let pre = eq_column(rect, 0);
+    let first = eq_column(rect, 1);
+    let last = eq_column(rect, 10);
     let color = if settings.on {
         palette.accent
     } else {
         palette.dim
     };
+    // The grid, over the bands' columns.
+    for db in [-12.0, -6.0, 0.0, 6.0, 12.0] {
+        let line = if db == 0.0 {
+            palette.dim
+        } else {
+            palette.outline
+        };
+        painter.hline(first.left()..=last.right(), y_of(db), Stroke::new(1.0, line));
+    }
+    for band in 1..=10 {
+        painter.vline(
+            eq_column(rect, band).center().x,
+            top..=bottom,
+            Stroke::new(1.0, palette.outline),
+        );
+    }
+    // The preamp's column: its level as a short bar over its 0 dB mark.
+    let divider = (pre.right() + first.left()) / 2.0;
+    painter.vline(divider, top..=bottom, Stroke::new(1.0, palette.outline));
+    let half = (pre.width() / 2.0 - 4.0).max(4.0);
+    painter.hline(
+        (pre.center().x - half)..=(pre.center().x + half),
+        y_of(0.0),
+        Stroke::new(1.0, palette.dim),
+    );
+    painter.hline(
+        (pre.center().x - half)..=(pre.center().x + half),
+        y_of(settings.preamp_db),
+        Stroke::new(2.0, color),
+    );
+    // The response, in pieces between the band centres: the space between
+    // two columns is the octaves between their bands, so the curve meets
+    // each band over its slider. It runs on to 20 Hz and 20 kHz at the ends.
+    let mut knots: Vec<(f32, f32)> = vec![(20.0, first.left())];
+    for (band, hz) in crate::eq::BANDS.iter().enumerate() {
+        knots.push((*hz, eq_column(rect, band + 1).center().x));
+    }
+    knots.push((20_000.0, last.right()));
+    let curve = settings.curve();
+    let steps = 16;
+    let mut points = Vec::with_capacity(knots.len() * steps);
+    for pair in knots.windows(2) {
+        let ((from_hz, from_x), (to_hz, to_x)) = (pair[0], pair[1]);
+        let (from_log, to_log) = (from_hz.log2(), to_hz.log2());
+        for step in 0..steps {
+            let t = step as f32 / steps as f32;
+            let hz = (from_log + t * (to_log - from_log)).exp2();
+            points.push(pos2(from_x + t * (to_x - from_x), y_of(curve.db_at(hz))));
+        }
+    }
+    points.push(pos2(last.right(), y_of(curve.db_at(20_000.0))));
     painter.add(Shape::line(points, Stroke::new(2.0, color)));
-    for (hz, db) in crate::eq::BANDS.iter().zip(settings.bands_db) {
-        painter.circle_filled(pos2(x_of(*hz), y_of(db + settings.preamp_db)), 3.0, color);
+    for (band, db) in settings.bands_db.iter().enumerate() {
+        let x = eq_column(rect, band + 1).center().x;
+        painter.circle_filled(pos2(x, y_of(db + settings.preamp_db)), 3.0, color);
     }
 }
 
@@ -2537,7 +2822,7 @@ fn note(ui: &mut egui::Ui, palette: &Palette, text: &str) {
     ui.add(
         egui::Label::new(
             egui::RichText::new(text)
-                .font(theme::regular(13.0))
+                .font(theme::regular(theme::BODY_TEXT))
                 .color(palette.secondary),
         )
         .wrap(),
@@ -2603,7 +2888,7 @@ fn missing_lists(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
             format!("Missing album covers ({})", names.len())
         };
         let folder = root.join(if artists { "artists-missing" } else { "albums-missing" });
-        egui::CollapsingHeader::new(egui::RichText::new(title).font(theme::semibold(13.5)).color(palette.text))
+        egui::CollapsingHeader::new(egui::RichText::new(title).font(theme::semibold(theme::BODY_TEXT)).color(palette.text))
             .id_salt(("missing-fold", artists))
             .default_open(false)
             .show(ui, |ui| {
@@ -2661,7 +2946,7 @@ fn missing_lists(ui: &mut egui::Ui, app: &mut App, palette: &Palette) {
                             ui.add(
                                 egui::Label::new(
                                     egui::RichText::new(name.as_str())
-                                        .font(theme::regular(13.0))
+                                        .font(theme::regular(theme::BODY_TEXT))
                                         .color(palette.text),
                                 )
                                 .truncate(),
@@ -2792,7 +3077,7 @@ fn theme_grid(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette)
                 pos2(rect.left() + 2.0, rect.bottom() - 14.0),
                 egui::Align2::LEFT_CENTER,
                 name.replace(" (light)", "").replace(" (see-through)", ""),
-                theme::regular(12.0),
+                theme::regular(theme::SMALL_TEXT),
                 if current { palette.accent } else { palette.text },
             );
             if response.hovered() {

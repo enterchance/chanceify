@@ -147,7 +147,7 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
             ui.set_width(width);
             ui.spacing_mut().item_spacing.y = 6.0;
             ui.add_space(cover_size * 0.08);
-            theme::text(ui, hero.kind.as_ref(), theme::medium(12.5), text_main);
+            theme::text(ui, hero.kind.as_ref(), theme::medium(theme::SMALL_TEXT), text_main);
             let mut size = if cover_size > 200.0 {
                 56.0
             } else if cover_size > 130.0 {
@@ -200,7 +200,7 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
                 theme::text(
                     ui,
                     description.as_str(),
-                    theme::regular(13.5),
+                    theme::regular(theme::BODY_TEXT),
                     text_soft,
                 );
             }
@@ -208,17 +208,17 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 for (index, (text, page)) in hero.byline.iter().enumerate() {
                     if index > 0 {
-                        theme::text(ui, "•", theme::regular(13.5), text_soft);
+                        theme::text(ui, "•", theme::regular(theme::BODY_TEXT), text_soft);
                     }
                     match page {
                         Some(page) => {
-                            if theme::link(ui, text, theme::semibold(13.5), text_main).clicked()
+                            if theme::link(ui, text, theme::semibold(theme::BODY_TEXT), text_main).clicked()
                             {
                                 app.actions.push(Action::Open(page.clone()));
                             }
                         }
                         None => {
-                            theme::text(ui, text, theme::regular(13.5), text_soft);
+                            theme::text(ui, text, theme::regular(theme::BODY_TEXT), text_soft);
                         }
                     }
                 }
@@ -343,8 +343,13 @@ pub fn actions_row(
             let is_filtered = filter.as_ref().is_some_and(|f| !f.trim().is_empty());
             // A radio is mixed afresh each time Spotify is asked, so it
             // always plays the songs on screen.
+            // A playlist with hidden songs plays the songs on screen too.
+            let plays_shown_rows = app.has_hidden_in(uri);
             let play_view = actions.view.is_some()
-                && (!app.playing_context_shuffle() || is_filtered || actions.save_radio.is_some());
+                && (!app.playing_context_shuffle()
+                    || is_filtered
+                    || actions.save_radio.is_some()
+                    || plays_shown_rows);
             let can_start = actions.view.as_ref().is_none_or(|uris| !uris.is_empty());
             let icon = if now_playing_here {
                 Icon::PauseFilled
@@ -518,8 +523,7 @@ pub fn actions_row(
                 .show(|ui| {
                     if let Some(seed) = &actions.save_radio {
                         // As narrow as every other item menu.
-                        ui.set_min_width(200.0);
-                        ui.set_max_width(300.0);
+                        widgets::fit_menu(ui, 300.0);
                         if widgets::menu_item(
                             ui,
                             &palette,
@@ -620,6 +624,8 @@ pub struct TableCache {
     /// as answers land rather than staying in whatever order the partial
     /// set put it in.
     pub bpms_revision: u64,
+    /// Whether your Last.fm play counts had arrived when this was built.
+    pub plays_loaded: bool,
     pub visible: Arc<[usize]>,
     pub view_uris: Option<Arc<[String]>>,
     /// Playback positions for visible rows; unavailable rows have no position.
@@ -711,6 +717,12 @@ pub fn prepare_table_view(
     let cache_id = egui::Id::new("table-view-cache").with(page);
     let cached = ui.data(|d| d.get_temp::<Arc<TableCache>>(cache_id));
     let membership = Some(&app.library.membership);
+    // Some of the playlist's songs are hidden here: playback follows the
+    // rows on screen, which leave them out.
+    let plays_shown_rows = match page {
+        Page::Playlist(id) => app.has_hidden_in(&format!("spotify:playlist:{id}")),
+        _ => false,
+    };
     // The playlist being read is in every one of its songs, so it is left
     // out of the playlist sort: as a key it would be the same for all of
     // them and say nothing.
@@ -719,6 +731,10 @@ pub fn prepare_table_view(
         _ => None,
     };
 
+    // A list saved sorted by your plays asks Last.fm for them once.
+    if sort.is_some_and(|sort| sort.uses(SortColumn::Plays)) && !crate::lastfm::plays_loaded() {
+        app.lastfm.top_tracks();
+    }
     let is_valid = cached.as_ref().is_some_and(|c| {
         c.sort.as_ref() == sort
             && c.needle == needle
@@ -728,6 +744,7 @@ pub fn prepare_table_view(
             // A tempo arriving can change the order of a list sorted by it,
             // so the cache is stale the moment one does.
             && c.bpms_revision == app.bpms_revision
+            && c.plays_loaded == crate::lastfm::plays_loaded()
     });
 
     if let Some(entry) = cached.filter(|_| is_valid) {
@@ -735,8 +752,10 @@ pub fn prepare_table_view(
     } else {
         let visible = view_indices(items, needle, sort, membership, own, &app.bpms);
         let mut view_positions = Vec::new();
-        let view_uris =
-            (sort.is_some_and(|sort| !sort.is_empty()) || !needle.is_empty()).then(|| {
+        let view_uris = (sort.is_some_and(|sort| !sort.is_empty())
+            || !needle.is_empty()
+            || plays_shown_rows)
+            .then(|| {
                 let mut uris = Vec::new();
                 for &index in &visible {
                     let item = &items[index].0;
@@ -754,6 +773,7 @@ pub fn prepare_table_view(
             items_revision,
             user_names_revision: app.user_names_revision,
             bpms_revision: app.bpms_revision,
+            plays_loaded: crate::lastfm::plays_loaded(),
             membership_scanned: membership.map_or(0, |index| index.scanned()),
             visible: visible.into(),
             view_uris,
@@ -1016,6 +1036,7 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
         .filter(|(item, _, _)| !item.uri().is_empty())
         .map(|(item, _, _)| item.clone())
         .collect();
+    let picked_positions = picked_positions(&table, &picked, &item_index);
     let mut pick = None;
     let mut row_responses = Vec::new();
     let mut missing = None;
@@ -1075,7 +1096,7 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
                     badge.center(),
                     egui::Align2::CENTER_CENTER,
                     label,
-                    theme::regular(11.5),
+                    theme::regular(theme::SMALL_TEXT),
                     egui::Color32::WHITE,
                 );
             }
@@ -1195,6 +1216,8 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
                 shift,
                 picked: picked.contains(&row),
                 picked_songs: &picked_songs,
+                picked_positions: &picked_positions,
+                position: playlist_position(&table, index),
             },
         );
         row_responses.push((row, response));
@@ -1271,8 +1294,12 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
         }
     }
     if finite.is_none() && table.loading {
-        ui.add_space(8.0);
-        widgets::loading_row(ui, &palette, app.locale);
+        if table.items.is_empty() {
+            widgets::skeleton_rows(ui, &palette, app.locale, 8);
+        } else {
+            ui.add_space(8.0);
+            widgets::loading_row(ui, &palette, app.locale);
+        }
     }
     if finite.is_none()
         && let Some(error) = table.error
@@ -1321,6 +1348,10 @@ fn list_shortcuts(
     if ui.ctx().text_edit_focused() || app.dialog.is_some() {
         return;
     }
+    let picked_positions = app
+        .picked_rows(&table.page)
+        .map(|picked| picked_positions(table, picked, item_index))
+        .unwrap_or_default();
     let editable = match &table.context {
         RowContext::Context {
             editable_playlist: Some((id, _)),
@@ -1388,6 +1419,7 @@ fn list_shortcuts(
         app.actions.push(Action::RemoveFromPlaylist {
             playlist_id: playlist_id.clone(),
             uris,
+            positions: picked_positions.clone(),
         });
     }
     if let (true, Some(playlist_id)) = (cut, &editable) {
@@ -1399,6 +1431,7 @@ fn list_shortcuts(
         app.actions.push(Action::RemoveFromPlaylist {
             playlist_id: playlist_id.clone(),
             uris,
+            positions: picked_positions,
         });
     } else if copy {
         app.actions.push(Action::CopySongs(picked_songs));
@@ -1406,6 +1439,47 @@ fn list_shortcuts(
     if let (Some(playlist_id), Some(text)) = (editable, pasted) {
         app.actions.push(Action::PasteSongs { playlist_id, text });
     }
+}
+
+/// The playlist positions of the picked songs, so removing one copy of a
+/// repeated song leaves the others; none when some picked row has none.
+fn picked_positions(
+    table: &Table<'_>,
+    picked: &std::collections::BTreeSet<usize>,
+    item_index: &dyn Fn(usize) -> Option<usize>,
+) -> Vec<u32> {
+    picked
+        .iter()
+        .filter_map(|row| item_index(*row))
+        .filter(|index| {
+            table
+                .items
+                .get(*index)
+                .is_some_and(|(item, _, _)| !item.uri().is_empty())
+        })
+        .map(|index| playlist_position(table, index))
+        .collect::<Option<_>>()
+        .unwrap_or_default()
+}
+
+/// The playlist position of the table's item at `index`, which the view's
+/// sort or filter does not change; `None` outside a playlist.
+fn playlist_position(table: &Table<'_>, index: usize) -> Option<u32> {
+    let (RowContext::Context { uri, .. }
+    | RowContext::View {
+        context_uri: uri, ..
+    }) = &table.context
+    else {
+        return None;
+    };
+    if !uri.starts_with("spotify:playlist:") {
+        return None;
+    }
+    let local = match table.pagination.and_then(|page| page.positions) {
+        Some(positions) => *positions.get(index)?,
+        None => index,
+    };
+    u32::try_from(absolute_row_index(table.row_offset, local)).ok()
 }
 
 /// Arrow keys follow display order, independent of the positions of the
@@ -1456,7 +1530,7 @@ fn placeholder_row(
     let text = crate::bidi::layout(
         ui.painter(),
         label,
-        theme::regular(13.0),
+        theme::regular(theme::BODY_TEXT),
         palette.secondary,
         width,
         1,
@@ -1693,6 +1767,19 @@ fn sort_value(
                 .map(|name| (name.to_lowercase(), std::cmp::Reverse(0usize))),
             PlayableItem::Episode(_) => None,
         }),
+        SortColumn::Plays => SortValue::Optional(match &items[index].0 {
+            PlayableItem::Track(track) => crate::lastfm::plays_of(
+                &track.name,
+                &track.artists.first().map(|artist| artist.name.clone()).unwrap_or_default(),
+            )
+            .filter(|plays| *plays > 0)
+            .map(|plays| plays.min(i32::MAX as u32) as i32),
+            PlayableItem::Episode(_) => None,
+        }),
+        SortColumn::Popularity => SortValue::Optional(match &items[index].0 {
+            PlayableItem::Track(track) => track.popularity.map(i32::from),
+            PlayableItem::Episode(_) => None,
+        }),
         SortColumn::Release => match &items[index].0 {
             PlayableItem::Track(track) => text(
                 track
@@ -1857,6 +1944,46 @@ pub(crate) fn playlist_cached_table_items(
     (items, positions, duration_ms)
 }
 
+/// A playlist's rows with the songs hidden in it marked unplayable, kept
+/// until the rows or the hidden songs change.
+fn hidden_rows(
+    ui: &egui::Ui,
+    app: &App,
+    id: &str,
+    playlist_uri: &str,
+    items: &Arc<Vec<TableItem>>,
+) -> Arc<Vec<TableItem>> {
+    type Marked = (usize, u64, Arc<Vec<TableItem>>);
+    let key = egui::Id::new("hidden-rows").with(id);
+    let source = Arc::as_ptr(items) as usize;
+    let revision = app.hidden_songs_revision;
+    if let Some((cached_source, cached_revision, rows)) = ui.data(|d| d.get_temp::<Marked>(key))
+        && cached_source == source
+        && cached_revision == revision
+    {
+        return rows;
+    }
+    let rows: Arc<Vec<TableItem>> = Arc::new(
+        items
+            .iter()
+            .map(|(item, added_at, added_by)| {
+                let item = match item {
+                    PlayableItem::Track(track) if app.hidden_in(playlist_uri, &track.uri) => {
+                        PlayableItem::Track(crate::api::models::Track {
+                            is_playable: Some(false),
+                            ..track.clone()
+                        })
+                    }
+                    other => other.clone(),
+                };
+                (item, added_at.clone(), added_by.clone())
+            })
+            .collect(),
+    );
+    ui.data_mut(|d| d.insert_temp::<Marked>(key, (source, revision, Arc::clone(&rows))));
+    rows
+}
+
 /// A complete, ranked view of the listener's current top tracks.
 pub fn top_songs(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
@@ -1864,7 +1991,7 @@ pub fn top_songs(app: &mut App, ui: &mut egui::Ui) {
     theme::text(
         ui,
         gettext(app.locale, "Your top songs"),
-        theme::bold(30.0),
+        theme::bold(theme::TITLE_TEXT),
         palette.text,
     );
     ui.add_space(4.0);
@@ -1874,7 +2001,7 @@ pub fn top_songs(app: &mut App, ui: &mut egui::Ui) {
             app.locale,
             "Your most-played tracks from the last four weeks.",
         ),
-        theme::regular(13.5),
+        theme::regular(theme::BODY_TEXT),
         palette.secondary,
     );
     ui.add_space(18.0);
@@ -1882,7 +2009,7 @@ pub fn top_songs(app: &mut App, ui: &mut egui::Ui) {
     let tracks = match &app.home.top_songs {
         Loadable::Loaded(tracks) => tracks,
         Loadable::Loading | Loadable::NotLoaded => {
-            widgets::loading_row(ui, &palette, app.locale);
+            widgets::skeleton_rows(ui, &palette, app.locale, 10);
             return;
         }
         Loadable::Failed(error) => {
@@ -1952,6 +2079,15 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 playlist.owner.id.as_deref(),
                 playlist.owner_name(),
             );
+            // Songs hidden here are greyed out and left out of playback,
+            // which then plays the rows on screen.
+            let hides = app.has_hidden_in(&playlist.uri);
+            let items = if hides {
+                hidden_rows(ui, app, id, &playlist.uri, &items)
+            } else {
+                items
+            };
+            let items_revision = page.items.revision.wrapping_add(app.hidden_songs_revision);
             let count = page
                 .items
                 .total
@@ -2010,7 +2146,7 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 &items,
                 &needle,
                 sort.as_ref(),
-                page.items.revision,
+                items_revision,
             );
             let view_play = table_view.view_uris.as_ref().map(Arc::clone);
             actions_row(
@@ -2063,7 +2199,7 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     error: page.items.error.as_deref(),
                     can_load_more: page.items.can_load_more(),
                     filter: &page.filter,
-                    items_revision: page.items.revision,
+                    items_revision,
                 },
             );
         }
@@ -2074,7 +2210,7 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
             } else {
                 ui.add_space(40.0);
             }
-            widgets::loading_row(ui, &app.palette, app.locale);
+            widgets::skeleton_rows(ui, &app.palette, app.locale, 8);
         }
         Loadable::Failed(error) => {
             let error = error.clone();
@@ -2097,6 +2233,11 @@ pub fn album(app: &mut App, ui: &mut egui::Ui, id: &str) {
     let Some(page) = app.album_pages.remove(id) else {
         return;
     };
+    if let Some(data) = &page.prerelease {
+        super::prerelease::show(app, ui, data);
+        app.album_pages.insert(id.to_string(), page);
+        return;
+    }
     let preview =
         super::loading_preview(ui.ctx(), id, &page.album, || app.known_album(id).cloned());
     let palette = app.palette;
@@ -2185,7 +2326,7 @@ pub fn album(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 theme::text(
                     ui,
                     util::format_date(app.locale, date),
-                    theme::regular(12.5),
+                    theme::regular(theme::SMALL_TEXT),
                     palette.secondary,
                 );
             }
@@ -2214,7 +2355,7 @@ pub fn album(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 theme::text(
                     ui,
                     format!("{} {core}", marks.join(" ")),
-                    theme::regular(11.5),
+                    theme::regular(theme::SMALL_TEXT),
                     palette.dim,
                 );
             }
@@ -2226,7 +2367,7 @@ pub fn album(app: &mut App, ui: &mut egui::Ui, id: &str) {
             } else {
                 ui.add_space(40.0);
             }
-            widgets::loading_row(ui, &app.palette, app.locale);
+            widgets::skeleton_rows(ui, &app.palette, app.locale, 8);
         }
         Loadable::Failed(error) => {
             let error = error.clone();
@@ -3743,7 +3884,7 @@ mod tests {
         match table.app.actions.as_slice() {
             [
                 Action::CopySongs(copied),
-                Action::RemoveFromPlaylist { playlist_id, uris },
+                Action::RemoveFromPlaylist { playlist_id, uris, .. },
             ] => {
                 let copied: Vec<String> =
                     copied.iter().map(|item| item.uri().to_string()).collect();
@@ -3899,13 +4040,13 @@ mod tests {
         table.key(egui::Key::ArrowDown);
         table.key(egui::Key::Delete);
         assert!(matches!(table.app.actions.as_slice(),
-            [Action::RemoveFromPlaylist { playlist_id, uris }]
+            [Action::RemoveFromPlaylist { playlist_id, uris, .. }]
                 if playlist_id == "test" && uris == &["spotify:track:t_1"]));
         table.app.actions.clear();
         table.modified_key(egui::Key::ArrowDown, egui::Modifiers::SHIFT);
         table.key(egui::Key::Delete);
         assert!(matches!(table.app.actions.as_slice(),
-            [Action::RemoveFromPlaylist { playlist_id, uris }]
+            [Action::RemoveFromPlaylist { playlist_id, uris, .. }]
                 if playlist_id == "test" && uris == &["spotify:track:t_1", "spotify:track:t_2"]));
         table.app.actions.clear();
         table.editable = false;
@@ -3934,7 +4075,7 @@ mod tests {
         table.key(egui::Key::Backspace);
         if cfg!(target_os = "macos") {
             assert!(matches!(table.app.actions.as_slice(),
-                [Action::RemoveFromPlaylist { playlist_id, uris }]
+                [Action::RemoveFromPlaylist { playlist_id, uris, .. }]
                     if playlist_id == "test" && uris == &["spotify:track:t_1", "spotify:track:t_2"]));
         } else {
             assert!(table.app.actions.is_empty());

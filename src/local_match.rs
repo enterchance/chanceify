@@ -132,6 +132,27 @@ impl Matches {
             .filter(|entry| !entry.uri.is_empty())
             .count()
     }
+
+    /// How many of these files are matched, each path counted once. Answers
+    /// kept for files that are no longer among them do not count.
+    pub fn matched_among<'a>(&self, paths: impl IntoIterator<Item = &'a str>) -> usize {
+        let paths: std::collections::BTreeSet<&str> = paths.into_iter().collect();
+        paths
+            .into_iter()
+            .filter(|path| self.uri_of(path).is_some())
+            .count()
+    }
+
+    /// Drops the answers for files that are gone from the disk, keeping
+    /// those for `current` files and for files that still exist (a folder
+    /// taken out of the list for now keeps its answers). True when any went.
+    pub fn forget_missing<'a>(&mut self, current: impl IntoIterator<Item = &'a str>) -> bool {
+        let current: std::collections::BTreeSet<&str> = current.into_iter().collect();
+        let before = self.files.len();
+        self.files
+            .retain(|path, _| current.contains(path.as_str()) || Path::new(path).exists());
+        self.files.len() != before
+    }
 }
 
 /// The text a Spotify search is asked, for a file's title and first artist.
@@ -253,5 +274,21 @@ mod tests {
         assert!(!matches.needs("b.mp3"));
         assert!(matches.needs("c.mp3"));
         assert_eq!(matches.matched(), 1);
+    }
+
+    #[test]
+    fn only_the_current_files_count_as_found_and_gone_ones_are_forgotten() {
+        let mut matches = Matches::default();
+        matches.remember("/gone/one.mp3", "spotify:track:1", "");
+        matches.remember("/gone/two.mp3", "spotify:track:2", "");
+        matches.remember("/here/three.mp3", "spotify:track:3", "");
+        matches.remember("/here/four.mp3", "", "");
+        assert_eq!(matches.matched(), 3);
+        let current = ["/here/three.mp3", "/here/three.mp3", "/here/four.mp3"];
+        assert_eq!(matches.matched_among(current), 1, "each current file once");
+        assert!(matches.forget_missing(current));
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches.matched(), 1);
+        assert!(!matches.forget_missing(current));
     }
 }
