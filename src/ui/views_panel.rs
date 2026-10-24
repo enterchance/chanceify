@@ -297,7 +297,8 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                 let pad = 8.0;
                 // The cover is as tall as the reader dragged the card's edge.
                 // Beside it the name needs room, so past that point the cover
-                // takes the card's whole width and the name goes under it.
+                // takes the card's whole width and the name sits on it, in
+                // its lower corner, sized with the controls' width.
                 let full = (outer.width() - pad * 2.0).max(CARD_SIDE_MIN);
                 let side_max = (outer.width() - pad * 2.0 - 12.0 - 140.0).max(CARD_SIDE_MIN);
                 let wanted = app
@@ -314,28 +315,37 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                     wanted
                 };
                 let palette = app.palette;
+                let inset = 14.0;
                 let text_left = if lyrics_page {
                     outer.left() + 14.0
                 } else if stacked {
-                    outer.left() + pad
+                    outer.left() + pad + inset
                 } else {
                     outer.left() + pad + side + 12.0
                 };
                 let text_w = if stacked {
-                    (full - 28.0).max(40.0)
+                    (full - inset * 2.0 - 28.0).max(40.0)
                 } else {
                     (outer.right() - pad - text_left - 28.0).max(40.0)
                 };
                 let (title_size, artist_size) = if stacked {
-                    (22.0, 16.0)
+                    let title = (full * 0.055).clamp(16.0, 32.0);
+                    (title, title * 0.72)
                 } else {
                     ((side * 0.2).clamp(14.0, 22.0), (side * 0.15).clamp(12.0, 16.0))
+                };
+                // On the cover the words are white over a shade, whatever
+                // the theme.
+                let (title_colour, artist_colour) = if stacked {
+                    (egui::Color32::WHITE, egui::Color32::from_white_alpha(215))
+                } else {
+                    (palette.text, palette.secondary)
                 };
                 let title = crate::bidi::layout(
                     ui.painter(),
                     &now.title,
                     theme::bold(title_size),
-                    palette.text,
+                    title_colour,
                     text_w,
                     2,
                     Some(crate::bidi::ELLIPSIS),
@@ -344,17 +354,13 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                     ui.painter(),
                     &now.subtitle,
                     theme::regular(artist_size),
-                    palette.secondary,
+                    artist_colour,
                     text_w,
                     1,
                     Some(crate::bidi::ELLIPSIS),
                 );
                 let block = title.size().y + 4.0 + artist.size().y;
-                let card_h = if stacked {
-                    pad + side + 10.0 + block + pad
-                } else {
-                    side + pad * 2.0
-                };
+                let card_h = side + pad * 2.0;
                 // Above the controls; where that would be cut off by the top of
                 // the window, below them instead.
                 let above_top = outer.top() - 16.0 - card_h;
@@ -437,6 +443,17 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                         Icon::Music,
                         &loader,
                     );
+                    if stacked {
+                        // A shade up from the cover's foot, so the name reads
+                        // over any picture.
+                        let shade_h = (block + inset * 2.0 + 24.0).min(cover.height());
+                        super::widgets::paint_vertical_gradient(
+                            ui,
+                            Rect::from_min_max(egui::pos2(cover.left(), cover.bottom() - shade_h), cover.max),
+                            egui::Color32::TRANSPARENT,
+                            egui::Color32::from_black_alpha(185),
+                        );
+                    }
                     let cover_click = ui
                         .interact(cover, Id::new("pop-out-card-cover"), egui::Sense::click())
                         .on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -445,7 +462,7 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                     }
                 }
                 let y = if stacked {
-                    cover.bottom() + 10.0
+                    cover.bottom() - inset - block
                 } else {
                     cover.center().y - block / 2.0
                 };
@@ -493,7 +510,7 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                         app.actions.push(Action::Open(crate::model::Page::Show(id.clone())));
                     }
                 }
-                ui.painter().galley(egui::pos2(text_left, y), title, palette.text);
+                ui.painter().galley(egui::pos2(text_left, y), title, title_colour);
                 // The like heart, right after the song's name.
                 super::player_bar::like_heart(
                     app,
@@ -503,7 +520,7 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                     18.0,
                     &now.uri,
                 );
-                ui.painter().galley(egui::pos2(text_left, y + title_h + 4.0), artist, palette.secondary);
+                ui.painter().galley(egui::pos2(text_left, y + title_h + 4.0), artist, artist_colour);
             }
             if grip_response.hovered() || grip_response.dragged() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
