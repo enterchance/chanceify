@@ -295,34 +295,46 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                 && let Some(now) = app.now_playing()
             {
                 let pad = 8.0;
-                // The cover is as tall as the reader dragged the card's edge,
-                // and never so big that the card would be wider than the
-                // controls under it with room left for the name.
+                // The cover is as tall as the reader dragged the card's edge.
+                // Beside it the name needs room, so past that point the cover
+                // takes the card's whole width and the name goes under it.
+                let full = (outer.width() - pad * 2.0).max(CARD_SIDE_MIN);
                 let side_max = (outer.width() - pad * 2.0 - 12.0 - 140.0).max(CARD_SIDE_MIN);
+                let wanted = app
+                    .settings
+                    .float_card_side
+                    .unwrap_or(CARD_SIDE_DEFAULT)
+                    .clamp(CARD_SIDE_MIN, full);
+                let stacked = !lyrics_page && wanted > side_max;
                 let side = if lyrics_page {
                     44.0
+                } else if stacked {
+                    full
                 } else {
-                    app.settings
-                        .float_card_side
-                        .unwrap_or(CARD_SIDE_DEFAULT)
-                        .clamp(CARD_SIDE_MIN, side_max)
+                    wanted
                 };
-                // Above the controls; where that would be cut off by the top of
-                // the window, below them instead.
-                let above_top = outer.top() - side - pad * 2.0 - 8.0;
-                let top = if above_top >= screen.top() + 4.0 + pad {
-                    above_top
-                } else {
-                    outer.bottom() + 8.0 + pad
-                };
-                let cover = Rect::from_min_size(egui::pos2(outer.left() + pad, top), egui::vec2(side, side));
                 let palette = app.palette;
-                let text_left = if lyrics_page { outer.left() + 14.0 } else { cover.right() + 12.0 };
-                let text_w = (outer.right() - pad - text_left - 28.0).max(40.0);
+                let text_left = if lyrics_page {
+                    outer.left() + 14.0
+                } else if stacked {
+                    outer.left() + pad
+                } else {
+                    outer.left() + pad + side + 12.0
+                };
+                let text_w = if stacked {
+                    (full - 28.0).max(40.0)
+                } else {
+                    (outer.right() - pad - text_left - 28.0).max(40.0)
+                };
+                let (title_size, artist_size) = if stacked {
+                    (22.0, 16.0)
+                } else {
+                    ((side * 0.2).clamp(14.0, 22.0), (side * 0.15).clamp(12.0, 16.0))
+                };
                 let title = crate::bidi::layout(
                     ui.painter(),
                     &now.title,
-                    theme::bold((side * 0.2).clamp(14.0, 22.0)),
+                    theme::bold(title_size),
                     palette.text,
                     text_w,
                     2,
@@ -331,18 +343,38 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                 let artist = crate::bidi::layout(
                     ui.painter(),
                     &now.subtitle,
-                    theme::regular((side * 0.15).clamp(12.0, 16.0)),
+                    theme::regular(artist_size),
                     palette.secondary,
                     text_w,
                     1,
                     Some(crate::bidi::ELLIPSIS),
                 );
-                // The card is only as wide as its words need (the cover, the
-                // name, the heart), never wider than the controls under it; a
-                // name too long for that goes onto two lines and then ends in "…".
+                let block = title.size().y + 4.0 + artist.size().y;
+                let card_h = if stacked {
+                    pad + side + 10.0 + block + pad
+                } else {
+                    side + pad * 2.0
+                };
+                // Above the controls; where that would be cut off by the top of
+                // the window, below them instead.
+                let above_top = outer.top() - 16.0 - card_h;
+                let card_top = if above_top >= screen.top() + 4.0 {
+                    above_top
+                } else {
+                    outer.bottom() + 8.0
+                };
+                let cover = Rect::from_min_size(egui::pos2(outer.left() + pad, card_top + pad), egui::vec2(side, side));
+                // Side by side, the card is only as wide as its words need (the
+                // cover, the name, the heart), never wider than the controls
+                // under it; a name too long for that goes onto two lines and
+                // then ends in "…". Stacked, it is the controls' width.
                 let need = text_left + (title.size().x + 34.0).max(artist.size().x) + pad + 4.0;
-                let card_right = need.clamp(outer.left() + 160.0_f32.min(outer.width()), outer.right());
-                let card = Rect::from_min_max(cover.min - egui::vec2(pad, pad), egui::pos2(card_right, cover.bottom() + pad));
+                let card_right = if stacked {
+                    outer.right()
+                } else {
+                    need.clamp(outer.left() + 160.0_f32.min(outer.width()), outer.right())
+                };
+                let card = Rect::from_min_max(egui::pos2(outer.left(), card_top), egui::pos2(card_right, card_top + card_h));
                 ui.ctx().data_mut(|data| data.insert_temp(Id::new(("pop-out-card-last", vp)), card));
                 let song = app.now_playing_item();
                 // The whole card is a handle, registered first so the cover,
@@ -369,7 +401,10 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                     }
                     if resize.dragged() {
                         let grow = if above { -resize.drag_delta().y } else { resize.drag_delta().y };
-                        app.settings.float_card_side = Some((side + grow).clamp(CARD_SIDE_MIN, side_max));
+                        // Pulled back from the full width, the cover returns to
+                        // its place beside the name at once.
+                        let from = if stacked && grow < 0.0 { side_max } else { wanted };
+                        app.settings.float_card_side = Some((from + grow).clamp(CARD_SIDE_MIN, full));
                     }
                     if resize.drag_stopped() {
                         app.mark_settings_dirty();
@@ -409,8 +444,11 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                         open_song(app);
                     }
                 }
-                let block = title.size().y + 4.0 + artist.size().y;
-                let y = cover.center().y - block / 2.0;
+                let y = if stacked {
+                    cover.bottom() + 10.0
+                } else {
+                    cover.center().y - block / 2.0
+                };
                 let title_h = title.size().y;
                 let title_w = title.size().x;
                 let first_row = title_h / title.rows.len().max(1) as f32;
