@@ -43,6 +43,8 @@ const REMOTE_FRESH: Duration = Duration::from_secs(45);
 /// Spotify Connect counts as answering for this long after its last view;
 /// it sends one every few seconds while the session is up.
 const CONNECT_LIVE: Duration = Duration::from_secs(15);
+/// What the queue log names a change nothing marked.
+const QUEUE_CAUSE_NONE: &str = "unmarked change";
 /// After Spotify refuses an audio key, the session is renewed and the song
 /// tried again at most once in this long: asking again sooner only gets
 /// more keys refused.
@@ -455,6 +457,10 @@ pub struct App {
     /// handled again.
     connect_queue_seen: Option<Vec<String>>,
     connect_devices_seen: Option<Vec<Device>>,
+    /// The queue as last written to the queue log, and what is changing it
+    /// now, so the log says why each change happened.
+    queue_seen: String,
+    queue_cause: &'static str,
     /// The restorable session (sorts, recents, resume point) changed and
     /// should be written shortly, not only at exit.
     pub session_dirty: bool,
@@ -1221,6 +1227,8 @@ impl App {
             connect_live_at: None,
             connect_queue_seen: None,
             connect_devices_seen: None,
+            queue_seen: String::new(),
+            queue_cause: QUEUE_CAUSE_NONE,
             session_dirty: false,
             last_session_save: Instant::now(),
             zoom_applied: false,
@@ -4055,6 +4063,7 @@ impl App {
     }
 
     fn on_now_playing_changed(&mut self) {
+        self.queue_cause = "the song changed";
         // Queue consumption and saved session state follow confirmed playback,
         // not the song shown optimistically while a command is still pending.
         let Some(now) = self.now_playing_live() else {
@@ -4584,6 +4593,7 @@ impl App {
         }
         self.maybe_suggest_personal_app();
         self.maybe_offer_start_with_computer();
+        self.note_queue_change();
 
         // Chanceify never checks for or downloads updates by itself.
         if false
@@ -6259,6 +6269,34 @@ impl App {
         self.ensure_loaded(page);
     }
 
+    /// Writes the queue to the queue log whenever what is shown changes:
+    /// the song playing, how many follow, the first few, which device is
+    /// playing, and what changed it.
+    fn note_queue_change(&mut self) {
+        let shown = match &self.queue {
+            Loadable::Loaded(queue) => {
+                let playing = queue
+                    .currently_playing
+                    .as_ref()
+                    .map_or("-", PlayableItem::name);
+                let next: Vec<&str> = queue.queue.iter().take(6).map(PlayableItem::name).collect();
+                format!("playing {playing}; {} next: {}", queue.queue.len(), next.join(" | "))
+            }
+            Loadable::Loading => "loading".to_owned(),
+            Loadable::NotLoaded => "not loaded".to_owned(),
+            Loadable::Failed(error) => format!("failed: {error}"),
+        };
+        if shown != self.queue_seen {
+            crate::crash::queue_note(&format!(
+                "[{}] {shown}   (on {:?})",
+                self.queue_cause,
+                self.target()
+            ));
+            self.queue_seen = shown;
+        }
+        self.queue_cause = QUEUE_CAUSE_NONE;
+    }
+
     /// Whether Spotify Connect is pushing what plays, which makes asking
     /// the Web API about playback, the queue and devices unnecessary.
     fn connect_live(&self) -> bool {
@@ -6294,6 +6332,7 @@ impl App {
                 || !matches!(self.queue, Loadable::Loaded(_))
             {
                 self.connect_queue_seen = Some(seen);
+                self.queue_cause = "Spotify Connect";
                 self.queue_seq += 1;
                 self.queue_fetched_at = Some(Instant::now());
                 self.handle_api(ApiResponse::Queue {
@@ -6371,6 +6410,7 @@ impl App {
     /// rows as a fresh list instead used to take seconds, threw the
     /// context away, and left Spotify's copy of the queue to reappear.
     fn play_queue_item(&mut self, index: usize, uri: String) {
+        self.queue_cause = "played a queue row";
         if self.resume_only() {
             // Nothing is playing anywhere, so there is no live queue to
             // consume: play the shown rows as a plain list.
@@ -6481,6 +6521,7 @@ impl App {
     /// the local engine's queue, and only that one. A row whose index no
     /// longer holds its song is left alone.
     fn remove_from_queue(&mut self, rows: Vec<(usize, String)>) {
+        self.queue_cause = "removed from the queue";
         if !self.queue_locally_reorderable() {
             return;
         }
@@ -6543,6 +6584,7 @@ impl App {
 
     /// Clears manually queued tracks while keeping the context's upcoming rows.
     fn clear_queue(&mut self) {
+        self.queue_cause = "cleared the queue";
         if !matches!(self.target(), Target::Local) {
             return;
         }
@@ -6638,6 +6680,7 @@ impl App {
 
     /// Shows the head of Next up as playing before the engine confirms it.
     fn pop_queue_head(&mut self) {
+        self.queue_cause = "skipped to the next queued song";
         // A restored or stale queue has no trustworthy relationship to the
         // current player state. It can stay visible while the live queue is
         // fetched, but must not be used to guess where Next will land.
@@ -6692,8 +6735,13 @@ impl App {
 
     /// Whether a fetched queue predates the latest local change.
     fn queue_fetch_is_stale(&self, fetched: &Queue) -> bool {
+        self.queue_stale_reason(fetched).is_some()
+    }
+
+    /// Why a fetched queue is held back for now, for the queue log too.
+    fn queue_stale_reason(&self, fetched: &Queue) -> Option<&'static str> {
         if self.queue_stale_retries >= QUEUE_STALE_RETRIES {
-            return false;
+            return None;
         }
         // A recent play or pop must be reflected in the fetched current row.
         if let Some(intent) = &self.intent_track
@@ -6703,7 +6751,7 @@ impl App {
                 .as_ref()
                 .is_none_or(|item| item.uri() != intent.uri)
         {
-            return true;
+            return Some("the song just asked for isn't playing in it yet");
         }
         // For local playback, reject a fetched current row that differs from
         // the engine's current track. Only while this computer is the one
@@ -6718,7 +6766,7 @@ impl App {
                 .as_ref()
                 .is_some_and(|item| item.uri() != track.uri)
         {
-            return true;
+            return Some("its current song differs from this computer's player");
         }
         // A cleared row still on top means the clear has not landed yet.
         if let Some((cleared, at)) = &self.queue_cleared
@@ -6728,7 +6776,7 @@ impl App {
                 .first()
                 .is_some_and(|item| cleared.contains(item.uri()))
         {
-            return true;
+            return Some("a cleared song is still on top");
         }
         // An unchanged context order right after toggling shuffle means the
         // reordered queue has not landed yet.
@@ -6745,7 +6793,7 @@ impl App {
                     .map(|item| item.uri())
                     .eq(pending.context_uris.iter().map(String::as_str))
             {
-                return true;
+                return Some("the order from before the shuffle is still there");
             }
         }
         // A local reorder or positional insert is optimistic; reject a
@@ -6759,7 +6807,7 @@ impl App {
                 .map(|item| item.uri())
                 .eq(self.manual_queue.iter().map(String::as_str))
         {
-            return true;
+            return Some("the reordered songs haven't caught up");
         }
         // A removed song still right after the queued rows means the
         // removal has not landed yet: the prefix alone cannot tell, since
@@ -6771,9 +6819,9 @@ impl App {
                 .get(self.manual_queue.len())
                 .is_some_and(|item| removed.contains(item.uri()))
         {
-            return true;
+            return Some("a removed song is still there");
         }
-        false
+        None
     }
 
     fn run_search(&mut self, query: String) {
@@ -7339,11 +7387,20 @@ impl App {
                     .pending_queue_batches
                     .values()
                     .any(|target| *target == self.target());
-                if writing_queue
-                    || result
-                        .as_ref()
-                        .is_ok_and(|fetched| self.queue_fetch_is_stale(fetched))
-                {
+                let source = if self.queue_cause == QUEUE_CAUSE_NONE {
+                    "Web API"
+                } else {
+                    self.queue_cause
+                };
+                let stale = result
+                    .as_ref()
+                    .ok()
+                    .and_then(|fetched| self.queue_stale_reason(fetched));
+                if writing_queue || stale.is_some() {
+                    crate::crash::queue_note(&format!(
+                        "held the queue shown: {source} answer set aside, {}",
+                        stale.unwrap_or("songs are still being added")
+                    ));
                     // Keep the optimistic queue and retry after a stale
                     // response. Accept Spotify's state after the retry limit.
                     self.queue_stale_retries = self.queue_stale_retries.saturating_add(1);
@@ -7374,6 +7431,7 @@ impl App {
                     self.queue_recheck_at = Some(Instant::now() + Duration::from_secs(10));
                 }
                 if !idle_empty && (result.is_ok() || !matches!(self.queue, Loadable::Loaded(_))) {
+                    self.queue_cause = source;
                     self.queue = Loadable::from_result(result);
                 }
                 self.reconcile_pending_queue();
@@ -10701,6 +10759,7 @@ impl App {
     }
 
     fn show_queued_song(&mut self, uri: &str, label: &str) {
+        self.queue_cause = "added to the queue";
         let item = self.optimistic_queue_item(uri, label);
         self.pending_queue_adds.push(PendingQueueAdd {
             item: item.clone(),
@@ -10743,6 +10802,7 @@ impl App {
     /// Roll back only the rejected occurrences, leaving accepted songs,
     /// later additions and matching songs in the playing context intact.
     fn remove_failed_queue_adds(&mut self, request: u64, added: usize) {
+        self.queue_cause = "took back songs that failed to queue";
         let mut indexes: Vec<_> = self
             .pending_queue_adds
             .iter()
@@ -10909,6 +10969,9 @@ impl App {
             Loadable::Loaded(queue) => Self::end_of_queued_rows(&queue.queue, &self.manual_queue),
             _ => 0,
         };
+        if !missing.is_empty() && self.queue_cause == QUEUE_CAUSE_NONE {
+            self.queue_cause = "kept songs still being queued";
+        }
         if let Loadable::Loaded(queue) = &mut self.queue {
             for item in missing.into_iter().rev() {
                 queue.queue.insert(at, item);
@@ -12002,6 +12065,7 @@ impl App {
                         manual_index: at,
                         write: None,
                     });
+                    self.queue_cause = "moved or inserted queue songs";
                     if let Loadable::Loaded(queue) = &mut self.queue {
                         queue.queue.insert(at.min(queue.queue.len()), item);
                     }

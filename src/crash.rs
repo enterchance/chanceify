@@ -210,6 +210,33 @@ pub fn stage(name: &str) {
     }
 }
 
+static QUEUE_FILE: Mutex<Option<std::fs::File>> = Mutex::new(None);
+
+/// One line in `queue.log`: what the queue on screen changed to and what
+/// changed it, and every queue command sent, so a queue that jumps can be
+/// traced afterwards. Started afresh once it passes two megabytes.
+pub fn queue_note(text: &str) {
+    let mut file = QUEUE_FILE.lock().unwrap_or_else(|p| p.into_inner());
+    if file.is_none() {
+        let Some(dir) = DIR.get() else {
+            return;
+        };
+        let path = dir.join("queue.log");
+        let fresh = std::fs::metadata(&path).map_or(true, |meta| meta.len() > 2 * 1024 * 1024);
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true);
+        if fresh {
+            options.write(true).truncate(true);
+        } else {
+            options.append(true);
+        }
+        *file = options.open(path).ok();
+    }
+    if let Some(file) = file.as_mut() {
+        let _ = writeln!(file, "{} +{}ms {text}", stamp(), millis());
+    }
+}
+
 /// Notes something the person did, so a crash can be placed after it.
 pub fn trail(text: &str) {
     if let Some(mut file) = NOTE_FILE.get() {

@@ -1,7 +1,7 @@
 [package]
 name = "chanceify"
 default-run = "chanceify"
-version = "0.9.104"
+version = "0.9.105"
 edition = "2024"
 rust-version = "1.98"
 license = "AGPL-3.0-only"
@@ -263,7 +263,9 @@ hyper-proxy2 = { git = "https://github.com/crmne/hyper-proxy2", rev = "efca48113
 # Every librespot crate comes from the
 # fork so one copy exists. Drop patches as upstream takes them.
 librespot-audio = { git = "https://github.com/crmne/librespot", rev = "d04729018248f11c954b50ff6a3405801ff5af08" }
-librespot-connect = { git = "https://github.com/crmne/librespot", rev = "d04729018248f11c954b50ff6a3405801ff5af08" }
+# Vendored from the fork at the same revision, with queue edits told to
+# Spotify once per run of edits (see queue_edited in its spirc.rs).
+librespot-connect = { path = "vendor/librespot-connect" }
 librespot-core = { git = "https://github.com/crmne/librespot", rev = "d04729018248f11c954b50ff6a3405801ff5af08" }
 librespot-metadata = { git = "https://github.com/crmne/librespot", rev = "d04729018248f11c954b50ff6a3405801ff5af08" }
 librespot-oauth = { git = "https://github.com/crmne/librespot", rev = "d04729018248f11c954b50ff6a3405801ff5af08" }

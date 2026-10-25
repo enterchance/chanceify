@@ -1999,32 +1999,35 @@ impl Worker {
                 Command::ApplyProxy { request, config } => {
                     self.change_proxy(request, config, false)
                 }
-                Command::Player(command) => match &self.engine {
-                    // Until the new session picks the song up, it has
-                    // nothing to pause: the player does it (upstream #268).
-                    Some(engine)
-                        if command == PlayerCommand::Toggle
-                            && engine.carrying()
-                            && engine.keep_player().toggle() => {}
-                    Some(engine) => {
-                        if let Err(error) = engine.command(command) {
-                            self.emit(Event::Error(format!("Playback error: {error}")));
+                Command::Player(command) => {
+                    note_player_command(&command);
+                    match &self.engine {
+                        // Until the new session picks the song up, it has
+                        // nothing to pause: the player does it (upstream #268).
+                        Some(engine)
+                            if command == PlayerCommand::Toggle
+                                && engine.carrying()
+                                && engine.keep_player().toggle() => {}
+                        Some(engine) => {
+                            if let Err(error) = engine.command(command) {
+                                self.emit(Event::Error(format!("Playback error: {error}")));
+                            }
+                        }
+                        // While the session reconnects, the song it left pauses
+                        // and plays on its own player.
+                        None if command == PlayerCommand::Toggle
+                            && self.kept_player.as_ref().is_some_and(KeptPlayer::toggle) => {}
+                        None => {
+                            if matches!(&command, PlayerCommand::Load(_)) {
+                                // Something else chosen: the old song stops.
+                                self.stop_kept_player();
+                            }
+                            self.emit(Event::Error(
+                                "Local playback isn't set up on this computer yet".into(),
+                            ));
                         }
                     }
-                    // While the session reconnects, the song it left pauses
-                    // and plays on its own player.
-                    None if command == PlayerCommand::Toggle
-                        && self.kept_player.as_ref().is_some_and(KeptPlayer::toggle) => {}
-                    None => {
-                        if matches!(&command, PlayerCommand::Load(_)) {
-                            // Something else chosen: the old song stops.
-                            self.stop_kept_player();
-                        }
-                        self.emit(Event::Error(
-                            "Local playback isn't set up on this computer yet".into(),
-                        ));
-                    }
-                },
+                }
                 Command::Api(ApiRequest::Search { query, serial }) => self.search(query, serial),
                 Command::Api(request) => {
                     self.dispatch(request);
@@ -4702,6 +4705,21 @@ async fn write_over_session(
     }
 }
 
+/// Writes a command for this computer's player to the queue log. Volume
+/// and seeking are left out: they say nothing about the queue and come in
+/// streams while a slider is dragged.
+fn note_player_command(command: &PlayerCommand) {
+    if !matches!(
+        command,
+        PlayerCommand::Volume(_) | PlayerCommand::VolumePreview(_) | PlayerCommand::Seek(_)
+    ) {
+        crate::crash::queue_note(&format!(
+            "command to this computer's player: {}",
+            crate::crash::describe(command)
+        ));
+    }
+}
+
 /// A Connect "play" command for `play`: a context by its address, or a
 /// plain list of songs as one page of tracks with no address, the way
 /// Spotify's own apps send a list. `None` when there is nothing to play.
@@ -4797,6 +4815,10 @@ async fn over_connect(
     // wait half a minute and then act on a moment that has passed.
     let send = |target: String, commands: Vec<serde_json::Value>| async move {
         for command in commands {
+            crate::crash::queue_note(&format!(
+                "command to {target} over Spotify Connect: {}",
+                command["endpoint"].as_str().unwrap_or("?")
+            ));
             if let Err(error) = engine.command_device(&target, command).await {
                 log::warn!("{error:#}");
                 return Err(ApiError::Network(format!("{error:#}")));
@@ -4881,6 +4903,10 @@ async fn over_connect(
             // refusal partway reports what was queued rather than starting
             // again through the Web API, which would queue those twice.
             let mut added = 0;
+            crate::crash::queue_note(&format!(
+                "command to {target} over Spotify Connect: add {} songs to the queue",
+                uris.len()
+            ));
             for uri in uris {
                 if let Err(error) = engine.command_device(&target, connect_queue(uri)).await {
                     log::warn!("{error:#}");
