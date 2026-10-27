@@ -22,15 +22,19 @@ local library works great with no premium. :)  <br />
 
 ## features
 
-- **plays your spotify.** no, really.
-- **music stats.** top artists and songs, plus recommended.
-- **last.fm.** scrobbling, love, and missing cover art saved for you.
-- **lyrics.** a floating card that follows the song.
-- **looks.** themes, make your own, or let it follow the album cover.
-- **visualizer.** bars, flow and swirl, full screen, in its own window or behind the lyrics.
-- **views.** click the disc to switch parts of the screen on or off.
-- **keybinds.** every key can be changed.
-- **discord.** shows what you're playing.
+i wanted spotify to look and feel the way i wanted, so i made my own. here's what it does:
+
+- plays your spotify. the real songs, not previews.
+- stays in sync with your phone. skip a song on one and the other knows.
+- plays your own music files too, and finds them on spotify so they sit right next to everything else.
+- shows what you actually listen to: top artists, top songs, and stuff it thinks you'll like.
+- scrobbles to last.fm, and grabs cover art for the songs that are missing it.
+- lyrics on a little floating card that keeps up with the song.
+- themes. pick one, make your own, or let the colors follow whatever album is playing.
+- a visualizer with bars, flow and swirl. put it full screen, in its own window, or behind the lyrics.
+- click the disc to turn parts of the screen on and off, and lay it out however you like.
+- every keybind can be changed.
+- your discord shows what you're listening to.
 
 it streams with [librespot](https://github.com/librespot-org/librespot). it doesn't download songs, and it doesn't collect data ([privacy and terms](PRIVACY.md)).
 
