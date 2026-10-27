@@ -17,8 +17,8 @@ local library works great with no premium. :)  <br />
 
 ## get it
 
-1. download `chanceify.exe` from [releases](https://github.com/madlygeeked/chanceify/releases)
-2. run it, in its own folder. everything it saves stays beside it.
+1. grab `chanceify.exe` from [releases](https://github.com/madlygeeked/chanceify/releases)
+2. run it. everything it makes lives in an `index` folder right beside it.
 
 ## features
 
