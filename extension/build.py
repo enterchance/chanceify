@@ -12,7 +12,7 @@ css = (here / "content.css").read_text()
 js = (here / "content.js").read_text()
 header = f"""// ==UserScript==
 // @name         chanceify™
-// @namespace    https://madlygeeked.github.io/chanceify/
+// @namespace    https://enterchance.github.io/chanceify/
 // @version      {ver}
 // @description  Play any song on Last.fm in chanceify with one click.
 // @match        https://www.last.fm/*

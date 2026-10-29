@@ -929,7 +929,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
             "update" => {
                 app.update = Some(crate::updates::Release {
                     version: "0.7.1".into(),
-                    url: "https://madlygeeked.github.io/chanceify/download/".into(),
+                    url: "https://enterchance.github.io/chanceify/download/".into(),
                 });
             }
             "personal-app" => app.dialog = Some(Dialog::PersonalAppIntro),
@@ -5283,7 +5283,7 @@ mod tests {
             crate::ui::settings::show,
         );
         assert!(app.actions.iter().any(|action| matches!(action,
-            Action::OpenUrl(url) if url == "https://madlygeeked.github.io/chanceify/make-a-theme/")));
+            Action::OpenUrl(url) if url == "https://enterchance.github.io/chanceify/make-a-theme/")));
         app.backend.shutdown();
     }
 

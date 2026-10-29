@@ -29,7 +29,7 @@ pub const CONFIG: UpdateConfig = UpdateConfig {
     // carry the key: from then on an unsigned release is refused.
     publisher_key: None,
     ..UpdateConfig::new(
-        "madlygeeked/chanceify",
+        "enterchance/chanceify",
         "Spotifast",
         "spotifast",
         env!("CARGO_PKG_VERSION"),

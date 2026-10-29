@@ -5386,7 +5386,7 @@ pub fn switch_labeled(ui: &mut Ui, palette: &Palette, label: &str, on: &mut bool
 }
 
 /// The author's website, linked from the credit line.
-pub const AUTHOR_URL: &str = "https://github.com/madlygeeked";
+pub const AUTHOR_URL: &str = "https://github.com/enterchance";
 
 /// "Built with love by chance", with the name linking to the project's
 /// GitHub page. Returns whether the name was clicked.

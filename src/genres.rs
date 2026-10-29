@@ -300,7 +300,7 @@ async fn get(client: &reqwest::Client, url: &str) -> Result<Option<String>, ()> 
             .get(url)
             .header(
                 "User-Agent",
-                concat!("chanceify/", env!("CARGO_PKG_VERSION"), " ( https://github.com/madlygeeked/chanceify )"),
+                concat!("chanceify/", env!("CARGO_PKG_VERSION"), " ( https://github.com/enterchance/chanceify )"),
             )
             .header("Accept", "application/json")
             .send()

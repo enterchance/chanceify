@@ -10,7 +10,7 @@ local library works without it.
 
 ## get it
 
-1. download `chanceify.exe` from [releases](https://github.com/madlygeeked/chanceify/releases)
+1. download `chanceify.exe` from [releases](https://github.com/enterchance/chanceify/releases)
 2. run it. [virustotal](https://www.virustotal.com/gui/file/69fea436120c0f9e6be32e125f2fdeec441a8b1c47d15d533e255e88557319c0)
 
 ## features
@@ -49,6 +49,6 @@ local library works without it.
 
 **does it download songs?** nope. it streams using [librespot](https://github.com/librespot-org/librespot)
 
-**does it collect data?** nope. [privacy and terms](https://github.com/madlygeeked/chanceify/blob/main/PRIVACY.md)
+**does it collect data?** nope. [privacy and terms](https://github.com/enterchance/chanceify/blob/main/PRIVACY.md)
 
-**something broke?** [issues](https://github.com/madlygeeked/chanceify/issues)
+**something broke?** [issues](https://github.com/enterchance/chanceify/issues)

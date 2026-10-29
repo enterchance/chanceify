@@ -146,7 +146,7 @@ function findButtons(mode, artist, title) {
 }
 
 function page({ title, artist, id, image, kind = "t", find = "" }) {
-  const spotify = id ? `https://open.spotify.com/${KIND[kind]}/${id}` : "https://github.com/madlygeeked/chanceify";
+  const spotify = id ? `https://open.spotify.com/${KIND[kind]}/${id}` : "https://github.com/enterchance/chanceify";
   const line = artist ? `${artist}` : "Listening on chanceify™";
   const desc = artist ? `${artist}. Listening on chanceify™` : "Listening on chanceify™";
   return `<!doctype html>
@@ -201,7 +201,7 @@ ${kind === "t" || kind === "a" ? `<a class="btn yt" href="https://www.youtube.co
 <a class="btn sp" href="${esc(spotify)}">Open in Spotify</a>
 ${kind === "t" || kind === "a" ? `<a class="btn lf" href="${esc(lastfmLink(kind, artist, title))}" target="_blank" rel="noopener">Open on Last.fm</a>` : ""}</div>
 ${kind === "u" ? "" : `<iframe class="play" title="Play a preview" src="https://open.spotify.com/embed/${KIND[kind]}/${esc(id)}?theme=0" width="100%" height="152" frameborder="0" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy"></iframe>`}` : ""}
-<div class="foot">Built with love by <a href="https://madlygeeked.github.io/">chance</a><img class="bear" id="bear" alt=""></div>
+<div class="foot">Built with love by <a href="https://enterchance.github.io/">chance</a><img class="bear" id="bear" alt=""></div>
 </main>
 <script>
 // The cover, bent into the same liquid swirl chanceify draws, drifting slowly.

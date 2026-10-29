@@ -85,7 +85,7 @@ impl Activity {
 pub const BADGE_KEY: &str = "chanceify";
 
 /// Where the swirl pictures live: the chanceify site, from the repository's docs folder.
-const SWIRL_BASE: &str = "https://madlygeeked.github.io/chanceify/swirl/";
+const SWIRL_BASE: &str = "https://enterchance.github.io/chanceify/swirl/";
 
 /// The swirl picture nearest a cover's colour: twelve hues round the wheel,
 /// and a grey one for covers with hardly any colour.
@@ -418,7 +418,7 @@ static LINK: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 /// The chanceify song page (worker/embed.js). Empty until it is deployed.
 /// Where the badge on the card leads: chanceify's own page.
-pub const SITE_URL: &str = "https://madlygeeked.github.io/chanceify/";
+pub const SITE_URL: &str = "https://enterchance.github.io/chanceify/";
 
 pub const EMBED_URL: &str = "https://chanceify-embed.chance-a10.workers.dev";
 

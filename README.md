@@ -1,14 +1,14 @@
 <p align="center">
-  <img src="https://madlygeeked.github.io/assets/chanceify.png" alt="" width="120">
+  <img src="https://enterchance.github.io/assets/chanceify.png" alt="" width="120">
 </p>
 
 <h1 align="center">chanceify™</h1>
 <p align="center"><i>music reimagined</i></p>
 
 <p align="center">
-  <a href="https://github.com/madlygeeked/chanceify/releases">download</a> &nbsp;·&nbsp;
-  <a href="https://madlygeeked.github.io/chanceify/">more info</a> &nbsp;·&nbsp;
-  <a href="https://github.com/madlygeeked/chanceify/issues">issues</a>
+  <a href="https://github.com/enterchance/chanceify/releases">download</a> &nbsp;·&nbsp;
+  <a href="https://enterchance.github.io/chanceify/">more info</a> &nbsp;·&nbsp;
+  <a href="https://github.com/enterchance/chanceify/issues">issues</a>
 </p>
 
 a spotify player for windows.  <br />
@@ -17,7 +17,7 @@ local library works great with no premium. :)  <br />
 
 ## get it
 
-1. grab `chanceify.exe` from [releases](https://github.com/madlygeeked/chanceify/releases)
+1. grab `chanceify.exe` from [releases](https://github.com/enterchance/chanceify/releases)
 2. run it. everything it makes lives in an `index` folder right beside it.
 
 ## features
@@ -38,7 +38,7 @@ i wanted spotify to look and feel the way i wanted, so i made my own. here's wha
 
 it streams with [librespot](https://github.com/librespot-org/librespot). it doesn't download songs, and it doesn't collect data ([privacy and terms](PRIVACY.md)).
 
-more help: [chanceify](https://madlygeeked.github.io/chanceify/)
+more help: [chanceify](https://enterchance.github.io/chanceify/)
 
 ---
 
@@ -55,7 +55,7 @@ this is for windows. it takes about 15 minutes, most of it waiting.
 
 **2. get the code**
 
-on the [github page](https://github.com/madlygeeked/chanceify), click **code**, then **download zip**. unzip it somewhere simple, like `C:\chanceify-source`. the folder you want is the one with `Cargo.toml` in it.
+on the [github page](https://github.com/enterchance/chanceify), click **code**, then **download zip**. unzip it somewhere simple, like `C:\chanceify-source`. the folder you want is the one with `Cargo.toml` in it.
 
 **3. last.fm (optional)**
 
@@ -85,7 +85,7 @@ your app is `target\release\chanceify.exe`. copy it into a folder of its own, li
 ---
 
 <p align="center">
-  built with love by <a href="https://github.com/madlygeeked">chance</a> <img src="https://madlygeeked.github.io/assets/favicon.png?v=3" alt="" width="20"><br>
+  built with love by <a href="https://github.com/enterchance">chance</a> <img src="https://enterchance.github.io/assets/favicon.png?v=3" alt="" width="20"><br>
   inspired by <a href="https://www.spotify.com">Spotify</a>, <a href="https://spotifast.rocks/">Spotifast</a> and <a href="https://spicetify.app">Spicetify</a><br>
   licensed AGPL-3.0, see <a href="LICENSE">LICENSE</a> and <a href="NOTICE.md">NOTICE</a>
 </p>

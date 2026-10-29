@@ -9,7 +9,7 @@ This app only uses services you already know: <br />
 (Music provided by [Spotify](https://www.spotify.com)) <br />
 (Rich presence provided by [Discord](https://discord.com)) <br />
 (Scrobbling provided by [Last.fm](https://www.last.fm)) <br />
-(Swag provided by [madgeeked](https://madlygeeked.github.io/))
+(Swag provided by [madgeeked](https://enterchance.github.io/))
 
 ## Terms
 

@@ -22,7 +22,7 @@ pub const DISPLAY_NAME: &str = "chanceify™";
 
 /// Chance's GitHub, linked from Settings and the sign-in page. One place to
 /// change it.
-pub const GITHUB_URL: &str = "https://github.com/madlygeeked/chanceify";
+pub const GITHUB_URL: &str = "https://github.com/enterchance/chanceify";
 
 /// Seconds since the Unix epoch when this build was compiled, from
 /// `SOURCE_DATE_EPOCH` when the build asked to be reproducible.

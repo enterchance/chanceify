@@ -1,13 +1,13 @@
 [package]
 name = "chanceify"
 default-run = "chanceify"
-version = "0.9.105"
+version = "0.9.106"
 edition = "2024"
 rust-version = "1.98"
 license = "AGPL-3.0-only"
 description = "chanceify™ - music reimagined"
-repository = "https://github.com/madlygeeked/chanceify"
-homepage = "https://madlygeeked.github.io/chanceify/"
+repository = "https://github.com/enterchance/chanceify"
+homepage = "https://enterchance.github.io/chanceify/"
 keywords = ["spotify", "music", "librespot", "lyrics", "visualizer"]
 categories = ["multimedia::audio"]
 

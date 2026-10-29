@@ -23505,7 +23505,7 @@ mod tests {
                 manual,
                 result: Ok(Some(crate::updates::Release {
                     version: "1.2.3".into(),
-                    url: "https://github.com/madlygeeked/chanceify/releases/tag/v1.2.3".into(),
+                    url: "https://github.com/enterchance/chanceify/releases/tag/v1.2.3".into(),
                 })),
             }]);
             let ctx = egui::Context::default();
@@ -23522,7 +23522,7 @@ mod tests {
         let mut app = headless_app();
         app.update = Some(crate::updates::Release {
             version: "1.2.3".into(),
-            url: "https://github.com/madlygeeked/chanceify/releases/tag/v1.2.3".into(),
+            url: "https://github.com/enterchance/chanceify/releases/tag/v1.2.3".into(),
         });
         app.update_checking = true;
         app.handle_backend_events(vec![Event::UpdateChecked {
@@ -23573,7 +23573,7 @@ mod tests {
             manual: false,
             result: Ok(Some(crate::updates::Release {
                 version: "1.2.3".into(),
-                url: "https://github.com/madlygeeked/chanceify/releases/tag/v1.2.3".into(),
+                url: "https://github.com/enterchance/chanceify/releases/tag/v1.2.3".into(),
             })),
         }]);
 
