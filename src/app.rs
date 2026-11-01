@@ -461,6 +461,8 @@ pub struct App {
     /// now, so the log says why each change happened.
     queue_seen: String,
     queue_cause: &'static str,
+    /// What the player bar showed when the queue log last noted it.
+    playback_seen: String,
     /// The restorable session (sorts, recents, resume point) changed and
     /// should be written shortly, not only at exit.
     pub session_dirty: bool,
@@ -1228,6 +1230,7 @@ impl App {
             connect_queue_seen: None,
             connect_devices_seen: None,
             queue_seen: String::new(),
+            playback_seen: String::new(),
             queue_cause: QUEUE_CAUSE_NONE,
             session_dirty: false,
             last_session_save: Instant::now(),
@@ -4594,6 +4597,7 @@ impl App {
         self.maybe_suggest_personal_app();
         self.maybe_offer_start_with_computer();
         self.note_queue_change();
+        self.note_playback_change();
 
         // Chanceify never checks for or downloads updates by itself.
         if false
@@ -6297,6 +6301,56 @@ impl App {
         self.queue_cause = QUEUE_CAUSE_NONE;
     }
 
+    /// Writes to the queue log what the player bar shows whenever it changes
+    /// in anything but the position: where it comes from, the song, playing
+    /// or paused, and the state behind it (this computer's player, a song
+    /// asked for and not yet confirmed, a play held while reconnecting).
+    fn note_playback_change(&mut self) {
+        let source = if self.requested_track_preview().is_some() {
+            "the song asked for, not yet confirmed"
+        } else if self.deck_now_playing().is_some() {
+            "a file on this computer"
+        } else if self.local.is_active() {
+            "this computer's player"
+        } else if self.remote.is_some() {
+            "another device"
+        } else {
+            "the song remembered from last time"
+        };
+        let now = self.now_playing();
+        let shown = now.as_ref().map_or_else(
+            || "nothing".to_owned(),
+            |now| {
+                format!(
+                    "{} {}{}",
+                    now.title,
+                    if now.playing { "playing" } else { "paused" },
+                    if now.loading { ", loading" } else { "" }
+                )
+            },
+        );
+        let local_track = self
+            .local
+            .track
+            .as_ref()
+            .map_or_else(|| "-".to_owned(), |track| format!("{} ({})", track.title, track.uri));
+        let intent = self.intent_track.as_ref().map_or_else(
+            || "none".to_owned(),
+            |intent| format!("{} {}s ago", intent.uri, intent.at.elapsed().as_secs()),
+        );
+        let key = format!(
+            "{source}: {shown} | this computer: {:?} {local_track} | asked for: {intent} | play held: {} | on {:?}",
+            self.local.playback,
+            self.queued_play.is_some(),
+            self.target()
+        );
+        if key != self.playback_seen {
+            let position = now.as_ref().map_or(0, |now| now.position_ms / 1000);
+            crate::crash::queue_note(&format!("player bar at {position}s: {key}"));
+            self.playback_seen = key;
+        }
+    }
+
     /// Whether Spotify Connect is pushing what plays, which makes asking
     /// the Web API about playback, the queue and devices unnecessary.
     fn connect_live(&self) -> bool {
@@ -6317,6 +6371,19 @@ impl App {
         self.remote_poll_pending = false;
         self.remote_polled_at = Instant::now();
         self.remote_recheck_at = None;
+        // While this computer plays, Connect's copy of its state carries the
+        // position from the last time it was sent to Spotify, often 0: the
+        // player here knows where the song really is and whether it plays.
+        let state = state.map(|mut state| {
+            let here = state.device.as_ref().and_then(|device| device.id.as_deref())
+                == self.local_device_id.as_deref()
+                && self.local_device_id.is_some();
+            if here && self.local.is_active() {
+                state.progress_ms = Some(self.local.position_now());
+                state.is_playing = matches!(self.local.playback, Playback::Playing | Playback::Loading);
+            }
+            state
+        });
         self.handle_api(ApiResponse::PlaybackState {
             seq: self.remote_poll_seq,
             result: Ok(state),
@@ -6735,11 +6802,15 @@ impl App {
 
     /// Whether a fetched queue predates the latest local change.
     fn queue_fetch_is_stale(&self, fetched: &Queue) -> bool {
-        self.queue_stale_reason(fetched).is_some()
+        self.queue_stale_reason(fetched, false).is_some()
     }
 
     /// Why a fetched queue is held back for now, for the queue log too.
-    fn queue_stale_reason(&self, fetched: &Queue) -> Option<&'static str> {
+    /// `from_connect` is a queue Spotify Connect pushed: while this computer
+    /// plays, that is its own player's queue, so it is never held against
+    /// the player (a song played from another release of the same recording
+    /// carries another address, and that held every push back for good).
+    fn queue_stale_reason(&self, fetched: &Queue, from_connect: bool) -> Option<&'static str> {
         if self.queue_stale_retries >= QUEUE_STALE_RETRIES {
             return None;
         }
@@ -6758,7 +6829,8 @@ impl App {
         // playing: a song left paused here says nothing about a queue that
         // another device is playing, and holding to it made the queue flick
         // between the two.
-        if self.local.is_active()
+        if !from_connect
+            && self.local.is_active()
             && matches!(self.target(), Target::Local)
             && let Some(track) = &self.local.track
             && fetched
@@ -7395,7 +7467,7 @@ impl App {
                 let stale = result
                     .as_ref()
                     .ok()
-                    .and_then(|fetched| self.queue_stale_reason(fetched));
+                    .and_then(|fetched| self.queue_stale_reason(fetched, source == "Spotify Connect"));
                 if writing_queue || stale.is_some() {
                     crate::crash::queue_note(&format!(
                         "held the queue shown: {source} answer set aside, {}",
@@ -9578,6 +9650,17 @@ impl App {
     /// in one ordered exchange: two independent requests race, and shuffle
     /// sometimes lost.
     fn play_request(&mut self, request: PlayRequest, shuffle_first: bool) {
+        crate::crash::queue_note(&format!(
+            "play asked for: list {}, {} songs, starting at {}, on {:?}",
+            request.context_uri.as_deref().unwrap_or("none"),
+            request.uris.len(),
+            request
+                .offset_uri
+                .clone()
+                .or_else(|| request.offset_position.map(|at| format!("row {at}")))
+                .unwrap_or_else(|| "the top".to_owned()),
+            self.target()
+        ));
         self.deck_stop();
         // A play from a row names its row again after this.
         self.played_row = None;

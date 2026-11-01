@@ -200,7 +200,13 @@ pub fn stage(name: &str) {
         return;
     };
     let mut line = format!("{:>8}ms frame {} {}", millis(), FRAMES.load(Ordering::Relaxed), name);
-    line.truncate(110);
+    // Cut on a character boundary: a song name in Korean or with an emoji
+    // has characters wider than one byte, and cutting through one panics.
+    let mut end = line.len().min(110);
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    line.truncate(end);
     while line.len() < 110 {
         line.push(' ');
     }
