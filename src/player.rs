@@ -345,6 +345,19 @@ pub struct ConnectView {
 /// shown stays right and a quiet device still counts as playing.
 const CONNECT_HEARTBEAT: Duration = Duration::from_secs(5);
 
+/// Asks Spotify Connect to move playback from one device to another,
+/// keeping it playing or paused as it was.
+async fn connect_transfer(session: &Session, from: &str, to: &str) -> Result<()> {
+    let endpoint = format!("/connect-state/v1/connect/transfer/from/{from}/to/{to}");
+    let body = serde_json::json!({ "transfer_options": { "restore_paused": "restore" } }).to_string();
+    session
+        .spclient()
+        .request_as_json(&http::Method::POST, &endpoint, None, Some(&body))
+        .await
+        .map(|_| ())
+        .map_err(|error| anyhow!("Spotify Connect refused the device change: {error}"))
+}
+
 /// How many upcoming songs a view carries: more than the queue panel shows.
 const CONNECT_NEXT_KEPT: usize = 50;
 
@@ -789,6 +802,20 @@ impl Engine {
             .map_err(|error| anyhow!("Spotify Connect refused the command: {error}"))
     }
 
+    /// Moves playback from the device playing to `to` (this computer
+    /// included), the way Spotify's own apps do: the song, the queue and
+    /// the position go with it, and it keeps playing if it was.
+    pub async fn transfer_to(&self, to: &str) -> Result<()> {
+        let from = self
+            .connect
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .and_then(|view| view.active_device.clone())
+            .ok_or_else(|| anyhow!("nothing is playing on any device"))?;
+        connect_transfer(&self.session, &from, to).await
+    }
+
     /// Sets another device's volume through Spotify Connect.
     pub async fn set_device_volume(&self, target: &str, percent: u8) -> Result<()> {
         let endpoint = format!(
@@ -979,7 +1006,30 @@ impl Engine {
                     spirc.repeat_track(true)?;
                 }
             },
-            PlayerCommand::Transfer => spirc.transfer(None)?,
+            PlayerCommand::Transfer => {
+                // Asked of Spotify as a move from the device playing to this
+                // one, as its own apps ask, so the position comes along.
+                // Spirc's own request names this computer on both ends.
+                let from = self
+                    .connect
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .as_ref()
+                    .and_then(|view| view.active_device.clone())
+                    .filter(|active| *active != self.device_id);
+                match from {
+                    Some(from) => {
+                        let session = self.session.clone();
+                        let to = self.device_id.clone();
+                        tokio::spawn(async move {
+                            if let Err(error) = connect_transfer(&session, &from, &to).await {
+                                log::warn!("{error:#}");
+                            }
+                        });
+                    }
+                    None => spirc.transfer(None)?,
+                }
+            }
             PlayerCommand::Load(spec) => {
                 let playing_track = spec
                     .offset_uri

@@ -120,6 +120,24 @@ struct AssumedContext {
 /// Local engine events are ordered, so its next track report settles the
 /// intent. Remote playback is polled and may lag; one contradictory poll is
 /// ignored and a second one settles on what Spotify actually reports.
+/// What was playing, and where in it, when playback was moved to another
+/// device: if the device starts the song over, or paused, it is put back.
+struct TransferSettle {
+    /// The device it moved to; `None` is this computer.
+    device: Option<String>,
+    uri: String,
+    title: String,
+    position_ms: u32,
+    duration_ms: u32,
+    playing: bool,
+    at: Instant,
+}
+
+/// How long after a device change its position is still checked.
+const TRANSFER_SETTLE_FOR: Duration = Duration::from_secs(20);
+/// How far behind the song may start before it is moved to its place.
+const TRANSFER_SETTLE_SLACK_MS: u64 = 4_000;
+
 struct TrackIntent {
     uri: String,
     position_ms: u32,
@@ -804,6 +822,7 @@ pub struct App {
     optimistic_playing: Option<(bool, Instant)>,
     /// Track shown immediately after a play or skip, until playback reports.
     intent_track: Option<TrackIntent>,
+    transfer_settle: Option<TransferSettle>,
     /// The row the current song was started from, while it still plays.
     played_row: Option<PlayedRow>,
     /// Requested shuffle mode, applied to every context until changed.
@@ -1439,6 +1458,7 @@ impl App {
             pending_local_volume: None,
             optimistic_playing: None,
             intent_track: None,
+            transfer_settle: None,
             played_row: None,
             shuffle_wanted: session.shuffle_on,
             repeat_wanted: RepeatMode::from_api(&session.repeat),
@@ -4598,6 +4618,7 @@ impl App {
         self.maybe_offer_start_with_computer();
         self.note_queue_change();
         self.note_playback_change();
+        self.settle_transfer();
 
         // Chanceify never checks for or downloads updates by itself.
         if false
@@ -6348,6 +6369,95 @@ impl App {
             let position = now.as_ref().map_or(0, |now| now.position_ms / 1000);
             crate::crash::queue_note(&format!("player bar at {position}s: {key}"));
             self.playback_seen = key;
+        }
+    }
+
+    /// After a device change, once the device plays the same song: if it
+    /// started over or behind, it is moved to where the song had got to,
+    /// and if it came up paused while the song was playing, it plays.
+    fn settle_transfer(&mut self) {
+        let Some(settle) = &self.transfer_settle else {
+            return;
+        };
+        if settle.at.elapsed() > TRANSFER_SETTLE_FOR {
+            self.transfer_settle = None;
+            return;
+        }
+        let same = |uri: &str, title: &str| uri == settle.uri || title == settle.title;
+        let (position, playing, device) = match &settle.device {
+            None => {
+                let Some(track) = self.local.track.as_ref() else {
+                    return;
+                };
+                if self.local.loading
+                    || !self.local.is_active()
+                    || !same(&track.uri, &track.title)
+                {
+                    return;
+                }
+                (
+                    self.local.position_now(),
+                    matches!(self.local.playback, Playback::Playing),
+                    None,
+                )
+            }
+            Some(device) => {
+                let Some(remote) = self.remote_fresh() else {
+                    return;
+                };
+                let here = remote.state.device.as_ref().and_then(|d| d.id.as_deref());
+                let Some(item) = remote.state.item.as_ref() else {
+                    return;
+                };
+                if here != Some(device.as_str()) || !same(item.uri(), item.name()) {
+                    return;
+                }
+                let mut position = remote.state.progress_ms.unwrap_or(0);
+                if remote.state.is_playing {
+                    position = position.saturating_add(remote.received_at.elapsed().as_millis() as u32);
+                }
+                (position, remote.state.is_playing, Some(device.clone()))
+            }
+        };
+        // A device often reports paused for a moment while it takes over:
+        // give it a little while before treating that as the song stopping.
+        if settle.playing && !playing && settle.at.elapsed() < Duration::from_secs(3) {
+            return;
+        }
+        let expected = u64::from(settle.position_ms)
+            + if settle.playing { settle.at.elapsed().as_millis() as u64 } else { 0 };
+        let room = u64::from(settle.duration_ms).saturating_sub(3_000);
+        let behind = u64::from(position) + TRANSFER_SETTLE_SLACK_MS < expected && expected < room;
+        let wanted_playing = settle.playing;
+        self.transfer_settle = None;
+        if behind {
+            crate::crash::queue_note(&format!(
+                "device change started the song at {}s, moved it to {}s",
+                position / 1000,
+                expected / 1000
+            ));
+            match &device {
+                None => self.backend.player(PlayerCommand::Seek(expected as u32)),
+                Some(device) => {
+                    self.pending_remote_position = Some((expected as u32, Instant::now()));
+                    self.backend.api(ApiRequest::Remote {
+                        action: RemoteAction::Seek,
+                        device_id: Some(device.clone()),
+                        play: None,
+                        position_ms: expected as u32,
+                        percent: 0,
+                        flag: false,
+                        repeat: String::new(),
+                    });
+                }
+            }
+        }
+        if wanted_playing && !playing {
+            crate::crash::queue_note("device change left the song paused; playing it");
+            match device {
+                None => self.backend.player(PlayerCommand::Toggle),
+                Some(device) => self.remote(RemoteAction::Play, Some(device)),
+            }
         }
     }
 
@@ -10392,6 +10502,17 @@ impl App {
     }
 
     fn transfer(&mut self, device_id: String) {
+        // Remembered before anything moves, from what the bar shows now.
+        self.transfer_settle = self.now_playing().map(|now| TransferSettle {
+            device: (Some(device_id.as_str()) != self.local_device_id.as_deref())
+                .then(|| device_id.clone()),
+            uri: now.uri,
+            title: now.title,
+            position_ms: now.position_ms,
+            duration_ms: now.duration_ms,
+            playing: now.playing,
+            at: Instant::now(),
+        });
         if Some(device_id.as_str()) == self.local_device_id.as_deref() {
             self.selected_device = None;
             self.show_devices = false;

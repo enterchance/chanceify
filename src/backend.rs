@@ -4882,6 +4882,20 @@ async fn over_connect(
                 result: send(target, vec![command]).await,
             })
         }
+        ApiRequest::Transfer { device_id, .. } => {
+            let target = engine.connect_target(Some(device_id.as_str()))?;
+            crate::crash::queue_note(&format!("move playback to {target} over Spotify Connect"));
+            // Refused (or nothing playing anywhere to move): the Web API
+            // starts the device instead.
+            if let Err(error) = engine.transfer_to(&target).await {
+                log::warn!("{error:#}; asking the Web API instead");
+                return None;
+            }
+            Some(ApiResponse::Transferred {
+                device_id: device_id.clone(),
+                result: Ok(()),
+            })
+        }
         ApiRequest::AddToQueue {
             uri,
             device_id,
