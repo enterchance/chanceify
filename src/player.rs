@@ -325,6 +325,9 @@ pub struct ConnectDevice {
 /// session: no Web API request, so no rate limit, and no polling delay.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ConnectView {
+    /// Which engine saw it: a view from an engine that has been replaced
+    /// describes a session that is gone.
+    pub engine_id: u64,
     /// The device playing, or `None` when nothing is active.
     pub active_device: Option<String>,
     pub devices: Vec<ConnectDevice>,
@@ -357,6 +360,9 @@ async fn connect_transfer(session: &Session, from: &str, to: &str) -> Result<()>
         .map(|_| ())
         .map_err(|error| anyhow!("Spotify Connect refused the device change: {error}"))
 }
+
+/// The next engine's number; 0 is never given, so a default view matches none.
+static NEXT_ENGINE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// How many upcoming songs a view carries: more than the queue panel shows.
 const CONNECT_NEXT_KEPT: usize = 50;
@@ -529,6 +535,8 @@ pub struct Engine {
     /// The last view Spotify Connect pushed, for sending commands to the
     /// device it names.
     connect: Arc<Mutex<Option<ConnectView>>>,
+    /// Told apart from the engines before it, whose views are ignored.
+    engine_id: u64,
 }
 
 impl Engine {
@@ -598,8 +606,11 @@ impl Engine {
         let ended_notify = Arc::clone(&notify);
         let ended_state = Arc::clone(&state);
         let ended_interrupted = Arc::clone(&interrupted);
+        let spirc_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ended_done = Arc::clone(&spirc_done);
         tokio::spawn(async move {
             spirc_task.await;
+            ended_done.store(true, std::sync::atomic::Ordering::SeqCst);
             let shut_down = ended_flag.load(std::sync::atomic::Ordering::SeqCst);
             {
                 let mut current = ended_state.lock().unwrap_or_else(|p| p.into_inner());
@@ -618,6 +629,7 @@ impl Engine {
         // Spotify Connect pushes every change on the account to the
         // session; passing it on replaces asking the Web API what plays.
         let connect: Arc<Mutex<Option<ConnectView>>> = Arc::default();
+        let engine_id = NEXT_ENGINE_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         {
             let mut players = spirc.watch_player_state();
             let mut clusters = spirc.watch_cluster_state();
@@ -625,6 +637,7 @@ impl Engine {
             let watch_session = session.clone();
             let watch_flag = Arc::clone(&shutting_down);
             let watch_connect = Arc::clone(&connect);
+            let watch_done = Arc::clone(&spirc_done);
             tokio::spawn(async move {
                 let mut heartbeat = tokio::time::interval(CONNECT_HEARTBEAT);
                 heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -634,8 +647,12 @@ impl Engine {
                         changed = clusters.changed() => if changed.is_err() { break },
                         _ = heartbeat.tick() => {}
                     }
+                    // Stops with the session it watches. A replaced engine's
+                    // watcher kept sending its last view every few seconds,
+                    // and the queue flicked between that and the real one.
                     if watch_session.is_invalid()
                         || watch_flag.load(std::sync::atomic::Ordering::SeqCst)
+                        || watch_done.load(std::sync::atomic::Ordering::SeqCst)
                     {
                         break;
                     }
@@ -645,7 +662,9 @@ impl Engine {
                     let view = {
                         let player = players.borrow_and_update().clone();
                         let cluster = clusters.borrow_and_update().clone();
-                        connect_view(player.as_ref(), &cluster)
+                        let mut view = connect_view(player.as_ref(), &cluster);
+                        view.engine_id = engine_id;
+                        view
                     };
                     *watch_connect.lock().unwrap_or_else(|p| p.into_inner()) = Some(view.clone());
                     watch_notify(EngineEvent::Connect(Box::new(view)));
@@ -667,6 +686,7 @@ impl Engine {
             audio,
             carrying: std::sync::atomic::AtomicBool::new(carrying),
             connect,
+            engine_id,
         })
     }
 
@@ -772,6 +792,10 @@ impl Engine {
 
     pub fn device_id(&self) -> &str {
         &self.device_id
+    }
+
+    pub fn engine_id(&self) -> u64 {
+        self.engine_id
     }
 
     /// The device a command meant for `device` (or for whatever plays, when

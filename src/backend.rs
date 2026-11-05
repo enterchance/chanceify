@@ -2923,6 +2923,10 @@ impl Worker {
         let Some(engine) = self.engine.clone() else {
             return;
         };
+        if view.engine_id != engine.engine_id() {
+            // From an engine that has since been replaced.
+            return;
+        }
         if !same_account(&engine.session().username(), self.api.account().as_ref()) {
             return;
         }

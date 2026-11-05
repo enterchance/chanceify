@@ -1318,14 +1318,29 @@ impl PlayerTrackLoader {
             // parsing and bail out, so we should be safe from outputting ear-piercing noise.
             let (key, audio_key_unavailable) = match prefetched_key {
                 Some(key) => (Some(key), false),
-                None => match self.session.audio_key().request(track_id, file_id).await {
-                    Ok(key) => (Some(key), false),
-                    Err(e) => {
-                        let unavailable = Self::is_audio_key_unavailable(&e);
-                        warn!("Unable to load key, continuing without decryption: {e}");
-                        (None, unavailable)
+                // chanceify: a key that only timed out is asked for again,
+                // twice, before the song is given up on: Spotify answers
+                // slowly at times, and giving up skipped song after song.
+                // A refused key is not asked again.
+                None => {
+                    let mut tries = 0;
+                    loop {
+                        match self.session.audio_key().request(track_id, file_id).await {
+                            Ok(key) => break (Some(key), false),
+                            Err(e) => {
+                                let unavailable = Self::is_audio_key_unavailable(&e);
+                                if !unavailable && tries < 2 {
+                                    tries += 1;
+                                    warn!("Audio key not answered ({e}), asking again");
+                                    tokio::time::sleep(Duration::from_millis(400 * tries)).await;
+                                    continue;
+                                }
+                                warn!("Unable to load key, continuing without decryption: {e}");
+                                break (None, unavailable);
+                            }
+                        }
                     }
-                },
+                }
             };
 
             let mut decrypted_file = AudioDecrypt::new(key, encrypted_file);
