@@ -12,4 +12,4 @@ title: questions
 
 **where is everything saved?** [files](files).
 
-**something broke?** [issues](https://github.com/madlygeeked/chanceify/issues).
+**something broke?** [issues](https://github.com/enterchance/chanceify/issues).
