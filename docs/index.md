@@ -8,10 +8,9 @@ a spotify player for windows.
 needs spotify premium to stream.  
 local library works without it.
 
-## get it
+## download
 
-1. download `chanceify.exe` from [releases](https://github.com/enterchance/chanceify/releases)
-2. run it. [virustotal](https://www.virustotal.com/gui/file/69fea436120c0f9e6be32e125f2fdeec441a8b1c47d15d533e255e88557319c0)
+`chanceify.exe` from [releases](https://github.com/enterchance/chanceify/releases)
 
 ## features
 
