@@ -1958,20 +1958,25 @@ pub(crate) fn playlist_cached_table_items(
 }
 
 /// A playlist's rows with the songs hidden in it marked unplayable, kept
-/// until the rows or the hidden songs change.
+/// until the rows, the list or the hidden songs change. A page that loads
+/// later extends the cached rows in place, keeping their pointer, so the
+/// list's revision tells the rows apart too.
 fn hidden_rows(
     ui: &egui::Ui,
     app: &App,
     id: &str,
     playlist_uri: &str,
     items: &Arc<Vec<TableItem>>,
+    items_revision: u64,
 ) -> Arc<Vec<TableItem>> {
-    type Marked = (usize, u64, Arc<Vec<TableItem>>);
+    type Marked = (usize, u64, u64, Arc<Vec<TableItem>>);
     let key = egui::Id::new("hidden-rows").with(id);
     let source = Arc::as_ptr(items) as usize;
     let revision = app.hidden_songs_revision;
-    if let Some((cached_source, cached_revision, rows)) = ui.data(|d| d.get_temp::<Marked>(key))
+    if let Some((cached_source, cached_items_revision, cached_revision, rows)) =
+        ui.data(|d| d.get_temp::<Marked>(key))
         && cached_source == source
+        && cached_items_revision == items_revision
         && cached_revision == revision
     {
         return rows;
@@ -1993,7 +1998,9 @@ fn hidden_rows(
             })
             .collect(),
     );
-    ui.data_mut(|d| d.insert_temp::<Marked>(key, (source, revision, Arc::clone(&rows))));
+    ui.data_mut(|d| {
+        d.insert_temp::<Marked>(key, (source, items_revision, revision, Arc::clone(&rows)));
+    });
     rows
 }
 
@@ -2096,7 +2103,7 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
             // which then plays the rows on screen.
             let hides = app.has_hidden_in(&playlist.uri);
             let items = if hides {
-                hidden_rows(ui, app, id, &playlist.uri, &items)
+                hidden_rows(ui, app, id, &playlist.uri, &items, page.items.revision)
             } else {
                 items
             };
