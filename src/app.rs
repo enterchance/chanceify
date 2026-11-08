@@ -107,6 +107,21 @@ pub struct RemoteSnapshot {
     pub received_at: Instant,
 }
 
+/// A remote volume chosen here, kept until a poll sent after its write
+/// completed can replace it. A cached snapshot or a poll already in flight
+/// cannot confirm a write.
+struct PendingRemoteVolume {
+    percent: u8,
+    device_id: Option<String>,
+    request: u64,
+    /// Polls already sent when the write completed still describe the past.
+    /// None while the write is waiting for Spotify.
+    after_poll: Option<u64>,
+    /// When Spotify accepted the write.
+    written_at: Option<Instant>,
+    mismatches: u8,
+}
+
 /// A context shown as playing before Spotify confirms it.
 struct AssumedContext {
     uri: String,
@@ -819,7 +834,9 @@ pub struct App {
     /// The verified personal Web API application, when acceleration is ready.
     pub web_app: Option<String>,
     pending_remote_position: Option<(u32, Instant)>,
-    pending_remote_volume: Option<(u8, Instant)>,
+    pending_remote_volume: Option<PendingRemoteVolume>,
+    /// The serial of the latest remote volume write.
+    remote_volume_request: u64,
     /// A local volume set here that the engine has not echoed back yet. It
     /// reports `VolumeChanged` asynchronously while position snapshots land
     /// every second, so a snapshot must not undo the change on its way past.
@@ -1462,6 +1479,7 @@ impl App {
             web_app: None,
             pending_remote_position: None,
             pending_remote_volume: None,
+            remote_volume_request: 0,
             pending_local_volume: None,
             optimistic_playing: None,
             intent_track: None,
@@ -2203,8 +2221,13 @@ impl App {
                 }
             }
         };
-        let volume = match self.pending_remote_volume {
-            Some((volume, at)) if at.elapsed() < OPTIMISTIC_HOLD => volume,
+        let volume = match &self.pending_remote_volume {
+            Some(pending)
+                if pending.device_id.as_deref()
+                    == device.and_then(|device| device.id.as_deref()) =>
+            {
+                pending.percent
+            }
             _ => device
                 .and_then(|device| device.volume_percent)
                 .unwrap_or(50),
@@ -3567,6 +3590,7 @@ impl App {
     }
 
     fn reset_data(&mut self) {
+        self.pending_remote_volume = None;
         self.local_transfer_sequence = None;
         self.queue_start_pending = None;
         self.pending_album_queues.clear();
@@ -7490,6 +7514,7 @@ impl App {
                 self.remote_poll_pending = false;
                 match result {
                     Ok(state) => {
+                        self.reconcile_remote_volume(seq, state.as_ref());
                         let previous_uri = self.remote.as_ref().and_then(|remote| {
                             remote
                                 .state
@@ -8947,6 +8972,19 @@ impl App {
                 ),
             },
             ApiResponse::Remote { action, result } => {
+                if let RemoteAction::Volume { request } = action {
+                    let Some(pending) = &mut self.pending_remote_volume else {
+                        return;
+                    };
+                    if pending.request != request {
+                        // An earlier write must not settle a newer adjustment.
+                        return;
+                    }
+                    if result.is_ok() {
+                        pending.after_poll = Some(self.remote_poll_seq);
+                        pending.written_at = Some(Instant::now());
+                    }
+                }
                 if matches!(action, RemoteAction::Play | RemoteAction::Pause) {
                     self.clear_play_pending();
                 }
@@ -8965,7 +9003,9 @@ impl App {
                     Err(error) => {
                         self.optimistic_playing = None;
                         self.pending_remote_position = None;
-                        self.pending_remote_volume = None;
+                        if matches!(action, RemoteAction::Volume { .. }) {
+                            self.pending_remote_volume = None;
+                        }
                         if matches!(
                             action,
                             RemoteAction::Play | RemoteAction::Next | RemoteAction::Previous
@@ -10400,9 +10440,19 @@ impl App {
             }
             Target::Remote(_) if !settle || !self.can_set_volume() => {}
             Target::Remote(device_id) => {
-                self.pending_remote_volume = Some((percent, Instant::now()));
+                self.remote_volume_request += 1;
+                self.pending_remote_volume = Some(PendingRemoteVolume {
+                    percent,
+                    device_id: device_id.clone(),
+                    request: self.remote_volume_request,
+                    after_poll: None,
+                    written_at: None,
+                    mismatches: 0,
+                });
                 self.backend.api(ApiRequest::Remote {
-                    action: RemoteAction::Volume,
+                    action: RemoteAction::Volume {
+                        request: self.remote_volume_request,
+                    },
                     device_id,
                     play: None,
                     position_ms: 0,
@@ -10411,6 +10461,48 @@ impl App {
                     repeat: String::new(),
                 });
             }
+        }
+    }
+
+    /// Lets a fresh poll settle the remote volume chosen here: one that
+    /// reports it ends the wait, and one that keeps reporting another
+    /// volume after the hold is a change made elsewhere.
+    fn reconcile_remote_volume(&mut self, seq: u64, state: Option<&PlaybackState>) {
+        let Some(pending) = &mut self.pending_remote_volume else {
+            return;
+        };
+        if pending
+            .after_poll
+            .is_none_or(|after_poll| seq <= after_poll)
+        {
+            return;
+        }
+        let device = state.and_then(|state| state.device.as_ref());
+        // A device change ends this intent. Missing volume on the same
+        // device confirms neither the write nor a change made elsewhere.
+        if device.is_none()
+            || device.and_then(|device| device.id.as_deref()) != pending.device_id.as_deref()
+        {
+            self.pending_remote_volume = None;
+            return;
+        }
+        let Some(reported) = device.and_then(|device| device.volume_percent) else {
+            return;
+        };
+        // Polls after a successful write can lag, a Sonos's by seconds.
+        // Check once more, and hold the chosen volume as long as play and
+        // pause are held, before accepting a volume set elsewhere.
+        let held = pending
+            .written_at
+            .is_some_and(|at| at.elapsed() < PLAYBACK_HOLD);
+        if reported == pending.percent || (pending.mismatches > 0 && !held) {
+            self.pending_remote_volume = None;
+        } else {
+            if pending.mismatches == 0 {
+                self.remote_recheck_at = Some(Instant::now() + REMOTE_RECHECK);
+            }
+            pending.mismatches = pending.mismatches.saturating_add(1);
+            pending.after_poll = Some(seq);
         }
     }
 
@@ -10552,6 +10644,13 @@ impl App {
     }
 
     fn transfer(&mut self, device_id: String) {
+        if self
+            .pending_remote_volume
+            .as_ref()
+            .is_some_and(|pending| pending.device_id.as_deref() != Some(device_id.as_str()))
+        {
+            self.pending_remote_volume = None;
+        }
         // Remembered before anything moves, from what the bar shows now.
         self.transfer_settle = self.now_playing().map(|now| TransferSettle {
             device: (Some(device_id.as_str()) != self.local_device_id.as_deref())
@@ -15834,7 +15933,7 @@ fn remote_action_label(locale: Locale, action: RemoteAction) -> Cow<'static, str
         RemoteAction::Next => gettext(locale, "Couldn't skip"),
         RemoteAction::Previous => gettext(locale, "Couldn't go back"),
         RemoteAction::Seek => gettext(locale, "Couldn't seek"),
-        RemoteAction::Volume => gettext(locale, "Couldn't change the volume"),
+        RemoteAction::Volume { .. } => gettext(locale, "Couldn't change the volume"),
         RemoteAction::Shuffle => gettext(locale, "Couldn't change shuffle"),
         RemoteAction::Repeat => gettext(locale, "Couldn't change repeat"),
     }
@@ -26687,6 +26786,129 @@ mod tests {
         app.backend.shutdown();
     }
 
+    fn remote_volume_app() -> App {
+        let mut app = headless_app();
+        crate::demo::populate(&mut app);
+        app.local_ready = false;
+        app.frame_now = None;
+        app.remote
+            .as_mut()
+            .unwrap()
+            .state
+            .device
+            .as_mut()
+            .unwrap()
+            .volume_percent = Some(40);
+        app
+    }
+
+    fn report_remote_volume(app: &mut App, seq: u64, percent: Option<u8>) {
+        let mut state = app.remote.as_ref().unwrap().state.clone();
+        state.device.as_mut().unwrap().volume_percent = percent;
+        app.remote_poll_seq = seq;
+        app.handle_api(ApiResponse::PlaybackState {
+            seq,
+            result: Ok(Some(state)),
+        });
+    }
+
+    #[test]
+    fn remote_volume_waits_for_a_poll_sent_after_its_write_completes() {
+        let mut app = remote_volume_app();
+        app.remote.as_mut().unwrap().received_at = Instant::now() - Duration::from_secs(30);
+        app.remote_poll_seq = 7;
+        app.set_volume(65, true);
+        let request = app.remote_volume_request;
+        assert_eq!(app.now_playing().unwrap().volume_percent, 65);
+
+        // Neither the poll already in flight nor one sent while the write is
+        // waiting on Spotify can overrule the volume chosen here.
+        for seq in [7, 8] {
+            report_remote_volume(&mut app, seq, Some(40));
+            assert_eq!(app.now_playing().unwrap().volume_percent, 65);
+            assert!(app.pending_remote_volume.is_some());
+        }
+        app.handle_api(ApiResponse::PlaybackState {
+            seq: 8,
+            result: Err(crate::api::ApiError::RateLimited),
+        });
+        assert_eq!(app.now_playing().unwrap().volume_percent, 65);
+
+        app.handle_api(ApiResponse::Remote {
+            action: RemoteAction::Volume { request },
+            result: Ok(()),
+        });
+        report_remote_volume(&mut app, 8, Some(40));
+        assert_eq!(app.now_playing().unwrap().volume_percent, 65);
+        assert!(app.pending_remote_volume.is_some());
+
+        report_remote_volume(&mut app, 9, Some(40));
+        assert_eq!(app.now_playing().unwrap().volume_percent, 65);
+        assert!(app.pending_remote_volume.is_some());
+        assert!(app.remote_recheck_at.is_some());
+        // Receiving that same response again is not a second fresh poll.
+        report_remote_volume(&mut app, 9, Some(40));
+        assert_eq!(app.now_playing().unwrap().volume_percent, 65);
+
+        report_remote_volume(&mut app, 10, Some(65));
+        assert!(app.pending_remote_volume.is_none());
+        assert_eq!(app.now_playing().unwrap().volume_percent, 65);
+        app.backend.shutdown();
+    }
+
+    #[test]
+    fn remote_volume_accepts_a_fresh_change_elsewhere_but_not_a_missing_value() {
+        let mut app = remote_volume_app();
+        app.set_volume(65, true);
+        app.handle_api(ApiResponse::Remote {
+            action: RemoteAction::Volume {
+                request: app.remote_volume_request,
+            },
+            result: Ok(()),
+        });
+        report_remote_volume(&mut app, 1, None);
+        assert_eq!(app.now_playing().unwrap().volume_percent, 65);
+        assert!(app.pending_remote_volume.is_some());
+
+        report_remote_volume(&mut app, 2, Some(35));
+        assert_eq!(app.now_playing().unwrap().volume_percent, 65);
+        assert!(app.pending_remote_volume.is_some());
+        app.pending_remote_volume.as_mut().unwrap().written_at =
+            Some(Instant::now() - PLAYBACK_HOLD);
+        report_remote_volume(&mut app, 3, Some(35));
+        assert!(app.pending_remote_volume.is_none());
+        assert_eq!(app.now_playing().unwrap().volume_percent, 35);
+        app.backend.shutdown();
+    }
+
+    /// A Sonos reports its old volume for seconds after a write Spotify
+    /// accepted. The slider stays where it was put instead of jumping back
+    /// and forth, and waiting asks Spotify no more often.
+    #[test]
+    fn remote_volume_holds_through_a_device_that_reports_it_late() {
+        let mut app = remote_volume_app();
+        app.set_volume(65, true);
+        app.handle_api(ApiResponse::Remote {
+            action: RemoteAction::Volume {
+                request: app.remote_volume_request,
+            },
+            result: Ok(()),
+        });
+        report_remote_volume(&mut app, 1, Some(35));
+        assert!(app.remote_recheck_at.is_some());
+        app.remote_recheck_at = None;
+        for seq in 2..5 {
+            report_remote_volume(&mut app, seq, Some(35));
+            assert_eq!(app.now_playing().unwrap().volume_percent, 65);
+            assert!(app.pending_remote_volume.is_some());
+        }
+        assert!(app.remote_recheck_at.is_none());
+        report_remote_volume(&mut app, 5, Some(65));
+        assert!(app.pending_remote_volume.is_none());
+        assert_eq!(app.now_playing().unwrap().volume_percent, 65);
+        app.backend.shutdown();
+    }
+
     /// A remote device that refuses volume changes, such as a phone playing
     /// over Bluetooth, gets no volume request: Spotify would only answer
     /// with an error (#627).
@@ -26715,7 +26937,7 @@ mod tests {
         device.supports_volume = None;
         assert!(app.can_set_volume());
         app.apply(Action::SetVolume(10), &ctx);
-        assert!(matches!(app.pending_remote_volume, Some((10, _))));
+        assert_eq!(app.pending_remote_volume.as_ref().unwrap().percent, 10);
         app.backend.shutdown();
     }
 

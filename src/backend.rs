@@ -100,7 +100,11 @@ pub enum RemoteAction {
     Next,
     Previous,
     Seek,
-    Volume,
+    /// Carries the adjustment's serial so a late reply cannot settle a
+    /// newer one.
+    Volume {
+        request: u64,
+    },
     Shuffle,
     Repeat,
 }
@@ -4862,7 +4866,7 @@ async fn over_connect(
                     connect_value("set_repeating_context", (repeat != "off").into()),
                     connect_value("set_repeating_track", (repeat == "track").into()),
                 ],
-                RemoteAction::Volume => {
+                RemoteAction::Volume { .. } => {
                     let result = engine
                         .set_device_volume(&target, *percent)
                         .await
@@ -5747,7 +5751,7 @@ async fn handle(
                 RemoteAction::Next => routed!(next(device)),
                 RemoteAction::Previous => routed!(previous(device)),
                 RemoteAction::Seek => routed!(seek(position_ms, device)),
-                RemoteAction::Volume => routed!(set_volume(percent, device)),
+                RemoteAction::Volume { .. } => routed!(set_volume(percent, device)),
                 RemoteAction::Shuffle => routed!(set_shuffle(flag, device)),
                 RemoteAction::Repeat => routed!(set_repeat(&repeat, device)),
             };
