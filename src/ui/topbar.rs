@@ -613,15 +613,32 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                             .size()
                             .x;
                         let size = if wide > 130.0 { (14.0 * 130.0 / wide).clamp(10.0, 14.0) } else { 14.0 };
+                        // The name opens your Spotify profile.
+                        let profile = app
+                            .user
+                            .as_ref()
+                            .map(|user| format!("https://open.spotify.com/user/{}", user.id));
                         ui.horizontal(|ui| {
                             ui.add_space(10.0);
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&name).font(theme::semibold(size)).color(palette.text),
+                            let label = ui
+                                .add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&name)
+                                            .font(theme::semibold(size))
+                                            .color(palette.text),
+                                    )
+                                    .truncate()
+                                    .selectable(false)
+                                    .sense(egui::Sense::click()),
                                 )
-                                .truncate()
-                                .selectable(false),
-                            );
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .on_hover_text("Open your profile");
+                            if label.clicked()
+                                && let Some(profile) = profile.clone()
+                            {
+                                app.actions.push(Action::OpenUrl(profile));
+                                ui.close();
+                            }
                         });
                         if let Some(product) = product {
                             // In the chanceify purple that melts into the theme accent.
