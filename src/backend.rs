@@ -6060,7 +6060,17 @@ async fn read_playlist_cache(path: std::path::PathBuf) -> std::io::Result<(Cache
         {
             log::warn!("unable to clean playlist cache {}: {error}", path.display());
         }
-        cache
+        // Rows cached before local names were decoded are decoded now.
+        cache.map(|(mut cached, appendable)| {
+            for row in &mut cached.items {
+                for item in row.item.iter_mut().chain(row.track.iter_mut()) {
+                    if let PlayableItem::Track(track) = item {
+                        session_reads::normalize_local_track_labels(track);
+                    }
+                }
+            }
+            (cached, appendable)
+        })
     })
     .await
     .map_err(std::io::Error::other)?

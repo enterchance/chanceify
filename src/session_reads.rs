@@ -1085,7 +1085,7 @@ fn local_track(id: &SpotifyUri, uri: String) -> Option<PlayableItem> {
     else {
         return None;
     };
-    Some(PlayableItem::Track(Track {
+    let mut track = Track {
         uri,
         name: track_title.clone(),
         duration_ms: u32::try_from(duration.as_millis()).unwrap_or(u32::MAX),
@@ -1102,7 +1102,45 @@ fn local_track(id: &SpotifyUri, uri: String) -> Option<PlayableItem> {
         }),
         is_local: true,
         ..Default::default()
-    }))
+    };
+    normalize_local_track_labels(&mut track);
+    Some(PlayableItem::Track(track))
+}
+
+/// Decodes a local file's names, which its URI carries form-encoded
+/// ("Tan+Bi%C3%B3nica"), including in rows cached before they were decoded.
+/// A name is decoded only while it is still the raw URI component, so a
+/// custom name or one decoded already stays as it is.
+pub(crate) fn normalize_local_track_labels(track: &mut Track) {
+    if !track.uri.starts_with("spotify:local:") {
+        return;
+    }
+    let Ok(SpotifyUri::Local {
+        artist,
+        album_title,
+        track_title,
+        ..
+    }) = SpotifyUri::from_uri(&track.uri)
+    else {
+        return;
+    };
+    let decode = |name: &mut String, encoded: &str| {
+        if name != encoded || !encoded.contains(['+', '%']) {
+            return;
+        }
+        // Spaces first, so an escaped %2B stays a literal plus.
+        let spaced = encoded.replace('+', " ");
+        if let Ok(decoded) = percent_encoding::percent_decode_str(&spaced).decode_utf8() {
+            *name = decoded.into_owned();
+        }
+    };
+    decode(&mut track.name, &track_title);
+    if let [artist_ref] = track.artists.as_mut_slice() {
+        decode(&mut artist_ref.name, &artist);
+    }
+    if let Some(album) = &mut track.album {
+        decode(&mut album.name, &album_title);
+    }
 }
 
 /// Track and episode details for the given URIs, in one batched request.
@@ -1417,6 +1455,47 @@ mod tests {
                 }),
             ),
         ])
+    }
+
+    #[test]
+    fn local_track_labels_decode_uri_components_without_changing_the_uri() {
+        let uri = "spotify:local:Tan+Bi%C3%B3nica:Boquitas+Pintadas:Tel%C3%A9fonos:180";
+        let local = item(&row(uri, "", 0), &HashMap::new());
+        let Some(PlayableItem::Track(track)) = local.item else {
+            panic!("a local file is a track");
+        };
+        assert_eq!(track.name, "Teléfonos");
+        assert_eq!(track.artist_names(), "Tan Biónica");
+        assert_eq!(track.album.unwrap().name, "Boquitas Pintadas");
+        assert_eq!(track.uri, uri);
+        assert_eq!(track.duration_ms, 180_000);
+    }
+
+    #[test]
+    fn local_track_labels_decode_once_and_preserve_invalid_utf8() {
+        for (encoded, expected) in [
+            ("A+B", "A B"),
+            ("C%2B%2B", "C++"),
+            ("100%25+Pure", "100% Pure"),
+            ("%252B", "%2B"),
+            ("%FF+Name", "%FF+Name"),
+            ("%C3%28", "%C3%28"),
+            ("Already decoded", "Already decoded"),
+        ] {
+            let uri = format!("spotify:local:{encoded}:{encoded}:{encoded}:180");
+            let local = item(&row(&uri, "", 0), &HashMap::new());
+            let Some(PlayableItem::Track(track)) = local.item else {
+                panic!("a local file is a track");
+            };
+            assert_eq!(track.name, expected);
+            assert_eq!(track.artist_names(), expected);
+            assert_eq!(track.uri, uri);
+            // A decoded row can be cached and restored again and again.
+            let mut restored = track.clone();
+            normalize_local_track_labels(&mut restored);
+            normalize_local_track_labels(&mut restored);
+            assert_eq!(restored, track);
+        }
     }
 
     #[test]
