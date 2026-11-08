@@ -1087,6 +1087,9 @@ pub enum Dialog {
     PersonalAppIntro,
     /// Offers, once, to start chanceify with the computer.
     StartWithComputer,
+    /// Asks before song files from the Local songs page go to the Recycle
+    /// Bin: each file's path, and the name its row shows.
+    ConfirmTrashLocalFiles { files: Vec<(String, String)> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1650,6 +1653,9 @@ pub enum Action {
     AddToLocalPlaylist { playlist: usize, paths: Vec<String> },
     /// Take song files out of a local playlist.
     RemoveFromLocalPlaylist { playlist: usize, paths: Vec<String> },
+    /// Move song files to the Recycle Bin (Windows) and take them off the
+    /// Local songs page. Ctrl+Z brings the latest ones back.
+    TrashLocalFiles(Vec<String>),
     /// Last.fm: open the browser to allow chanceify™, then wait for it.
     LastfmSignIn,
     LastfmCancel,

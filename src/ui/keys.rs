@@ -437,7 +437,8 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         // The only key that is not the reader's to move. Everything else,
         // even Ctrl+W, is a shortcut they bind in the keys list.
         key(Modifiers::COMMAND, Key::Q, Action::Quit);
-        // Ctrl+Z takes back the last removal. Fixed, like Quit.
+        // Ctrl+Z takes back the last removal: songs taken out of a playlist,
+        // or song files sent to the Recycle Bin. Fixed, like Quit.
         if !editing_text {
             key(Modifiers::COMMAND, Key::Z, Action::UndoRemoval);
         }

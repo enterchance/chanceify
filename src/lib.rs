@@ -75,6 +75,7 @@ pub mod stats;
 pub mod swirl_art;
 pub mod system_fonts;
 pub mod theme;
+pub mod trash;
 pub mod tour;
 pub mod thumbbar;
 pub mod ui;

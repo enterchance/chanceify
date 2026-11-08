@@ -117,6 +117,61 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         }
                     });
                 }
+                Dialog::ConfirmTrashLocalFiles { files } => {
+                    let count = files.len();
+                    theme::text(
+                        ui,
+                        "Move to the Recycle Bin?",
+                        theme::bold(theme::HEADING_TEXT),
+                        palette.text,
+                    );
+                    ui.add_space(8.0);
+                    let body = match files.first() {
+                        Some((_, name)) if count == 1 => format!(
+                            "“{name}” will be moved from your computer to the Recycle Bin. Press Ctrl+Z to bring it back."
+                        ),
+                        _ => format!(
+                            "These {count} songs will be moved from your computer to the Recycle Bin. Press Ctrl+Z to bring them back."
+                        ),
+                    };
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(body)
+                                .font(theme::regular(theme::BODY_TEXT))
+                                .color(palette.secondary),
+                        )
+                        .wrap(),
+                    );
+                    if count > 1 {
+                        // The first few by name, so it is plain which ones.
+                        const SHOWN: usize = 6;
+                        ui.add_space(8.0);
+                        for (_, name) in files.iter().take(SHOWN) {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(format!("• {name}"))
+                                        .font(theme::regular(theme::SMALL_TEXT))
+                                        .color(palette.text),
+                                )
+                                .truncate(),
+                            );
+                        }
+                        if count > SHOWN {
+                            theme::subtle(ui, &palette, &format!("and {} more", count - SHOWN));
+                        }
+                    }
+                    ui.add_space(20.0);
+                    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 34.0), Layout::right_to_left(Align::Center), |ui| {
+                        if theme::pill_button(ui, &palette, "Move to Recycle Bin", true).clicked() {
+                            app.actions.push(Action::TrashLocalFiles(
+                                files.iter().map(|(path, _)| path.clone()).collect(),
+                            ));
+                        }
+                        if theme::pill_button(ui, &palette, &gettext(locale, "Cancel"), false).clicked() {
+                            app.actions.push(Action::CloseDialog);
+                        }
+                    });
+                }
                 Dialog::ConfirmPlaylistDuplicates {
                     playlist_id,
                     playlist_name,

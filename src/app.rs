@@ -820,6 +820,9 @@ pub struct App {
     /// chooser closed with no folder.
     folder_pick: std::sync::Arc<std::sync::Mutex<Option<Option<PathBuf>>>>,
     files_pick: std::sync::Arc<std::sync::Mutex<Option<(usize, usize)>>>,
+    /// Song files sent to the Recycle Bin this session, for Ctrl+Z, and the
+    /// moves still running.
+    pub local_trash: local_trash::LocalTrash,
     /// A friend's song chosen with Discord's Join: the address, how far in the
     /// friend was, and when it was asked for. Cleared once the seek is sent.
     join_seek: Option<(String, u32, Instant)>,
@@ -1473,6 +1476,7 @@ impl App {
             local_sync: local_sync::LocalSync::default(),
             folder_pick: std::sync::Arc::default(),
             files_pick: std::sync::Arc::default(),
+            local_trash: local_trash::LocalTrash::default(),
             join_seek: None,
             dialog_rect: None,
             last_window_pos: None,
@@ -4650,6 +4654,7 @@ impl App {
         self.poll_deck();
         self.poll_folder_pick();
         self.poll_files_pick();
+        self.poll_local_trash();
         self.drive_lastfm();
         self.drive_matches();
         if let Some(wait) = self.match_wake() {
@@ -13238,7 +13243,13 @@ impl App {
                 }
             }
             Action::UndoRemoval => {
-                if let Some(undo) = self.undo_removal.take() {
+                // The latest of the two is taken back first: songs taken
+                // out of a playlist, or song files sent to the Recycle Bin.
+                let removed_at = self.undo_removal.as_ref().map(|undo| undo.created);
+                let trashed_at = self.local_trash.stack.last().map(|batch| batch.at);
+                if trashed_at.is_some() && trashed_at > removed_at {
+                    self.restore_trashed_files(ctx);
+                } else if let Some(undo) = self.undo_removal.take() {
                     self.add_to_playlist_now(
                         undo.playlist_id,
                         undo.playlist_name,
@@ -14224,6 +14235,7 @@ impl App {
                     self.mark_settings_dirty();
                 }
             }
+            Action::TrashLocalFiles(paths) => self.trash_local_files(ctx, paths),
             Action::LastfmSignIn => {
                 self.sync_lastfm_config();
                 self.lastfm.sign_in();
@@ -16282,6 +16294,7 @@ mod deck;
 mod lastfm_art;
 mod live_analysis;
 mod local_sync;
+mod local_trash;
 mod radio;
 mod scrobble;
 
