@@ -10370,11 +10370,22 @@ impl App {
                         .map(|item| item.uri().to_string());
                     let position = remote.state.progress_ms.unwrap_or(0);
                     if let Some(uri) = uri {
-                        let mut request = match &remote.state.context {
-                            Some(context) if !context.uri.is_empty() => {
-                                PlayRequest::context(context.uri.clone()).starting_at_uri(uri)
-                            }
-                            _ => PlayRequest::tracks(vec![uri]),
+                        // Spotify's last state can lose the context of the
+                        // song this computer remembers playing from one.
+                        let context = remote
+                            .state
+                            .context
+                            .as_ref()
+                            .map(|context| context.uri.clone())
+                            .filter(|context| !context.is_empty())
+                            .or_else(|| {
+                                self.resume_context
+                                    .clone()
+                                    .filter(|_| self.resume_track.as_ref() == Some(&uri))
+                            });
+                        let mut request = match context {
+                            Some(context) => PlayRequest::context(context).starting_at_uri(uri),
+                            None => PlayRequest::tracks(vec![uri]),
                         };
                         request.position_ms = position;
                         self.play_request(request, false);
@@ -15658,7 +15669,12 @@ impl App {
             .now_playing()
             .filter(|now| !crate::file_deck::is_file_uri(&now.uri))
         {
-            self.resume_context = self.playing_context_uri();
+            // A paused song from a sorted view has no context to report, but
+            // its playlist is still what it plays from.
+            let same_song = self.resume_track.as_deref() == Some(now.uri.as_str());
+            self.resume_context = self
+                .playing_context_uri()
+                .or_else(|| self.resume_context.clone().filter(|_| same_song));
             self.resume_track = Some(now.uri.clone());
             self.resume_position_ms = now.position_ms;
         }
@@ -18933,6 +18949,43 @@ mod tests {
         assert_eq!(Some(&album.id), now.album_id.as_ref());
         assert_eq!(track.image(64), now.art_small.as_deref());
         assert_eq!(track.image(640), now.art_url.as_deref());
+        app.backend.shutdown();
+    }
+
+    /// Closing keeps the playlist a paused song plays from when nothing
+    /// reports it any more; a song played on its own stays on its own.
+    #[test]
+    fn the_playing_playlist_survives_a_restart_without_a_reported_context() {
+        let paused = |song: &str| LocalState {
+            connected: true,
+            playback: Playback::Paused,
+            track: Some(crate::player::LocalTrack {
+                uri: song.into(),
+                duration_ms: 240_000,
+                ..Default::default()
+            }),
+            position_ms: 5_000,
+            ..Default::default()
+        };
+        let mut app = headless_app();
+        app.local = paused("spotify:track:song");
+        app.resume_context = Some("spotify:playlist:kept".into());
+        app.resume_track = Some("spotify:track:song".into());
+        app.assumed_context = Some(AssumedContext {
+            uri: "spotify:playlist:kept".into(),
+            shuffle: None,
+            at: Instant::now() - ASSUMED_CONTEXT_HOLD - Duration::from_secs(1),
+        });
+        app.save_session();
+        assert_eq!(app.resume_context.as_deref(), Some("spotify:playlist:kept"));
+        app.backend.shutdown();
+
+        let mut app = headless_app();
+        app.local = paused("spotify:track:other");
+        app.resume_context = Some("spotify:playlist:kept".into());
+        app.resume_track = Some("spotify:track:song".into());
+        app.save_session();
+        assert_eq!(app.resume_context, None);
         app.backend.shutdown();
     }
 
