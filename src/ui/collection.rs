@@ -628,7 +628,9 @@ pub struct TableCache {
     pub plays_loaded: bool,
     pub visible: Arc<[usize]>,
     pub view_uris: Option<Arc<[String]>>,
-    /// Playback positions for visible rows; unavailable rows have no position.
+    /// Playback positions in `view_uris`, by item index: a finite table's
+    /// rows are server slots, not view rows. Unplayable and filtered-out
+    /// items have no position.
     pub view_positions: Arc<[Option<usize>]>,
 }
 
@@ -757,13 +759,14 @@ pub fn prepare_table_view(
             || plays_shown_rows)
             .then(|| {
                 let mut uris = Vec::new();
+                view_positions.resize(items.len(), None);
                 for &index in &visible {
                     let item = &items[index].0;
-                    view_positions.push(widgets::row_playable(item).then(|| {
+                    view_positions[index] = widgets::row_playable(item).then(|| {
                         let position = uris.len();
                         uris.push(item.uri().to_string());
                         position
-                    }));
+                    });
                 }
                 Arc::<[String]>::from(uris)
             });
@@ -1069,7 +1072,12 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
                 return;
             }
             let play_index = if entry.view_uris.is_some() {
-                entry.view_positions[row].unwrap_or(row)
+                entry
+                    .view_positions
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .unwrap_or(row)
             } else {
                 actual_index
             };
@@ -1196,7 +1204,12 @@ pub fn table(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
             app,
             TrackRow {
                 index: if entry.view_uris.is_some() {
-                    entry.view_positions[row].unwrap_or(row)
+                    entry
+                        .view_positions
+                        .get(index)
+                        .copied()
+                        .flatten()
+                        .unwrap_or(row)
                 } else {
                     actual_index
                 },
