@@ -118,8 +118,7 @@ struct View {
     picked_in: Open,
     /// Where a Shift+click range starts.
     anchor: Option<String>,
-    /// The playable file under the pointer on the last frame, for the
-    /// Shift+Q and Shift+N keys.
+    /// The playable file under the pointer on the last frame.
     hovered: Option<String>,
 }
 
@@ -693,27 +692,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
 
-    // Shift+Q queues the picked songs (or the one under the pointer), and
-    // Shift+N plays them next. Escape lets go of the picked songs.
+    // Escape lets go of the picked songs. Queueing them is the right-click
+    // menu, or your own queue keys over a row.
     if !ui.ctx().text_edit_focused() {
-        let targets = {
-            let picked = picked_paths(&lines, &view.picked);
-            if picked.is_empty() {
-                view.hovered.iter().cloned().collect()
-            } else {
-                picked
-            }
-        };
-        if !targets.is_empty() {
-            for (key, next) in [(egui::Key::Q, false), (egui::Key::N, true)] {
-                if ui.input_mut(|input| input.consume_key(egui::Modifiers::SHIFT, key)) {
-                    app.actions.push(Action::QueueLocalFiles {
-                        paths: targets.clone(),
-                        next,
-                    });
-                }
-            }
-        }
         if !view.picked.is_empty() && ui.input(|input| input.key_pressed(egui::Key::Escape)) {
             view.picked.clear();
             view.anchor = None;
