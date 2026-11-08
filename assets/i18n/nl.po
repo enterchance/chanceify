@@ -2470,6 +2470,10 @@ msgstr "Zijbalk tonen of verbergen"
 msgid "Back or forward"
 msgstr "Terug of vooruit"
 
+#: src/ui/keys.rs
+msgid "Scroll the page"
+msgstr "Pagina scrollen"
+
 #: src/ui/keys.rs:262
 msgid "Go to the playing artist"
 msgstr "Ga naar de huidige artiest"

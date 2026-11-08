@@ -2453,6 +2453,10 @@ msgstr "Visa eller dölj sidofältet"
 msgid "Back or forward"
 msgstr "Bakåt eller framåt"
 
+#: src/ui/keys.rs
+msgid "Scroll the page"
+msgstr "Rulla sidan"
+
 #: src/ui/keys.rs:262
 msgid "Go to the playing artist"
 msgstr "Gå till artisten som spelas"

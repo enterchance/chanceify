@@ -575,6 +575,9 @@ fn central(app: &mut App, ui: &mut egui::Ui) {
                                 Page::Local => local::show(app, ui),
                             }
                         });
+                    if app.dialog.is_none() && !app.show_devices {
+                        keys::scroll_page(ui);
+                    }
                 },
             );
             let mut bar = ui.new_child(

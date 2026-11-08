@@ -2482,6 +2482,10 @@ msgstr "Pokaż lub ukryj pasek boczny"
 msgid "Back or forward"
 msgstr "Wstecz lub dalej"
 
+#: src/ui/keys.rs
+msgid "Scroll the page"
+msgstr "Przewiń stronę"
+
 #: src/ui/keys.rs:262
 msgid "Go to the playing artist"
 msgstr "Przejdź do odtwarzanego wykonawcy"

@@ -2448,6 +2448,10 @@ msgstr "サイドバーの表示／非表示"
 msgid "Back or forward"
 msgstr "戻る／進む"
 
+#: src/ui/keys.rs
+msgid "Scroll the page"
+msgstr "ページをスクロール"
+
 #: src/ui/keys.rs:262
 msgid "Go to the playing artist"
 msgstr "再生中のアーティストへ移動"

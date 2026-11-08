@@ -2366,6 +2366,10 @@ msgstr ""
 msgid "Back or forward"
 msgstr ""
 
+#: src/ui/keys.rs
+msgid "Scroll the page"
+msgstr ""
+
 #: src/ui/keys.rs:262
 msgid "Go to the playing artist"
 msgstr ""

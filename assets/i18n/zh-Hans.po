@@ -2377,6 +2377,10 @@ msgstr "显示或隐藏侧边栏"
 msgid "Back or forward"
 msgstr "后退或前进"
 
+#: src/ui/keys.rs
+msgid "Scroll the page"
+msgstr "滚动页面"
+
 #: src/ui/keys.rs:262
 msgid "Go to the playing artist"
 msgstr "前往正在播放的艺人"

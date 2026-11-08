@@ -508,6 +508,57 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
     }
 }
 
+/// Scroll the main page by a viewport with Page Up and Page Down, or to
+/// either end with Home and End when no shortcut has taken them. Call after
+/// laying out its contents so virtual lists contribute their full height.
+pub(super) fn scroll_page(ui: &egui::Ui) {
+    if !ui.is_enabled() || ui.ctx().text_edit_focused() || egui::Popup::is_any_open(ui.ctx()) {
+        return;
+    }
+    let visible = ui.clip_rect();
+    let content = ui.min_rect();
+    let first = content.top();
+    let last = (content.bottom() - visible.height()).max(first);
+    let mut top = visible.top().clamp(first, last);
+    let mut handled = false;
+    // The events are walked rather than taken with consume_key: consume_key
+    // ignores an extra Shift, drops the count of repeated presses, and cannot
+    // keep the order of interleaved Home and Page keys.
+    ui.input_mut(|input| {
+        input.events.retain(|event| {
+            let egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } = event
+            else {
+                return true;
+            };
+            if *modifiers != Modifiers::NONE {
+                return true;
+            }
+            top = match key {
+                Key::PageUp => (top - visible.height()).max(first),
+                Key::PageDown => (top + visible.height()).min(last),
+                Key::Home => first,
+                Key::End => last,
+                _ => return true,
+            };
+            handled = true;
+            false
+        });
+    });
+    if handled {
+        // Center alignment avoids adding item spacing to the page step.
+        let target = egui::Rect::from_min_size(
+            egui::pos2(content.left(), top),
+            egui::vec2(content.width(), visible.height()),
+        );
+        ui.scroll_to_rect(target, Some(egui::Align::Center));
+    }
+}
+
 /// The rows of the keyboard shortcuts dialog: the keys, then what they do.
 /// Key names stay as the keyboard prints them; words around them, and
 /// every description, are translated.
@@ -553,6 +604,10 @@ pub fn shortcuts(locale: Locale) -> Vec<(Cow<'static, str>, Cow<'static, str>)> 
             gettext(locale, "Search"),
         ),
         (keys("Alt+←  /  Alt+→"), gettext(locale, "Back or forward")),
+        (
+            keys("Page Up  /  Page Down"),
+            gettext(locale, "Scroll the page"),
+        ),
         (
             keys(platform_shortcut("Ctrl+H", "Cmd+Shift+H")),
             gettext(locale, "Home"),

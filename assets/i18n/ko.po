@@ -2432,6 +2432,10 @@ msgstr "사이드바 표시 또는 숨기기"
 msgid "Back or forward"
 msgstr "뒤로 또는 앞으로"
 
+#: src/ui/keys.rs
+msgid "Scroll the page"
+msgstr "페이지 스크롤"
+
 #: src/ui/keys.rs:262
 msgid "Go to the playing artist"
 msgstr "재생 중인 아티스트로 이동"

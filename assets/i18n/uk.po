@@ -2506,6 +2506,10 @@ msgstr "Показати або сховати бічну панель"
 msgid "Back or forward"
 msgstr "Назад або вперед"
 
+#: src/ui/keys.rs
+msgid "Scroll the page"
+msgstr "Прокрутити сторінку"
+
 #: src/ui/keys.rs:262
 msgid "Go to the playing artist"
 msgstr "Перейти до виконавця поточної пісні"

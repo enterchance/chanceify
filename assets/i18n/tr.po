@@ -2503,6 +2503,10 @@ msgstr "Kenar çubuğunu göster veya gizle"
 msgid "Back or forward"
 msgstr "Geri veya ileri"
 
+#: src/ui/keys.rs
+msgid "Scroll the page"
+msgstr "Sayfayı kaydır"
+
 #: src/ui/keys.rs:262
 msgid "Go to the playing artist"
 msgstr "Çalan sanatçıya git"

@@ -2475,6 +2475,10 @@ msgstr "Mostra o nascondi la barra laterale"
 msgid "Back or forward"
 msgstr "Indietro o avanti"
 
+#: src/ui/keys.rs
+msgid "Scroll the page"
+msgstr "Scorrere la pagina"
+
 #: src/ui/keys.rs:262
 msgid "Go to the playing artist"
 msgstr "Vai all’artista in riproduzione"

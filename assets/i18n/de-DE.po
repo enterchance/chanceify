@@ -2482,6 +2482,10 @@ msgstr "Seitenleiste ein- oder ausblenden"
 msgid "Back or forward"
 msgstr "Zurück oder vorwärts"
 
+#: src/ui/keys.rs
+msgid "Scroll the page"
+msgstr "Seite scrollen"
+
 #: src/ui/keys.rs:262
 msgid "Go to the playing artist"
 msgstr "Zum aktuellen Künstler"
