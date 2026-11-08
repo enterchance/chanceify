@@ -120,87 +120,110 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 });
             }
             ui.add_space(10.0);
-            match page.albums.get(page.filter.groups()) {
-                Some(list) => {
-                    let mut seen = std::collections::HashSet::new();
-                    let albums: Vec<_> = list
-                        .items
-                        .iter()
-                        .filter(|album| seen.insert(album.name.to_lowercase()))
-                        .collect();
-                    widgets::grid(ui, |ui| {
-                        for album in &albums {
-                            let subtitle = format!(
-                                "{} • {}",
-                                album.year().unwrap_or(""),
-                                app.album_kind_label(album)
-                            );
-                            let playing_here = app.playing_context_uri().as_deref()
-                                == Some(album.uri.as_str())
-                                && app.believed_playing();
-                            let card = widgets::card(
-                                ui,
-                                app,
-                                pick_image(&album.images, 300),
-                                &album.name,
-                                subtitle.trim_start_matches(" • "),
-                                widgets::CardCover::square(playing_here),
-                            );
-                            if card.play {
-                                if playing_here {
-                                    app.actions.push(Action::TogglePlay);
-                                } else {
-                                    app.actions.push(Action::PlayContext {
-                                        uri: album.uri.clone(),
-                                        offset_uri: None,
-                                        offset_index: None,
-                                    });
+            // While a category loads for the first time, keep the height
+            // the previous one took, so the page does not shrink under the
+            // reader and lose its scroll position.
+            let height_id = ui.make_persistent_id(("discography-height", id));
+            let loading = page
+                .albums
+                .get(page.filter.groups())
+                .is_none_or(|list| !list.loaded_once && list.error.is_none());
+            let previous = ui.ctx().data(|data| data.get_temp::<f32>(height_id));
+            let discography = ui.scope(|ui| {
+                if loading && let Some(height) = previous {
+                    ui.set_min_height(height);
+                }
+                match page.albums.get(page.filter.groups()) {
+                    Some(list) => {
+                        let mut seen = std::collections::HashSet::new();
+                        let albums: Vec<_> = list
+                            .items
+                            .iter()
+                            .filter(|album| seen.insert(album.name.to_lowercase()))
+                            .collect();
+                        widgets::grid(ui, |ui| {
+                            for album in &albums {
+                                let subtitle = format!(
+                                    "{} • {}",
+                                    album.year().unwrap_or(""),
+                                    app.album_kind_label(album)
+                                );
+                                let playing_here = app.playing_context_uri().as_deref()
+                                    == Some(album.uri.as_str())
+                                    && app.believed_playing();
+                                let card = widgets::card(
+                                    ui,
+                                    app,
+                                    pick_image(&album.images, 300),
+                                    &album.name,
+                                    subtitle.trim_start_matches(" • "),
+                                    widgets::CardCover::square(playing_here),
+                                );
+                                if card.play {
+                                    if playing_here {
+                                        app.actions.push(Action::TogglePlay);
+                                    } else {
+                                        app.actions.push(Action::PlayContext {
+                                            uri: album.uri.clone(),
+                                            offset_uri: None,
+                                            offset_index: None,
+                                        });
+                                    }
                                 }
+                                if card.clicked {
+                                    app.actions
+                                        .push(Action::Open(Page::Album(album.id.clone())));
+                                }
+                                egui::Popup::context_menu(&card.response)
+                                    .id(ui.make_persistent_id(("discography-menu", &album.uri)))
+                                    .frame(widgets::menu_frame(&palette))
+                                    .show(|ui| {
+                                        widgets::context_menu_items(
+                                            ui,
+                                            app,
+                                            &album.uri,
+                                            &album.name,
+                                            None,
+                                        )
+                                    });
                             }
-                            if card.clicked {
+                        });
+                        if list.loading {
+                            widgets::loading_row(ui, &palette, app.locale);
+                        } else if let Some(error) = &list.error {
+                            let error = error.clone();
+                            widgets::error_row(ui, app, &error, None);
+                        } else if list.items.is_empty() {
+                            theme::subtle(
+                                ui,
+                                &palette,
+                                &gettext(locale, "Nothing in this category."),
+                            );
+                        } else if list.can_load_more() {
+                            ui.add_space(8.0);
+                            if theme::soft_button(
+                                ui,
+                                &palette,
+                                None,
+                                &gettext(locale, "Load more"),
+                                false,
+                            )
+                            .clicked()
+                            {
                                 app.actions
-                                    .push(Action::Open(Page::Album(album.id.clone())));
+                                    .push(Action::LoadMoreArtistAlbums(id.to_string()));
                             }
-                            egui::Popup::context_menu(&card.response)
-                                .id(ui.make_persistent_id(("discography-menu", &album.uri)))
-                                .frame(widgets::menu_frame(&palette))
-                                .show(|ui| {
-                                    widgets::context_menu_items(
-                                        ui,
-                                        app,
-                                        &album.uri,
-                                        &album.name,
-                                        None,
-                                    )
-                                });
-                        }
-                    });
-                    if list.loading {
-                        widgets::loading_row(ui, &palette, app.locale);
-                    } else if let Some(error) = &list.error {
-                        let error = error.clone();
-                        widgets::error_row(ui, app, &error, None);
-                    } else if list.items.is_empty() {
-                        theme::subtle(ui, &palette, &gettext(locale, "Nothing in this category."));
-                    } else if list.can_load_more() {
-                        ui.add_space(8.0);
-                        if theme::soft_button(
-                            ui,
-                            &palette,
-                            None,
-                            &gettext(locale, "Load more"),
-                            false,
-                        )
-                        .clicked()
-                        {
-                            app.actions
-                                .push(Action::LoadMoreArtistAlbums(id.to_string()));
                         }
                     }
+                    None => widgets::grid(ui, |ui| {
+                        widgets::skeleton_cards(ui, &palette, app.locale, 6, false)
+                    }),
                 }
-                None => widgets::grid(ui, |ui| {
-                    widgets::skeleton_cards(ui, &palette, app.locale, 6, false)
-                }),
+            });
+            if !loading {
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(height_id, discography.response.rect.height());
+                });
             }
             ui.add_space(20.0);
 
