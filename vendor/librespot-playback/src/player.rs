@@ -60,6 +60,67 @@ const PREFETCH_HEAD_BYTES: usize = 128 * 1024;
 /// as it always did, shortly before the one playing ends.
 const PREFETCH_MAX_TRACKS: usize = 0;
 
+/// chanceify: the least time between two audio key requests. Spotify
+/// treats a burst of key requests, such as skipping quickly through a
+/// playlist, like a rate limit and refuses keys for a while (Spotifast
+/// #283), so keys are asked for one at a time and never in a burst.
+const AUDIO_KEY_SPACING: Duration = Duration::from_millis(200);
+
+/// chanceify: how long no key is asked for after a refusal, by the number
+/// of refusals in a row. Asking again at once only kept the refusals going.
+const AUDIO_KEY_REST: [Duration; 3] = [
+    Duration::from_secs(3),
+    Duration::from_secs(5),
+    Duration::from_secs(10),
+];
+
+/// When the next audio key may be asked for, and how many were refused in
+/// a row before it. Shared by every player and session in the process,
+/// since Spotify counts the account's requests.
+struct AudioKeyGate {
+    next: Option<Instant>,
+    refusals: usize,
+}
+
+fn audio_key_gate() -> &'static tokio::sync::Mutex<AudioKeyGate> {
+    static GATE: std::sync::OnceLock<tokio::sync::Mutex<AudioKeyGate>> = std::sync::OnceLock::new();
+    GATE.get_or_init(|| {
+        tokio::sync::Mutex::new(AudioKeyGate {
+            next: None,
+            refusals: 0,
+        })
+    })
+}
+
+/// Asks Spotify for one audio key, waiting until no other key request is
+/// on its way, at least [`AUDIO_KEY_SPACING`] after the previous one, and
+/// past the rest that follows a refusal.
+async fn request_audio_key(
+    session: &Session,
+    track_id: SpotifyId,
+    file_id: FileId,
+) -> Result<AudioKey, Error> {
+    let mut gate = audio_key_gate().lock().await;
+    if let Some(next) = gate.next {
+        tokio::time::sleep_until(tokio::time::Instant::from_std(next)).await;
+    }
+    let result = session.audio_key().request(track_id, file_id).await;
+    let refused = matches!(&result, Err(e) if PlayerTrackLoader::is_audio_key_unavailable(e));
+    let wait = if refused {
+        let rest = AUDIO_KEY_REST[gate.refusals.min(AUDIO_KEY_REST.len() - 1)];
+        gate.refusals += 1;
+        warn!("Audio key refused; asking for no key for {rest:?}");
+        rest
+    } else {
+        if result.is_ok() {
+            gate.refusals = 0;
+        }
+        AUDIO_KEY_SPACING
+    };
+    gate.next = Some(Instant::now() + wait);
+    result
+}
+
 pub const DB_VOLTAGE_RATIO: f64 = 20.0;
 pub const PCM_AT_0DBFS: f64 = 1.0;
 
@@ -1236,7 +1297,7 @@ impl PlayerTrackLoader {
                     .ok()
             }
         };
-        let key = self.session.audio_key().request(track_id, file_id);
+        let key = request_audio_key(&self.session, track_id, file_id);
         let (key, head) = future::join(key, head).await;
         debug!(
             "Prefetched <{}>{}",
@@ -1325,7 +1386,7 @@ impl PlayerTrackLoader {
                 None => {
                     let mut tries = 0;
                     loop {
-                        match self.session.audio_key().request(track_id, file_id).await {
+                        match request_audio_key(&self.session, track_id, file_id).await {
                             Ok(key) => break (Some(key), false),
                             Err(e) => {
                                 let unavailable = Self::is_audio_key_unavailable(&e);
