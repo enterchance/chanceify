@@ -101,6 +101,20 @@ pub fn format_date(locale: Locale, iso: &str) -> String {
         .replace("{year}", year)
 }
 
+/// How long timestamps are shown as relative dates: 30 days.
+pub const RELATIVE_DATE_LIMIT_SECONDS: i64 = 30 * 24 * 60 * 60;
+
+/// Whether `iso` is a timestamp shown as a relative date at `now`, within
+/// the past 30 days. Callers ask this rather than look at the label, whose
+/// wording depends on the language.
+pub fn is_relative_date(iso: &str, now: jiff::Timestamp) -> bool {
+    let Ok(added) = iso.parse::<jiff::Timestamp>() else {
+        return false;
+    };
+    let seconds = added.duration_until(now).as_secs_f64().floor() as i64;
+    (0..RELATIVE_DATE_LIMIT_SECONDS).contains(&seconds)
+}
+
 /// `5 minutes ago` for recent ISO-8601 timestamps, otherwise the usual date.
 ///
 /// Dates are shown relatively for their first 30 days, matching the playlist
@@ -111,7 +125,7 @@ pub fn format_relative_date(locale: Locale, iso: &str, now: jiff::Timestamp) -> 
         return format_date(locale, iso);
     };
     let seconds = added.duration_until(now).as_secs_f64().floor() as i64;
-    if !(0..30 * 24 * 60 * 60).contains(&seconds) {
+    if !(0..RELATIVE_DATE_LIMIT_SECONDS).contains(&seconds) {
         return format_date(locale, iso);
     }
 
@@ -577,6 +591,11 @@ mod tests {
             format_relative_date(Locale::English, "2026-08-01T12:00:00Z", now),
             "Aug 1, 2026"
         );
+        assert!(is_relative_date("2026-08-31T11:59:30Z", now));
+        assert!(is_relative_date("2026-08-17T12:00:00Z", now));
+        assert!(!is_relative_date("2026-08-01T12:00:00Z", now));
+        assert!(!is_relative_date("2026-09-01T12:00:00Z", now));
+        assert!(!is_relative_date("not-a-date", now));
     }
 
     #[test]

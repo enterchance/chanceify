@@ -2836,7 +2836,10 @@ fn track_row_contents(
             theme::regular(theme::SMALL_TEXT),
             palette.secondary,
         );
-        if label.ends_with(" ago") {
+        if row
+            .added_at
+            .is_some_and(|added| util::is_relative_date(added, jiff::Timestamp::now()))
+        {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_secs(1));
         }
@@ -2952,7 +2955,7 @@ fn track_row_contents(
                         palette.secondary.gamma_multiply(0.6),
                     );
                     theme::text(&mut child, &label, theme::regular(theme::SMALL_TEXT), palette.secondary);
-                    if label.ends_with(" ago") {
+                    if util::is_relative_date(added, jiff::Timestamp::now()) {
                         ui.ctx()
                             .request_repaint_after(std::time::Duration::from_secs(1));
                     }
@@ -2993,7 +2996,7 @@ fn track_row_contents(
                     let label =
                         util::format_relative_date(app.locale, added, jiff::Timestamp::now());
                     theme::text(&mut child, &label, theme::regular(theme::SMALL_TEXT), palette.secondary);
-                    if label.ends_with(" ago") {
+                    if util::is_relative_date(added, jiff::Timestamp::now()) {
                         ui.ctx()
                             .request_repaint_after(std::time::Duration::from_secs(1));
                     }
@@ -3055,7 +3058,7 @@ fn track_row_contents(
                         let label =
                             util::format_relative_date(app.locale, added, jiff::Timestamp::now());
                         theme::text(ui, &label, theme::regular(theme::SMALL_TEXT), palette.secondary);
-                        if label.ends_with(" ago") {
+                        if util::is_relative_date(added, jiff::Timestamp::now()) {
                             ui.ctx()
                                 .request_repaint_after(std::time::Duration::from_secs(1));
                         }
@@ -3087,7 +3090,7 @@ fn track_row_contents(
                         let label =
                             util::format_relative_date(app.locale, added, jiff::Timestamp::now());
                         theme::text(ui, &label, theme::regular(theme::SMALL_TEXT), palette.secondary);
-                        if label.ends_with(" ago") {
+                        if util::is_relative_date(added, jiff::Timestamp::now()) {
                             ui.ctx()
                                 .request_repaint_after(std::time::Duration::from_secs(1));
                         }
@@ -3184,7 +3187,7 @@ fn track_row_contents(
             paint_cell(&painter, cell.left(), cell.right(), cell.center().y, &label, 13.0, palette.secondary);
             // Relative labels cross a boundary while the table is idle, so
             // keep the visible value in step with the clock.
-            if label.ends_with(" ago") {
+            if util::is_relative_date(added, jiff::Timestamp::now()) {
                 ui.ctx()
                     .request_repaint_after(std::time::Duration::from_secs(1));
             }
