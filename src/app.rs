@@ -9270,7 +9270,12 @@ impl App {
                         .map(|album| album.id.clone())
                         .filter(|id| !id.is_empty());
                     match album {
-                        Some(album) => self.open(Page::Album(album)),
+                        // The album opens with the linked song picked and
+                        // brought into view, as Spotify's apps do.
+                        Some(album) => {
+                            self.reveal_song = Some(track.uri.clone());
+                            self.open(Page::Album(album));
+                        }
                         None => self.toast_error(gettext(
                             self.locale,
                             "This song's album is not on Spotify",
@@ -28423,9 +28428,10 @@ mod tests {
             .push(Action::OpenLink("spotify:track:t1".into()));
         app.apply_actions(&ctx);
 
-        // #then its album's page opens
+        // #then its album's page opens, waiting to pick the song
         assert_eq!(*app.page(), Page::Album("al1".into()));
         assert_eq!(app.pending_link, None);
+        assert_eq!(app.reveal_song.as_deref(), Some("spotify:track:t1"));
 
         // #when a song still unknown is linked
         app.actions
