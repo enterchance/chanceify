@@ -2657,12 +2657,15 @@ pub fn liked(app: &mut App, ui: &mut egui::Ui) {
         .map(|(item, _, _)| item.uri().to_string())
         .collect::<Vec<_>>()
         .into();
+    // The collection plays as a whole even while its rows still load: the
+    // loaded rows alone stopped after the last of them and gave Spotify no
+    // context.
     let context = match collection_uri {
-        Some(uri) if app.library.liked.is_complete() => RowContext::Context {
+        Some(uri) => RowContext::Context {
             uri,
             editable_playlist: None,
         },
-        _ => RowContext::Uris(uris),
+        None => RowContext::Uris(uris),
     };
     let loading = app.library.liked.loading;
     let error = app.library.liked.error.clone();

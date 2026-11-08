@@ -1897,7 +1897,7 @@ impl App {
             } => {
                 !played.view
                     && played.context == *context_uri
-                    && self.playlist_row_holds(context_uri, played.index, uri) != Some(false)
+                    && self.context_row_holds(context_uri, played.index, uri) != Some(false)
             }
             RowContext::View {
                 uris, context_uri, ..
@@ -1913,9 +1913,16 @@ impl App {
         !applies || played.index as usize == index
     }
 
-    /// Whether the loaded playlist row at server `position` holds `uri`;
-    /// `None` when that row is not loaded or the context is no playlist.
-    fn playlist_row_holds(&self, context_uri: &str, position: u32, uri: &str) -> Option<bool> {
+    /// Whether the loaded playlist or Liked Songs row at `position` holds
+    /// `uri`; `None` when that playlist row is not loaded or the context is
+    /// neither. Liked Songs rows move as songs are liked and unliked
+    /// elsewhere, and a row past the end has moved up: the list holds each
+    /// song once, so marking every copy marks the one row.
+    fn context_row_holds(&self, context_uri: &str, position: u32, uri: &str) -> Option<bool> {
+        if context_uri.ends_with(":collection") {
+            let row = self.library.liked.items.get(position as usize);
+            return Some(row.is_some_and(|row| row.track.uri == uri));
+        }
         let id = context_uri.strip_prefix("spotify:playlist:")?;
         let items = &self.playlist_pages.get(id)?.items;
         let row = items
@@ -18802,6 +18809,43 @@ mod tests {
             assert!(!app.can_clear_queue());
             app.backend.shutdown();
         }
+    }
+
+    /// A playing Liked Songs row stays marked when a song above it is
+    /// unliked and it moves up a row, the last row included.
+    #[test]
+    fn a_liked_row_keeps_showing_playing_after_a_song_above_it_is_unliked() {
+        let mut app = headless_app();
+        crate::demo::populate(&mut app);
+        app.remote = None;
+        app.selected_device = None;
+        app.local.connected = false;
+        let liked = RowContext::Context {
+            uri: "spotify:user:demo:collection".into(),
+            editable_playlist: None,
+        };
+        for last in [false, true] {
+            let row = if last {
+                app.library.liked.items.len() - 1
+            } else {
+                1
+            };
+            let song = app.library.liked.items[row].track.uri.clone();
+            app.actions.push(Action::PlayFromRow {
+                context: liked.clone(),
+                uri: song.clone(),
+                index: row as u32,
+            });
+            app.apply_actions(&egui::Context::default());
+            assert!(app.row_is_played_copy(&liked, row, &song));
+            assert!(!app.row_is_played_copy(&liked, 0, &song));
+
+            let rows = &mut app.library.liked;
+            rows.items.remove(0);
+            rows.revision = rows.revision.wrapping_add(1);
+            assert!(app.row_is_played_copy(&liked, row - 1, &song));
+        }
+        app.backend.shutdown();
     }
 
     /// Changing songs by hand ends Repeat One and keeps repeating the
