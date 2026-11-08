@@ -95,14 +95,20 @@ pub enum Operation {
     PlaylistMetadata(PlaylistAccess),
     PlaylistItems(PlaylistAccess),
     PlaylistMutation(PlaylistAccess),
+    /// An artist's related artists, which Development Mode does not serve.
+    RelatedArtists,
     UnsupportedDevelopmentMode,
 }
 
-/// The streaming session reads every playlist the shared app would have
-/// been asked for: other people's, which no personal app may read, and the
-/// account's own when it has no personal app. A personal app keeps its own
-/// playlists, which it reads quickly and with every field.
+/// The streaming session reads related artists and every playlist the
+/// shared app would have been asked for: other people's, which no personal
+/// app may read, and the account's own when it has no personal app. A
+/// personal app keeps its own playlists, which it reads quickly and with
+/// every field.
 fn session_serves(operation: Operation, personal_ready: bool) -> bool {
+    if operation == Operation::RelatedArtists {
+        return true;
+    }
     matches!(
         operation,
         Operation::PlaylistMetadata(_) | Operation::PlaylistItems(_)
@@ -122,9 +128,11 @@ fn plan(operation: Operation, personal_ready: bool) -> ApiSource {
         // behind strangers. `handle` falls back to the shared app if the
         // personal one turns out not to be allowed to answer.
         PlaylistLibrary if personal_ready => ApiSource::Personal,
-        CanonicalAccount | PlaylistLibrary | PlaylistSearch | UnsupportedDevelopmentMode => {
-            ApiSource::Shared
-        }
+        CanonicalAccount
+        | PlaylistLibrary
+        | PlaylistSearch
+        | RelatedArtists
+        | UnsupportedDevelopmentMode => ApiSource::Shared,
         PlaylistMetadata(PlaylistAccess::External | PlaylistAccess::Unknown)
         | PlaylistItems(PlaylistAccess::External | PlaylistAccess::Unknown)
         | PlaylistMutation(PlaylistAccess::External | PlaylistAccess::Unknown) => ApiSource::Shared,
@@ -556,6 +564,16 @@ mod tests {
         // With no personal app there is nothing else to ask, so the library
         // still goes to the shared one.
         assert_eq!(plan(Operation::PlaylistLibrary, false), ApiSource::Shared);
+    }
+
+    /// Related artists are read over the session first and keep the shared
+    /// app as their fallback.
+    #[test]
+    fn related_artists_prefer_the_session_and_keep_the_shared_fallback() {
+        for personal in [false, true] {
+            assert!(session_serves(Operation::RelatedArtists, personal));
+            assert_eq!(plan(Operation::RelatedArtists, personal), ApiSource::Shared);
+        }
     }
 
     /// The account's own playlists go to the reader's own app when they have

@@ -4358,8 +4358,8 @@ fn operation_for(api: &ApiGateway, request: &ApiRequest) -> Operation {
             Operation::PlaylistMutation(api.playlist_access(playlist_id))
         }
         ApiRequest::Recommendations { .. } => Operation::CatalogSearch,
-        ApiRequest::ArtistTopTracks { .. }
-        | ApiRequest::RelatedArtists { .. } => Operation::UnsupportedDevelopmentMode,
+        ApiRequest::ArtistTopTracks { .. } => Operation::UnsupportedDevelopmentMode,
+        ApiRequest::RelatedArtists { .. } => Operation::RelatedArtists,
         ApiRequest::Artist { .. }
         | ApiRequest::ArtistAlbums { .. }
         | ApiRequest::ArtistRecent { .. }
@@ -5032,7 +5032,8 @@ async fn handle(
     if api.session_serves(operation)
         && let Some(engine) = engine
             .filter(|engine| same_account(&engine.session().username(), api.account().as_ref()))
-        && let Some(response) = over_session(engine, &request).await
+        && let Some(response) =
+            over_session(engine, api.prerelease_http_client().as_deref(), &request).await
     {
         log::debug!("Spotify route operation={operation:?} source=session");
         observe_playlists(api, &response);
@@ -5853,12 +5854,20 @@ fn same_account(username: &str, account: Option<&AccountId>) -> bool {
 /// the operating system, which is far longer than a page should spin.
 const SESSION_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Answers a playlist read over the streaming session. `None` when the
-/// session could not, leaving the request to the Web API.
-async fn over_session(engine: &Engine, request: &ApiRequest) -> Option<ApiResponse> {
+/// Answers a playlist or related-artists read over the streaming session.
+/// `None` when the session could not, leaving the request to the Web API.
+/// `web` is the HTTP client for Spotify's own GraphQL reads.
+async fn over_session(
+    engine: &Engine,
+    web: Option<&ApiClient>,
+    request: &ApiRequest,
+) -> Option<ApiResponse> {
     let session = engine.session();
     let read = async {
         Some(match session_read(request)? {
+            SessionRead::RelatedArtists { id } => SessionAnswer::RelatedArtists(settle(
+                session_reads::related_artists(session, web?, id).await,
+            )?),
             SessionRead::Header { id } => {
                 SessionAnswer::Header(settle(session_reads::playlist(session, id).await)?)
             }
@@ -5877,12 +5886,14 @@ async fn over_session(engine: &Engine, request: &ApiRequest) -> Option<ApiRespon
     session_response(request, answer?)
 }
 
-/// The read a request asks of the session: a playlist's header, a page of
-/// its rows, or a sample of who added them, which needs no song details.
+/// The read a request asks of the session: an artist's related artists, a
+/// playlist's header, a page of its rows, or a sample of who added them,
+/// which needs no song details.
 /// Anything else, a duplicate check among them, is the Web API's even
 /// where the session serves the operation.
 #[derive(Debug, PartialEq)]
 enum SessionRead<'a> {
+    RelatedArtists { id: &'a str },
     Header { id: &'a str },
     Rows { id: &'a str, offset: u32 },
     Sample { id: &'a str, offset: u32 },
@@ -5890,6 +5901,7 @@ enum SessionRead<'a> {
 
 fn session_read(request: &ApiRequest) -> Option<SessionRead<'_>> {
     Some(match request {
+        ApiRequest::RelatedArtists { id } => SessionRead::RelatedArtists { id },
         ApiRequest::Playlist { id, .. } => SessionRead::Header { id },
         ApiRequest::PlaylistItems { id, offset, .. } => SessionRead::Rows {
             id,
@@ -5903,8 +5915,10 @@ fn session_read(request: &ApiRequest) -> Option<SessionRead<'_>> {
     })
 }
 
-/// What the session read: a playlist's header, or a page of its rows.
+/// What the session read: related artists, a playlist's header, or a page
+/// of its rows.
 enum SessionAnswer {
+    RelatedArtists(ApiResult<Vec<Artist>>),
     Header(ApiResult<Playlist>),
     Rows(ApiResult<Page<PlaylistItem>>),
 }
@@ -5913,6 +5927,12 @@ enum SessionAnswer {
 /// offset, and generation so the app matches it to the page that asked.
 fn session_response(request: &ApiRequest, answer: SessionAnswer) -> Option<ApiResponse> {
     Some(match (request, answer) {
+        (ApiRequest::RelatedArtists { id }, SessionAnswer::RelatedArtists(result)) => {
+            ApiResponse::RelatedArtists {
+                id: id.clone(),
+                result,
+            }
+        }
         (ApiRequest::Playlist { id, generation }, SessionAnswer::Header(result)) => {
             ApiResponse::Playlist {
                 id: id.clone(),
@@ -8397,6 +8417,24 @@ mod session_tests {
         ));
         let dropped = settle(Err::<u8, Failure>(Failure::Retry(anyhow::anyhow!("gone"))));
         assert!(dropped.is_none(), "the Web API gets its turn");
+    }
+
+    /// Related artists are read over the session, and the answer goes back
+    /// to the artist that asked.
+    #[test]
+    fn related_artists_are_a_session_read() {
+        let request = ApiRequest::RelatedArtists {
+            id: "artist1".into(),
+        };
+        assert_eq!(
+            session_read(&request),
+            Some(SessionRead::RelatedArtists { id: "artist1" })
+        );
+        assert!(matches!(
+            session_response(&request, SessionAnswer::RelatedArtists(Ok(Vec::new()))),
+            Some(ApiResponse::RelatedArtists { id, result: Ok(artists) })
+                if id == "artist1" && artists.is_empty()
+        ));
     }
 
     /// The response carries the request's own id, offset, and generation;

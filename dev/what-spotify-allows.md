@@ -69,6 +69,10 @@ clients. Spotifast uses its session for:
   quota. The Web API takes over only when the session cannot send the change.
   A change the Web API turns away for a rate limit is sent again once the
   limit passes.
+- **Related artists** through the private `queryArtistRelated` request used by
+  Spotify's own clients, with the session's Login5 bearer and client token.
+  It uses the configured HTTP transport and falls back to the shared Web API
+  if that read is unavailable. A different account's session is never used.
 - **Lyrics** when Spotify has them.
 - **Display names** for the user IDs attached to songs in a playlist.
 - **Precise EP types** for releases that the Web API groups with singles.
