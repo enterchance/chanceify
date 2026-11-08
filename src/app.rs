@@ -911,6 +911,9 @@ pub struct App {
     pub recent_contexts: Vec<String>,
     /// What was playing when the app last closed, to resume from cold.
     pub resume_context: Option<String>,
+    /// The song and position a resume asked its context to start at, until
+    /// the player reports what it started.
+    resume_load: Option<(String, u32)>,
     pub resume_track: Option<String>,
     pub resume_position_ms: u32,
     /// Manually queued songs restored with the remembered track.
@@ -1518,6 +1521,7 @@ impl App {
             user_names_revision: 0,
             recent_contexts: session.recent_contexts.clone(),
             resume_context: session.last_context.clone(),
+            resume_load: None,
             resume_track: session.last_track.clone(),
             resume_position_ms: session.last_position_ms,
             resume_queue: session.last_added_queue.clone(),
@@ -4188,6 +4192,19 @@ impl App {
         if crate::file_deck::is_file_uri(&now.uri) {
             return;
         }
+        // A context no longer holding the resumed song, as a playlist does
+        // not hold the recommendation that followed it, starts at its first
+        // song instead. Replace that with the song itself, before the saved
+        // queue or the saved song learn of the detour.
+        if now.local
+            && let Some((uri, position_ms)) = self.resume_load.take()
+            && now.uri != uri
+        {
+            let mut request = PlayRequest::tracks(vec![uri]);
+            request.position_ms = position_ms;
+            self.play_request(request, false);
+            return;
+        }
         let same_uri = self.last_now_playing_uri.as_deref() == Some(now.uri.as_str());
         let new_occurrence =
             now.local && self.last_now_playing_sequence != self.local.track_sequence;
@@ -6679,6 +6696,7 @@ impl App {
     /// context away, and left Spotify's copy of the queue to reappear.
     fn play_queue_item(&mut self, index: usize, uri: String) {
         self.queue_cause = "played a queue row";
+        self.resume_load = None;
         if self.resume_only() {
             // Nothing is playing anywhere, so there is no live queue to
             // consume: play the shown rows as a plain list.
@@ -9886,6 +9904,7 @@ impl App {
         self.deck_stop();
         // A play from a row names its row again after this.
         self.played_row = None;
+        self.resume_load = None;
         // Shuffle applies across contexts until disabled. A selected row still
         // starts first; otherwise choose a random starting track.
         let mut request = request;
@@ -10348,8 +10367,19 @@ impl App {
             None => PlayRequest::tracks(vec![track]),
         };
         request.position_ms = self.resume_position_ms;
-        self.play_request(request, false);
+        self.play_resumed(request);
         true
+    }
+
+    /// Plays a song at its old place, watching that its context can start it.
+    fn play_resumed(&mut self, request: PlayRequest) {
+        let expected = request
+            .context_uri
+            .as_ref()
+            .and(request.offset_uri.clone())
+            .map(|uri| (uri, request.position_ms));
+        self.play_request(request, false);
+        self.resume_load = expected;
     }
 
     fn toggle_play(&mut self) {
@@ -10388,7 +10418,7 @@ impl App {
                             None => PlayRequest::tracks(vec![uri]),
                         };
                         request.position_ms = position;
-                        self.play_request(request, false);
+                        self.play_resumed(request);
                         return;
                     }
                     if !self.resume_last() {
@@ -10745,6 +10775,7 @@ impl App {
                 // Connect transfers the active device's full playback state.
                 // A Web API snapshot may be stale and cannot recreate its queue.
                 self.queue_start_pending = Some(Target::Local);
+                self.resume_load = None;
                 self.local_transfer_sequence = Some(self.local.track_sequence);
                 self.local_list = None;
                 self.resume_queue.clear();
@@ -12343,6 +12374,7 @@ impl App {
                 self.step_resume(true);
             }
             Action::Next => {
+                self.resume_load = None;
                 // Move the queue head to the playing row immediately. Do not
                 // pop when there is no active playback target.
                 let target = self.target();
@@ -12365,6 +12397,7 @@ impl App {
                 }
             }
             Action::Previous => {
+                self.resume_load = None;
                 // Next names its expected destination so the row moves before
                 // the engine does. Previous has no forward queue row to name;
                 // discard that expectation or a quick Next, Previous leaves
@@ -18949,6 +18982,63 @@ mod tests {
         assert_eq!(Some(&album.id), now.album_id.as_ref());
         assert_eq!(track.image(64), now.art_small.as_deref());
         assert_eq!(track.image(640), now.art_url.as_deref());
+        app.backend.shutdown();
+    }
+
+    /// A resumed song its context no longer holds, as a playlist does not
+    /// hold the recommendation that followed it, plays by itself at its
+    /// saved place instead of the context's first song at that position.
+    #[test]
+    fn a_resumed_song_outside_its_context_plays_on_its_own() {
+        let local = |uri: &str| LocalState {
+            connected: true,
+            playback: Playback::Playing,
+            track: Some(crate::player::LocalTrack {
+                uri: uri.into(),
+                duration_ms: 240_000,
+                ..Default::default()
+            }),
+            track_sequence: 1,
+            ..Default::default()
+        };
+        // #given an app restarted on a recommendation after a playlist
+        let mut app = headless_app();
+        app.local_ready = true;
+        app.local = LocalState {
+            connected: true,
+            ..Default::default()
+        };
+        app.resume_context = Some("spotify:playlist:finished".into());
+        app.resume_track = Some("spotify:track:recommended".into());
+        app.resume_position_ms = 83_456;
+
+        // #when Play falls back to the playlist's first song
+        app.toggle_play();
+        app.handle_local(local("spotify:track:first"));
+
+        // #then the song alone loads at its saved place
+        let loads: Vec<_> = app
+            .backend
+            .take_player_commands()
+            .into_iter()
+            .filter_map(|command| match command {
+                PlayerCommand::Load(spec) => Some(spec),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(loads.len(), 2, "the context, then the song");
+        assert_eq!(
+            loads[0].offset_uri.as_deref(),
+            Some("spotify:track:recommended")
+        );
+        let song = "spotify:track:recommended".to_string();
+        assert!(
+            loads[1].context_uri.as_ref() == Some(&song) || loads[1].uris == [song.clone()],
+            "{:?}",
+            loads[1]
+        );
+        assert_eq!(loads[1].position_ms, 83_456);
+        assert_eq!(app.resume_track.as_deref(), Some(song.as_str()));
         app.backend.shutdown();
     }
 
