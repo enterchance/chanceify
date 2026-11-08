@@ -1866,11 +1866,24 @@ impl App {
                         crate::link::canonical_context_uri(&context.uri) != assumed.uri
                     })
             });
-            if held || (!contradicted && self.believed_playing()) {
+            if held || self.remote_lags_local() || (!contradicted && self.believed_playing()) {
                 return (!assumed.uri.is_empty()).then(|| assumed.uri.clone());
             }
         }
         remote
+    }
+
+    /// Whether the last poll names another song than this computer plays. It
+    /// describes the past, however late it arrived, and its context with it:
+    /// a playlist left for an album must not light up again.
+    fn remote_lags_local(&self) -> bool {
+        let Some(track) = self.local.track.as_ref().filter(|_| self.local.is_active()) else {
+            return false;
+        };
+        self.remote
+            .as_ref()
+            .and_then(|snapshot| snapshot.state.item.as_ref())
+            .is_some_and(|item| item.uri() != track.uri)
     }
 
     /// Track shown as current, including a recent unconfirmed play request.
@@ -18920,6 +18933,67 @@ mod tests {
         assert_eq!(Some(&album.id), now.album_id.as_ref());
         assert_eq!(track.image(64), now.art_small.as_deref());
         assert_eq!(track.image(640), now.art_url.as_deref());
+        app.backend.shutdown();
+    }
+
+    /// A poll that arrives after the click but still names the song from
+    /// before it keeps its old context to itself, playing or paused. Once a
+    /// poll names the playing song, Spotify's context stands.
+    #[test]
+    fn a_lagging_poll_does_not_light_the_playlist_left_behind() {
+        // #given a song from an album, started after a playlist's song
+        let mut app = headless_app();
+        app.local = LocalState {
+            connected: true,
+            playback: Playback::Playing,
+            track: Some(crate::player::LocalTrack {
+                uri: "spotify:track:album-song".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        app.assumed_context = Some(AssumedContext {
+            uri: "spotify:album:here".into(),
+            shuffle: None,
+            at: Instant::now() - ASSUMED_CONTEXT_HOLD - Duration::from_secs(1),
+        });
+        let poll = |song: &str| RemoteSnapshot {
+            state: PlaybackState {
+                context: Some(crate::api::models::Context {
+                    uri: "spotify:playlist:left".into(),
+                    ..Default::default()
+                }),
+                item: Some(PlayableItem::Track(Track {
+                    uri: song.into(),
+                    ..Default::default()
+                })),
+                is_playing: true,
+                ..Default::default()
+            },
+            received_at: Instant::now(),
+        };
+
+        // #when a late poll still tells the story from before the click
+        app.remote = Some(poll("spotify:track:playlist-song"));
+
+        // #then the album stays lit, and pausing changes nothing
+        assert_eq!(
+            app.playing_context_uri().as_deref(),
+            Some("spotify:album:here")
+        );
+        app.local.playback = Playback::Paused;
+        assert_eq!(
+            app.playing_context_uri().as_deref(),
+            Some("spotify:album:here")
+        );
+
+        // #when a poll names the playing song, its context is believed
+        app.local.playback = Playback::Playing;
+        app.remote = Some(poll("spotify:track:album-song"));
+        assert_eq!(
+            app.playing_context_uri().as_deref(),
+            Some("spotify:playlist:left")
+        );
         app.backend.shutdown();
     }
 
