@@ -1002,10 +1002,12 @@ pub struct Settings {
     /// Default view: the swirl also fills the window behind the library,
     /// the queue, the side lyrics and the top bar.
     pub swirl_behind_panels: bool,
-    /// The local songs table's columns, in order: (column id, width). The
-    /// title, artist, album and genre columns store their share of the room
-    /// left over; the others store their width in points, or a value of 1
-    /// or less (older files kept shares there too) for "fit the content".
+    /// The local songs table's columns, in order: (column id, width). Each
+    /// column but the title stores the width it was dragged to in points,
+    /// or a value of 1 or less for its first width; the title takes the
+    /// room the others leave, as in the playlist table. (Older files kept a
+    /// share of the room for the title, artist, album and genre; such a
+    /// share now reads as the first width.)
     pub local_columns: Vec<(u8, f32)>,
     /// Playlists of song files made on the Local songs page.
     #[serde(default)]
@@ -1598,7 +1600,7 @@ impl Default for Settings {
             swirl_warp: 0.0,
             swirl_colours_fixed: false,
             swirl_behind_panels: false,
-            local_columns: vec![(0, 0.0), (1, 0.36), (2, 0.24), (3, 0.22), (4, 0.0), (5, 0.0), (7, 0.0)],
+            local_columns: vec![(0, 0.0), (1, 0.0), (3, 0.0), (4, 0.0), (5, 0.0), (7, 0.0)],
             local_playlists: Vec::new(),
             swirl_waves: 0,
             swirl_tune: Vec::new(),

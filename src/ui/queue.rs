@@ -367,6 +367,9 @@ pub(super) fn contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
 }
 
 fn contents_inner(app: &mut App, ui: &mut egui::Ui, compact: bool) {
+    if deck_contents(app, ui, compact) {
+        return;
+    }
     let palette = app.palette;
     // Neither the Web API nor librespot can reorder or insert into a live
     // remote queue, so without local playback active every drop just
@@ -625,6 +628,166 @@ fn contents_inner(app: &mut App, ui: &mut egui::Ui, compact: bool) {
         widgets::virtual_rows(ui, queue_len - queued_len, row_height, |ui, index| {
             queue_row(app, ui, queued_len + index, compact, 0.0, &picked_rows, &picked_songs);
         });
+    }
+}
+
+/// While song files from the Local songs page are playing, the queue is
+/// theirs: the file playing, then the files queued by hand under Playing
+/// next, then the rest of the list under Next up. Double-click a song to
+/// jump to it. Returns false, drawing nothing, when no file is on.
+fn deck_contents(app: &mut App, ui: &mut egui::Ui, compact: bool) -> bool {
+    let Some((upcoming, queued)) = app.deck_upcoming() else {
+        return false;
+    };
+    let palette = app.palette;
+    if let Some(now) = app.now_playing() {
+        theme::text(
+            ui,
+            gettext(app.locale, "Now playing"),
+            theme::semibold(theme::BODY_TEXT),
+            palette.text,
+        );
+        ui.add_space(4.0);
+        deck_row(ui, &palette, None, &now.title, &now.subtitle, u64::from(now.duration_ms), compact, true);
+        ui.add_space(SECTION_GAP);
+    }
+    if upcoming.is_empty() {
+        widgets::empty_state(
+            ui,
+            &palette,
+            Icon::ListVideo,
+            &gettext(app.locale, "Nothing queued"),
+            &gettext(app.locale, "Queued songs appear here."),
+        );
+        return true;
+    }
+    let mut jump: Option<usize> = None;
+    for (heading, range) in [
+        ("Playing next", 0..queued),
+        ("Next up", queued..upcoming.len()),
+    ] {
+        if range.is_empty() {
+            continue;
+        }
+        theme::text(
+            ui,
+            gettext(app.locale, heading),
+            theme::semibold(theme::BODY_TEXT),
+            palette.text,
+        );
+        ui.add_space(4.0);
+        for at in range {
+            let entry = &upcoming[at];
+            let title = if entry.title.is_empty() {
+                entry
+                    .path
+                    .file_stem()
+                    .map(|stem| stem.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            } else {
+                entry.title.clone()
+            };
+            let response = deck_row(
+                ui,
+                &palette,
+                Some(at + 1),
+                &title,
+                &entry.artist,
+                u64::from(entry.duration_ms),
+                compact,
+                false,
+            );
+            if response.double_clicked() {
+                jump = Some(at);
+            }
+        }
+        ui.add_space(SECTION_GAP);
+    }
+    if let Some(at) = jump {
+        app.actions.push(Action::DeckSkipAhead(at));
+    }
+    true
+}
+
+/// One song file in the queue: its place, its title over its artist, and
+/// its length.
+#[expect(clippy::too_many_arguments)]
+fn deck_row(
+    ui: &mut egui::Ui,
+    palette: &theme::Palette,
+    number: Option<usize>,
+    title: &str,
+    artist: &str,
+    duration_ms: u64,
+    compact: bool,
+    current: bool,
+) -> egui::Response {
+    let height = if compact {
+        theme::COMPACT_ROW_HEIGHT
+    } else {
+        theme::ROW_HEIGHT
+    };
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), Sense::click());
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(6), palette.surface_hover);
+    }
+    let painter = ui.painter().with_clip_rect(rect);
+    let mut left = rect.left() + 8.0;
+    let cell = egui::Rect::from_min_size(egui::pos2(left, rect.top()), egui::vec2(30.0, height));
+    if current {
+        theme::paint_icon(ui, Icon::AudioLines, cell, 16.0, palette.accent);
+    } else if response.hovered() {
+        theme::paint_icon(ui, Icon::PlayFilled, cell, 14.0, palette.text);
+    } else if let Some(number) = number {
+        painter.text(
+            cell.center(),
+            egui::Align2::CENTER_CENTER,
+            number.to_string(),
+            theme::regular(theme::BODY_TEXT),
+            palette.secondary,
+        );
+    }
+    left = cell.right() + 8.0;
+    let seconds = duration_ms / 1000;
+    let length = if seconds == 0 {
+        String::new()
+    } else {
+        format!("{}:{:02}", seconds / 60, seconds % 60)
+    };
+    painter.text(
+        egui::pos2(rect.right() - 10.0, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        length,
+        theme::regular(theme::SMALL_TEXT),
+        palette.secondary,
+    );
+    let text_right = (rect.right() - 60.0).max(left + 1.0);
+    let text = painter.with_clip_rect(egui::Rect::from_min_max(
+        egui::pos2(left, rect.top()),
+        egui::pos2(text_right, rect.bottom()),
+    ));
+    text.text(
+        egui::pos2(left, rect.center().y - 1.0),
+        egui::Align2::LEFT_BOTTOM,
+        title,
+        theme::regular(theme::BODY_TEXT),
+        if current { palette.accent } else { palette.text },
+    );
+    text.text(
+        egui::pos2(left, rect.center().y + 2.0),
+        egui::Align2::LEFT_TOP,
+        artist,
+        theme::regular(theme::SMALL_TEXT),
+        palette.secondary,
+    );
+    if current {
+        response
+    } else {
+        response.on_hover_text("Double-click to play")
     }
 }
 
@@ -1237,6 +1400,10 @@ fn song_tile(
 /// The queue as tiles: "Playing next" can be rearranged by dragging (several
 /// picked tiles together), "Next up" plays itself and can only be picked.
 fn queue_grid(app: &mut App, ui: &mut egui::Ui) {
+    // Song files playing: their own list, which has no grid.
+    if deck_contents(app, ui, false) {
+        return;
+    }
     let palette = app.palette;
     match &app.queue {
         Loadable::Loaded(_) => {}

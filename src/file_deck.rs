@@ -134,7 +134,16 @@ pub struct DeckState {
     pub track_sequence: u64,
     /// A message for the person, taken once by [`FileDeck::take_error`].
     pub error: Option<String>,
+    /// The songs still to come, in the order they will play (at most
+    /// [`UPCOMING_SHOWN`] of them), for the queue panel.
+    pub upcoming: Vec<DeckEntry>,
+    /// How many songs at the front of `upcoming` were queued by hand (Add to
+    /// queue, Play next) rather than being the rest of the list.
+    pub queued: usize,
 }
+
+/// How many of the songs to come the snapshot carries.
+pub const UPCOMING_SHOWN: usize = 200;
 
 impl DeckState {
     pub fn is_active(&self) -> bool {
@@ -161,6 +170,11 @@ impl DeckState {
 enum Cmd {
     Configure(DeckConfig),
     Play { entries: Vec<DeckEntry>, index: usize },
+    /// Songs added after the one playing: right after it (`next`), or after
+    /// the songs queued before them.
+    Enqueue { entries: Vec<DeckEntry>, next: bool },
+    /// Jump to one of the songs to come, counted from the next one (0).
+    SkipAhead(usize),
     Toggle,
     Next,
     Previous,
@@ -223,6 +237,18 @@ impl FileDeck {
     pub fn play(&self, config: DeckConfig, entries: Vec<DeckEntry>, index: usize) {
         self.send(Cmd::Configure(config));
         self.send(Cmd::Play { entries, index });
+    }
+
+    /// Adds songs to the queue: right after the song playing when `next`,
+    /// otherwise after the songs queued before them and ahead of the rest
+    /// of the list. With nothing on, they simply play.
+    pub fn enqueue(&self, entries: Vec<DeckEntry>, next: bool) {
+        self.send(Cmd::Enqueue { entries, next });
+    }
+
+    /// Plays the song `ahead` places after the next one (0 is the next).
+    pub fn skip_ahead(&self, ahead: usize) {
+        self.send(Cmd::SkipAhead(ahead));
     }
 
     pub fn toggle(&self) {
@@ -545,6 +571,15 @@ fn build_order(len: usize, keep: usize, shuffle: bool) -> (Vec<usize>, usize) {
     (order, 0)
 }
 
+/// Where in the order songs added to the queue go: right after the song
+/// playing (`at`), or after the one already fading in, and, unless they are
+/// to play next, after the `queued` songs added by hand before them.
+fn queue_place(at: usize, fading: Option<usize>, queued: usize, len: usize, next: bool) -> usize {
+    let base = fading.map_or(at, |fade| fade.max(at));
+    let queued_after_base = queued.saturating_sub(base - at);
+    (base + 1 + if next { 0 } else { queued_after_base }).min(len)
+}
+
 // ---- the deck's thread ---------------------------------------------------
 
 struct Engine {
@@ -561,6 +596,8 @@ struct Engine {
     list: Vec<DeckEntry>,
     order: Vec<usize>,
     at: usize,
+    /// How many songs right after `at` in the order were queued by hand.
+    queued: usize,
     shuffle: bool,
     repeat: RepeatMode,
     reader: Option<Reader>,
@@ -636,6 +673,7 @@ impl Engine {
             list: Vec::new(),
             order: Vec::new(),
             at: 0,
+            queued: 0,
             shuffle: false,
             repeat: RepeatMode::Off,
             reader: None,
@@ -710,8 +748,28 @@ impl Engine {
                 let (order, at) = build_order(self.list.len(), index, self.shuffle);
                 self.order = order;
                 self.at = at;
+                self.queued = 0;
                 self.failures = 0;
                 self.go_to(self.at, true);
+            }
+            Cmd::Enqueue { entries, next } => {
+                if entries.is_empty() {
+                    return true;
+                }
+                if self.reader.is_none() || self.order.is_empty() {
+                    // Nothing on: the songs are simply played.
+                    return self.handle(Cmd::Play { entries, index: 0 });
+                }
+                self.enqueue(entries, next);
+                self.publish();
+            }
+            Cmd::SkipAhead(ahead) => {
+                if self.reader.is_some() && !self.order.is_empty() {
+                    let target = self.at + 1 + ahead;
+                    if target < self.order.len() {
+                        self.go_to(target, true);
+                    }
+                }
             }
             Cmd::Toggle => {
                 if self.reader.is_none() {
@@ -765,6 +823,8 @@ impl Engine {
                         let (order, at) = build_order(self.list.len(), current, shuffle);
                         self.order = order;
                         self.at = at;
+                        // A new order has no hand-queued run any more.
+                        self.queued = 0;
                     }
                 }
                 self.publish();
@@ -892,6 +952,13 @@ impl Engine {
             state.shuffle = self.shuffle;
             state.repeat = self.repeat;
             state.track_sequence = self.track_sequence;
+            if playback == DeckPlayback::Stopped {
+                state.upcoming.clear();
+                state.queued = 0;
+            } else {
+                state.upcoming = self.upcoming();
+                state.queued = self.queued.min(state.upcoming.len());
+            }
         }
         (self.notify)();
     }
@@ -924,6 +991,7 @@ impl Engine {
     /// ran out on its own flows into the next without a gap.
     fn go_to(&mut self, at: usize, user: bool) {
         self.fade = None;
+        let from = self.at;
         let cut = user && self.sink_on && self.playing;
         if cut {
             self.audio.interrupt();
@@ -956,6 +1024,7 @@ impl Engine {
         if cut {
             self.audio.track_changed();
         }
+        self.moved_from(from);
         if opened {
             self.playing = true;
             self.start_sink();
@@ -963,6 +1032,42 @@ impl Engine {
         } else {
             self.finish();
         }
+    }
+
+    /// Keeps the count of hand-queued songs right after the place in the
+    /// order moved from `from` to `self.at`: moving on uses them up, and any
+    /// other jump leaves no run of them right after the new place.
+    fn moved_from(&mut self, from: usize) {
+        if self.at > from {
+            self.queued = self.queued.saturating_sub(self.at - from);
+        } else if self.at < from {
+            self.queued = 0;
+        }
+    }
+
+    /// Puts `entries` into the order after the song playing (or after the
+    /// one already fading in): first when `next`, otherwise after the songs
+    /// queued by hand before them.
+    fn enqueue(&mut self, entries: Vec<DeckEntry>, next: bool) {
+        let count = entries.len();
+        let fading = self.fade.as_ref().map(|fade| fade.at);
+        let place = queue_place(self.at, fading, self.queued, self.order.len(), next);
+        let first = self.list.len();
+        self.list.extend(entries);
+        for offset in 0..count {
+            self.order.insert(place + offset, first + offset);
+        }
+        self.queued = (self.queued + count).max(place + count - self.at - 1);
+    }
+
+    /// The songs to come, in order, as the snapshot shows them.
+    fn upcoming(&self) -> Vec<DeckEntry> {
+        self.order
+            .iter()
+            .skip(self.at + 1)
+            .take(UPCOMING_SHOWN)
+            .filter_map(|&index| self.list.get(index).cloned())
+            .collect()
     }
 
     fn install(&mut self, entry: DeckEntry, reader: Reader) {
@@ -1090,7 +1195,9 @@ impl Engine {
         if finished && let Some(fade) = self.fade.take() {
             let elapsed_ms = (fade.done * 1000 / u64::from(SAMPLE_RATE)) as u32;
             self.install(fade.entry, fade.reader);
+            let from = self.at;
             self.at = fade.at;
+            self.moved_from(from);
             self.base_ms = elapsed_ms;
             self.publish();
         }
@@ -1221,6 +1328,20 @@ mod tests {
         let folded = to_stereo(&[1.0, 1.0, 0.0, 0.0, 0.0, 0.0], 6);
         assert_eq!(folded.len(), 2);
         assert!(folded[0] > 0.0 && folded[0] <= 1.0);
+    }
+
+    #[test]
+    fn queued_songs_go_after_the_ones_queued_before_and_play_next_goes_first() {
+        // Playing the third of ten songs, nothing queued: right after it.
+        assert_eq!(queue_place(2, None, 0, 10, false), 3);
+        // Two queued already: after them, unless it is to play next.
+        assert_eq!(queue_place(2, None, 2, 12, false), 5);
+        assert_eq!(queue_place(2, None, 2, 12, true), 3);
+        // The next song is already fading in: after that one.
+        assert_eq!(queue_place(2, Some(3), 0, 10, true), 4);
+        assert_eq!(queue_place(2, Some(3), 2, 12, false), 5);
+        // At the end of the list: appended.
+        assert_eq!(queue_place(9, None, 0, 10, false), 10);
     }
 
     #[test]

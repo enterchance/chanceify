@@ -1620,6 +1620,15 @@ pub enum Action {
     },
     /// Stop the song from a file.
     StopLocalFiles,
+    /// Add song files to the queue, or with `next` play them right after
+    /// the song playing (see `App::queue_local_files`).
+    QueueLocalFiles {
+        paths: Vec<String>,
+        next: bool,
+    },
+    /// Jump to one of the song files still to come on the deck, counted
+    /// from the next one (0).
+    DeckSkipAhead(usize),
     /// Choose a folder of music to read on the Local songs page.
     AddMusicFolder,
     /// Pick song files and copy them into the song index.

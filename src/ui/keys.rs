@@ -332,6 +332,7 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         app.hover_snapshot = app.hovered_track.take();
         app.hover_playable_snapshot = app.hovered_playable.take();
         app.hover_queue_snapshot = app.hovered_queue_row.take();
+        app.local_hover_snapshot = app.hovered_local_file.take();
         ctx.data_mut(|data| data.insert_temp(pass_id, pass));
     }
     if capture_rebind(app, ctx) {

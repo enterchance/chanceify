@@ -432,6 +432,11 @@ pub struct App {
     pub hover_playable_snapshot: Option<PlayableItem>,
     /// What `hovered_track` held at the start of this frame.
     pub hover_snapshot: Option<String>,
+    /// The song file the pointer is over on the Local songs page, now and
+    /// as the last pass saw it (for the queue-the-song-under-the-pointer
+    /// keys).
+    pub hovered_local_file: Option<String>,
+    pub local_hover_snapshot: Option<String>,
     /// The queue row under the pointer, now and as the last pass saw it.
     pub hovered_queue_row: Option<usize>,
     pub hover_queue_snapshot: Option<usize>,
@@ -1223,6 +1228,8 @@ impl App {
             hovered_playable: None,
             hover_playable_snapshot: None,
             hover_snapshot: None,
+            hovered_local_file: None,
+            local_hover_snapshot: None,
             hovered_queue_row: None,
             hover_queue_snapshot: None,
             palette,
@@ -13440,6 +13447,16 @@ impl App {
                     None => self.toast_error(format!("No usable chanceify-keys.json in {}", path.parent().map_or_else(String::new, |p| p.display().to_string()))),
                 }
             }
+            // A song file on the Local songs page goes to the queue of
+            // whatever is playing, as Add to queue there does.
+            Action::QueueHovered(top) if self.local_hover_snapshot.is_some() => {
+                if let Some(path) = self.local_hover_snapshot.clone() {
+                    self.actions.push(Action::QueueLocalFiles {
+                        paths: vec![path],
+                        next: top,
+                    });
+                }
+            }
             Action::QueueHovered(top) => match self.hover_snapshot.clone() {
                 Some(uri) => {
                     let item = self.hover_playable_snapshot.clone();
@@ -13874,6 +13891,10 @@ impl App {
                 shuffle,
             } => self.play_local_files(ctx, paths, index, shuffle),
             Action::StopLocalFiles => self.deck_stop(),
+            Action::QueueLocalFiles { paths, next } => self.queue_local_files(ctx, paths, next),
+            Action::DeckSkipAhead(ahead) => {
+                self.deck_control(|deck| deck.skip_ahead(ahead));
+            }
             Action::AddMusicFolder => self.pick_music_folder(ctx),
             Action::AddMusicFiles => self.pick_music_files(ctx),
             Action::RemoveMusicFolder(at) => {

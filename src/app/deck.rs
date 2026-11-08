@@ -287,7 +287,28 @@ impl App {
         }
         self.optimistic_playing = None;
         self.intent_track = None;
-        let entries: Vec<DeckEntry> = paths
+        let entries = self.deck_entries(&paths);
+        let config = self.deck_config();
+        if self.deck.is_none() {
+            let wake = ctx.clone();
+            self.deck = Some(FileDeck::new(
+                config.clone(),
+                Arc::new(move || wake.request_repaint()),
+            ));
+        }
+        let index = index.min(entries.len() - 1);
+        if let Some(deck) = &self.deck {
+            if let Some(shuffle) = shuffle {
+                deck.set_shuffle(shuffle);
+            }
+            deck.play(config, entries, index);
+        }
+        self.deck_art = None;
+    }
+
+    /// The deck's entries for these files, with what the scan knows of each.
+    fn deck_entries(&self, paths: &[String]) -> Vec<DeckEntry> {
+        paths
             .iter()
             .map(|path| {
                 match self
@@ -309,23 +330,113 @@ impl App {
                     },
                 }
             })
-            .collect();
-        let config = self.deck_config();
-        if self.deck.is_none() {
-            let wake = ctx.clone();
-            self.deck = Some(FileDeck::new(
-                config.clone(),
-                Arc::new(move || wake.request_repaint()),
+            .collect()
+    }
+
+    /// Add to queue (or Play next, with `next`) for song files.
+    ///
+    /// While files are playing they go into the deck's own queue. While a
+    /// Spotify song is on, the files matched to a Spotify song go to
+    /// Spotify's queue as that song, and the others cannot be queued there
+    /// (Spotify cannot play a file), which a notice says. With nothing on,
+    /// the files simply play.
+    pub(super) fn queue_local_files(&mut self, ctx: &egui::Context, paths: Vec<String>, next: bool) {
+        if paths.is_empty() {
+            return;
+        }
+        let first = self
+            .local_songs
+            .songs
+            .iter()
+            .find(|song| song.path == paths[0])
+            .map(|song| song.title.clone())
+            .unwrap_or_else(|| {
+                std::path::Path::new(&paths[0])
+                    .file_stem()
+                    .map(|stem| stem.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            });
+        let what = if paths.len() == 1 {
+            first
+        } else {
+            format!("{} songs", paths.len())
+        };
+        if self.deck_active() {
+            let entries = self.deck_entries(&paths);
+            if let Some(deck) = &self.deck {
+                deck.enqueue(entries, next);
+            }
+            self.toast(if next {
+                format!("Plays next: {what}")
+            } else {
+                format!("Added to queue: {what}")
+            });
+            return;
+        }
+        let spotify_on = self.now_playing().is_some_and(|now| !now.local);
+        if !spotify_on {
+            self.play_local_files(ctx, paths, 0, None);
+            return;
+        }
+        // Spotify is on: only files that are also on Spotify can join its
+        // queue, as the Spotify song.
+        let mut matched: Vec<String> = Vec::new();
+        let mut unmatched = 0usize;
+        for path in &paths {
+            match self.local_matches.uri_of(path) {
+                Some(uri) => matched.push(uri.to_string()),
+                None => unmatched += 1,
+            }
+        }
+        if !matched.is_empty() {
+            let label = |uri: &String| {
+                util::uri_id(uri)
+                    .and_then(|id| self.track_cache.get(id))
+                    .map(|track| track.name.clone())
+                    .unwrap_or_default()
+            };
+            // Play next needs the songs' details; until they have arrived
+            // the songs are added to the end of the queue instead.
+            let items: Option<Vec<PlayableItem>> = next
+                .then(|| {
+                    matched
+                        .iter()
+                        .map(|uri| {
+                            util::uri_id(uri)
+                                .and_then(|id| self.track_cache.get(id))
+                                .map(|track| PlayableItem::Track(track.clone()))
+                        })
+                        .collect::<Option<Vec<PlayableItem>>>()
+                })
+                .flatten();
+            match items {
+                Some(items) => {
+                    self.actions.push(Action::InsertInQueue { items, position: 0 });
+                    self.toast(format!("Plays next on Spotify: {what}"));
+                }
+                None => {
+                    let songs = matched.iter().map(|uri| (uri.clone(), label(uri))).collect();
+                    self.actions.push(Action::QueueMany { songs });
+                }
+            }
+        }
+        if unmatched > 0 {
+            let some = if unmatched == 1 {
+                "This file isn't on Spotify, so it".to_string()
+            } else {
+                format!("{unmatched} files aren't on Spotify, so they")
+            };
+            self.toast(format!(
+                "{some} can't join Spotify's queue. Song files can be queued while song files are playing."
             ));
         }
-        let index = index.min(entries.len() - 1);
-        if let Some(deck) = &self.deck {
-            if let Some(shuffle) = shuffle {
-                deck.set_shuffle(shuffle);
-            }
-            deck.play(config, entries, index);
-        }
-        self.deck_art = None;
+    }
+
+    /// The songs still to come on the deck while it is on, and how many at
+    /// the front of them were queued by hand.
+    pub fn deck_upcoming(&self) -> Option<(Vec<DeckEntry>, usize)> {
+        let state = self.deck_state()?;
+        Some((state.upcoming, state.queued))
     }
 
     /// Stops the song from a file, if one is on. Anything that starts a
