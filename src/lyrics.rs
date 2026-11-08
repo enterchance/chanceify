@@ -22,6 +22,11 @@ const API: &str = "https://lrclib.net/api";
 const RETRY_WAITS_MS: [u64; 3] = [500, 1500, 3500];
 /// Lyrics do not change; a cached answer is good for this long.
 const CACHE_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+/// A cached "Spotify has none" is good for this long: it may be wrong, and
+/// costs a look at LRCLIB every time.
+const NONE_LIFETIME: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+/// How long a lookup waits after a busy exact lookup before searching.
+const SEARCH_AFTER_BUSY: Duration = Duration::from_secs(1);
 /// A candidate this far from the playing track's length is another
 /// recording, however well the names match.
 const MAX_DRIFT_SECS: f64 = 30.0;
@@ -104,9 +109,29 @@ pub fn from_spotify(json: &serde_json::Value) -> Option<Lyrics> {
     })
 }
 
-/// The cached answer at `path`, while it is fresh.
+/// The cached answer at `path`, while it is fresh. A "none" is fresh for
+/// a week only.
 pub fn cached(path: &Path) -> Option<Option<Lyrics>> {
-    read_cache(&path.to_path_buf())
+    let answer = read_cache(&path.to_path_buf())?;
+    if answer.is_none() && older_than(path, NONE_LIFETIME) {
+        return None;
+    }
+    Some(answer)
+}
+
+/// Whether the file at `path` was written over `age` ago.
+fn older_than(path: &Path, age: Duration) -> bool {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_none_or(|elapsed| elapsed > age)
+}
+
+/// Lyrics found earlier at `path`, however old: they still help during an
+/// outage. An old "none" never turns a failed request into "no lyrics".
+pub fn previously_found(path: &Path) -> Option<Lyrics> {
+    read_stale_cache(path).flatten()
 }
 
 /// Remember an answer at `path`, `None` included.
@@ -127,11 +152,12 @@ pub async fn fetch(
     let found = match lookup(http, query).await {
         Ok(found) => found,
         Err(error) => {
-            // LRCLIB busy or down (a 503, say): an older saved answer beats
-            // an error, and nothing is saved for the failure itself.
-            if let Some(old) = read_stale_cache(&cache_path) {
+            // LRCLIB busy or down (a 503, say): lyrics found before beat an
+            // error, and nothing is saved for the failure itself. An old
+            // "none" is no answer to this failure.
+            if let Some(old) = previously_found(&cache_path) {
                 log::warn!("lyrics: {error:#}; using the saved copy");
-                return Ok(old);
+                return Ok(Some(old));
             }
             return Err(error);
         }
@@ -163,11 +189,20 @@ async fn lookup(http: &reqwest::Client, query: &Query) -> Result<Option<Lyrics>>
     if query.duration_ms > 0 {
         exact.push(("duration", duration.as_str()));
     }
-    if let Some(record) = get::<Record>(http, "/get", &exact).await?
-        && let Some(lyrics) = record.lyrics()
-    {
-        return Ok(Some(lyrics));
-    }
+    // LRCLIB's exact lookup and search can fail independently: a busy
+    // exact lookup is not proof that search has no lyrics.
+    let exact_error = match get::<Record>(http, "/get", &exact).await {
+        Ok(record) => {
+            if let Some(lyrics) = record.and_then(|record| record.lyrics()) {
+                return Ok(Some(lyrics));
+            }
+            None
+        }
+        Err(error) => {
+            tokio::time::sleep(SEARCH_AFTER_BUSY).await;
+            Some(error)
+        }
+    };
     let candidates = get::<Vec<Record>>(
         http,
         "/search",
@@ -178,7 +213,11 @@ async fn lookup(http: &reqwest::Client, query: &Query) -> Result<Option<Lyrics>>
     )
     .await?
     .unwrap_or_default();
-    Ok(pick(candidates, query).and_then(|record| record.lyrics()))
+    let found = pick(candidates, query).and_then(|record| record.lyrics());
+    match (found, exact_error) {
+        (None, Some(error)) => Err(error),
+        (found, _) => Ok(found),
+    }
 }
 
 /// One LRCLIB request. A 404 is "nobody has transcribed this" and a 400 is

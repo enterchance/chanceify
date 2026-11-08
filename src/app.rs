@@ -3363,16 +3363,16 @@ impl App {
                             Err(error) => {
                                 log::warn!("lyrics: {error}");
                                 // The free lyrics site is often busy for a
-                                // minute. Ask again by itself a few times.
+                                // minute. Ask again by itself a few times,
+                                // still looking rather than showing an
+                                // error the reader can do nothing about.
                                 if self.lyrics_tries < 5 {
                                     self.lyrics_tries += 1;
                                     self.lyrics_retry_at = Some(
                                         std::time::Instant::now()
                                             + std::time::Duration::from_secs(8 * u64::from(self.lyrics_tries)),
                                     );
-                                    Loadable::Failed(
-                                        "the lyrics site (LRCLIB) is busy. chanceify will try again by itself.".to_string(),
-                                    )
+                                    Loadable::Loading
                                 } else {
                                     Loadable::Failed(format!(
                                         "the lyrics site (LRCLIB) is not answering. Press Try again later. ({error})"
@@ -4563,8 +4563,11 @@ impl App {
         if self
             .lyrics_retry_at
             .is_some_and(|at| std::time::Instant::now() >= at)
-            && matches!(self.lyrics, Loadable::Failed(_))
+            && matches!(self.lyrics, Loadable::Loading | Loadable::Failed(_))
         {
+            // The wait for a busy lyrics site is over: ask again.
+            self.lyrics_retry_at = None;
+            self.lyrics = Loadable::NotLoaded;
             self.request_lyrics();
         } else if let Some(at) = self.lyrics_retry_at {
             ctx.request_repaint_after(at.saturating_duration_since(std::time::Instant::now()).max(std::time::Duration::from_millis(500)));
@@ -12982,7 +12985,11 @@ impl App {
                 self.lyrics_line_shown = None;
             }
             Action::PauseLyricsFollow => self.lyrics_following = false,
-            Action::RetryLyrics => self.request_lyrics(),
+            Action::RetryLyrics => {
+                // A click starts the automatic retries over.
+                self.lyrics_tries = 0;
+                self.request_lyrics();
+            }
             Action::ToggleDevicesPopup => {
                 self.show_devices = !self.show_devices;
                 if self.show_devices {

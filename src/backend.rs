@@ -5986,11 +5986,24 @@ async fn spotify_lyrics(
     cache_dir: &std::path::Path,
 ) -> Option<crate::lyrics::Lyrics> {
     let id = uri.strip_prefix("spotify:track:")?;
-    let path = cache_dir.join(format!("spotify-{id}.json"));
+    // Answers from before the request named the cover are kept only for what
+    // they found: nearly all their "none"s were the request's doing.
+    let path = cache_dir.join(format!("spotify-v2-{id}.json"));
+    let before = cache_dir.join(format!("spotify-{id}.json"));
+    if let Some(Some(found)) = crate::lyrics::cached(&before) {
+        return Some(found);
+    }
     if let Some(cached) = crate::lyrics::cached(&path) {
         return cached;
     }
-    match engine?.lyrics_json(uri).await {
+    // Words found before still help while Spotify cannot be asked.
+    let found_before = || {
+        crate::lyrics::previously_found(&path).or_else(|| crate::lyrics::previously_found(&before))
+    };
+    let Some(engine) = engine else {
+        return found_before();
+    };
+    match engine.lyrics_json(uri).await {
         Ok(json) => {
             let found = json.as_ref().and_then(crate::lyrics::from_spotify);
             crate::lyrics::store(&path, &found);
@@ -5998,7 +6011,7 @@ async fn spotify_lyrics(
         }
         Err(error) => {
             log::debug!("spotify lyrics unavailable: {error:#}");
-            None
+            found_before()
         }
     }
 }
@@ -8530,6 +8543,63 @@ mod cover_routing_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Without a playback session, Spotify lyrics found before are still
+    /// shown, however old; an old "none" from before the request named the
+    /// cover stops counting, and a new "none" asks again after a week.
+    #[tokio::test]
+    async fn spotify_lyrics_keep_old_finds_and_forget_old_nones() {
+        let root = std::env::temp_dir().join(format!(
+            "chanceify-spotify-lyrics-v2-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let found = Some(crate::lyrics::Lyrics {
+            lines: vec![crate::lyrics::Line {
+                at_ms: Some(1_000),
+                text: "A test line".into(),
+            }],
+            synced: true,
+            instrumental: false,
+        });
+        let age = |path: &std::path::Path, days: u64| {
+            let then = std::time::SystemTime::now() - Duration::from_secs(60 * 60 * 24 * days);
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(then))
+                .unwrap();
+        };
+
+        crate::lyrics::store(&root.join("spotify-kept.json"), &found);
+        assert_eq!(
+            spotify_lyrics(None, "spotify:track:kept", &root).await,
+            found
+        );
+        let stale = root.join("spotify-v2-stale.json");
+        crate::lyrics::store(&stale, &found);
+        age(&stale, 60);
+        assert!(crate::lyrics::cached(&stale).is_none());
+        assert_eq!(
+            spotify_lyrics(None, "spotify:track:stale", &root).await,
+            found
+        );
+
+        crate::lyrics::store(&root.join("spotify-gone.json"), &None);
+        assert!(
+            spotify_lyrics(None, "spotify:track:gone", &root)
+                .await
+                .is_none()
+        );
+
+        let none = root.join("spotify-v2-none.json");
+        crate::lyrics::store(&none, &None);
+        assert_eq!(crate::lyrics::cached(&none), Some(None), "fresh");
+        age(&none, 8);
+        assert_eq!(crate::lyrics::cached(&none), None, "and gone in a week");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     /// A change turned away for the rate limit is sent again; one refused
     /// for any other reason, and any playback command, is answered as is.
