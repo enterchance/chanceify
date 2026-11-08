@@ -10480,6 +10480,49 @@ impl App {
         }
     }
 
+    /// Whether `action` is the listener choosing another song: Next, a
+    /// Previous that steps back rather than restarting, or starting
+    /// something to play.
+    fn changes_song_by_hand(&self, action: &Action) -> bool {
+        match action {
+            Action::Next
+            | Action::PlayContext { .. }
+            | Action::PlayUris { .. }
+            | Action::PlayEpisode { .. }
+            | Action::PlayFromRow { .. }
+            | Action::ShufflePlay(_)
+            | Action::SmartShufflePlay(_)
+            | Action::FreshShufflePlay(_) => true,
+            Action::Previous => {
+                let position = if self.resume_only() {
+                    self.resume_position_ms
+                } else {
+                    self.now_playing().map_or(0, |now| now.position_ms)
+                };
+                position <= RESTART_BEFORE_PREVIOUS
+            }
+            _ => false,
+        }
+    }
+
+    /// Choosing another song ends Repeat One and keeps repeating the rest,
+    /// as Spotify's own apps do. Restarting the song keeps it, and Repeat
+    /// All and Off stay as they are. A file on the deck keeps its own
+    /// repeat.
+    fn leave_repeat_one(&mut self) {
+        if self.deck_active() {
+            return;
+        }
+        let mode = match self.now_playing() {
+            Some(now) => now.repeat,
+            None if self.target() == Target::Local => self.local_repeat(),
+            None => return,
+        };
+        if mode == RepeatMode::Track {
+            self.set_repeat(RepeatMode::Context);
+        }
+    }
+
     fn set_repeat(&mut self, mode: RepeatMode) {
         if self.deck_control(|deck| deck.set_repeat(mode)) {
             return;
@@ -11817,6 +11860,9 @@ impl App {
                 | Action::SignOut
         ) {
             self.leave_lyrics_fullscreen(ctx);
+        }
+        if self.changes_song_by_hand(&action) {
+            self.leave_repeat_one();
         }
         match action {
             Action::Open(page) => self.open(page),
@@ -18652,6 +18698,63 @@ mod tests {
         }
     }
 
+    /// Changing songs by hand ends Repeat One and keeps repeating the
+    /// context, as Spotify does; restarting the song, or Repeat All, keeps
+    /// the mode.
+    #[test]
+    fn changing_songs_by_hand_ends_repeat_one() {
+        let ctx = egui::Context::default();
+        let playing = |repeat, position_ms| {
+            let mut app = headless_app();
+            app.local_ready = true;
+            app.local = LocalState {
+                connected: true,
+                playback: Playback::Paused,
+                repeat,
+                position_ms,
+                track: Some(crate::player::LocalTrack {
+                    uri: "spotify:track:one".into(),
+                    duration_ms: 200_000,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            app.on_now_playing_changed();
+            app
+        };
+        for action in [
+            Action::Next,
+            Action::Previous,
+            Action::PlayUris {
+                uris: vec!["spotify:track:two".into()],
+                index: 0,
+            },
+            Action::ShufflePlay("spotify:playlist:pl1".into()),
+        ] {
+            let label = format!("{action:?}");
+            let mut app = playing(RepeatMode::Track, 1_000);
+            app.apply(action, &ctx);
+            assert_eq!(app.local.repeat, RepeatMode::Context, "{label}");
+            app.backend.shutdown();
+        }
+
+        let mut app = playing(RepeatMode::Track, 10_000);
+        app.apply(Action::Previous, &ctx);
+        assert_eq!(
+            app.local.repeat,
+            RepeatMode::Track,
+            "Previous that restarts the song keeps repeating it"
+        );
+        app.backend.shutdown();
+
+        for repeat in [RepeatMode::Off, RepeatMode::Context] {
+            let mut app = playing(repeat, 1_000);
+            app.apply(Action::Next, &ctx);
+            assert_eq!(app.local.repeat, repeat, "only Repeat One ends");
+            app.backend.shutdown();
+        }
+    }
+
     #[test]
     fn replaying_a_song_only_consumes_a_queue_copy_when_the_queue_advances() {
         let ctx = egui::Context::default();
@@ -18687,6 +18790,9 @@ mod tests {
             app.handle_local(started);
             assert_eq!(app.manual_queue, ["spotify:track:b"]);
             assert_eq!(app.queued_rows_len(), 1);
+            // Next ended Repeat One; the listener turns it back on for the
+            // new song.
+            app.apply(Action::SetRepeat(repeat), &ctx);
 
             let mut again = app.local.clone();
             again.track_sequence += 1;
