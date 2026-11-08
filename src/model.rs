@@ -581,6 +581,13 @@ pub struct Library {
     /// a refusal only earns a longer refusal, so a throttled walk pauses
     /// instead of turning into a loop.
     pub membership_paused_until: Option<Instant>,
+    /// Every song in the user's playlists by name, for "Search your
+    /// library". Filled by the same walk as `membership`, which also reads
+    /// the playlists the user follows for it.
+    pub songs: crate::song_index::SongIndex,
+    /// Playlists whose songs could not be read by name this run, so the
+    /// walk does not keep asking for them.
+    pub songs_failed: std::collections::HashSet<String>,
     /// Which load of the playlists the pages on their way belong to. Every
     /// load from the top takes a new one, so a page asked for by an earlier
     /// load is not taken into the new list, even at the same offset.

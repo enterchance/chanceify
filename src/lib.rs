@@ -68,6 +68,7 @@ pub mod scenes;
 pub mod session_reads;
 pub mod settings;
 pub mod single_instance;
+pub mod song_index;
 pub mod sink;
 pub mod smart_shuffle;
 pub mod speed;

@@ -1703,6 +1703,10 @@ fn contents(app: &mut App, ui: &mut egui::Ui, grid_art: Option<Rect>) {
     let playing_context = app.playing_context_uri();
     let context_playing = app.believed_playing();
     let current_page = app.page().clone();
+    // The filter also finds songs: every song in every playlist, Liked
+    // Songs, saved albums and local files, listed under the library rows.
+    let songs = (!needle.is_empty()).then(|| song_search(app, ui.ctx(), &needle));
+    let song_hits = songs.as_ref().map_or(0, |found| found.total);
 
     crate::autoscroll::show(
         ui,
@@ -1723,7 +1727,7 @@ fn contents(app: &mut App, ui: &mut egui::Ui, grid_art: Option<Rect>) {
             if let Some(error) = &error {
                 super::widgets::error_row(ui, app, error, None);
             }
-            if entries.is_empty() && !loading && error.is_none() {
+            if entries.is_empty() && song_hits == 0 && !loading && error.is_none() {
                 ui.add_space(12.0);
                 theme::subtle(
                     ui,
@@ -1747,6 +1751,9 @@ fn contents(app: &mut App, ui: &mut egui::Ui, grid_art: Option<Rect>) {
                 );
                 if let Some(page) = more_page {
                     super::widgets::load_more_when_near_end(ui, app, page, true);
+                }
+                if let Some(found) = &songs {
+                    song_results(app, ui, found);
                 }
                 ui.add_space(grid_art.map_or(0.0, |rect| ui.max_rect().bottom() - rect.top()));
                 return;
@@ -2101,8 +2108,313 @@ fn contents(app: &mut App, ui: &mut egui::Ui, grid_art: Option<Rect>) {
             if let Some(page) = more_page {
                 super::widgets::load_more_when_near_end(ui, app, page, true);
             }
+            if let Some(found) = &songs {
+                song_results(app, ui, found);
+            }
         },
     );
+}
+
+/// The height of one song in the library filter's song results.
+const SONG_ROW_HEIGHT: f32 = 46.0;
+
+/// The songs matching the library filter. The search runs again only when
+/// the words or the library change, not on every frame the panel draws.
+fn song_search(
+    app: &App,
+    ctx: &egui::Context,
+    needle: &str,
+) -> std::sync::Arc<crate::song_index::Results> {
+    type Key = (String, u64, usize, u64, usize, usize);
+    let key: Key = (
+        needle.to_string(),
+        app.library.songs.generation(),
+        app.library.liked.items.len(),
+        app.library.liked.revision,
+        app.library.albums.items.len(),
+        app.local_songs.songs.len(),
+    );
+    let id = egui::Id::new("library-song-search");
+    if let Some((cached, found)) =
+        ctx.data(|data| data.get_temp::<(Key, std::sync::Arc<crate::song_index::Results>)>(id))
+        && cached == key
+    {
+        return found;
+    }
+    let found = std::sync::Arc::new(crate::song_index::search(
+        &app.library.songs,
+        &crate::song_index::Sources {
+            liked: &app.library.liked.items,
+            albums: &app.library.albums.items,
+            local: &app.local_songs.songs,
+        },
+        needle,
+    ));
+    ctx.data_mut(|data| data.insert_temp(id, (key, found.clone())));
+    found
+}
+
+/// The "Songs" part of the library filter's results: a heading, a row per
+/// song saying where it lives, and a count of the rest.
+fn song_results(app: &mut App, ui: &mut egui::Ui, found: &crate::song_index::Results) {
+    let palette = app.palette;
+    let locale = app.locale;
+    // While the walk is still reading playlists the results are partial,
+    // and saying so stops a missing song looking like a missing feature.
+    let listed = app.library.playlists.get().map_or(0, Vec::len);
+    let read = app.library.songs.walked() + app.library.songs_failed.len();
+    let reading = read < listed;
+    if found.hits.is_empty() && !reading {
+        return;
+    }
+    ui.add_space(6.0);
+    let (_, rect) = ui.allocate_space(vec2(ui.available_width(), 28.0));
+    if ui.is_rect_visible(rect) {
+        let heading = gettext(locale, "Songs").to_uppercase();
+        let text_rect = ui.painter().text(
+            pos2(rect.left() + LIBRARY_ITEM_PADDING, rect.bottom() - 11.0),
+            egui::Align2::LEFT_CENTER,
+            heading,
+            theme::medium(theme::SMALL_TEXT),
+            palette.dim,
+        );
+        ui.painter().hline(
+            (text_rect.right() + 8.0)..=(rect.right() - 8.0),
+            rect.bottom() - 11.0,
+            egui::Stroke::new(1.0, rule_color(&palette)),
+        );
+    }
+    if reading {
+        ui.horizontal(|ui| {
+            ui.add_space(LIBRARY_ITEM_PADDING);
+            theme::subtle(
+                ui,
+                &palette,
+                // Translators: {read} and {total} count the user's playlists.
+                &gettext(locale, "Still reading your playlists ({read} of {total})")
+                    .replace("{read}", &read.min(listed).to_string())
+                    .replace("{total}", &listed.to_string()),
+            );
+        });
+        ui.add_space(4.0);
+    }
+    if found.hits.is_empty() {
+        ui.horizontal(|ui| {
+            ui.add_space(LIBRARY_ITEM_PADDING);
+            theme::subtle(ui, &palette, &gettext(locale, "No songs found yet."));
+        });
+        return;
+    }
+    let playing = app.now_playing().map(|now| now.uri);
+    super::widgets::virtual_rows(ui, found.hits.len(), SONG_ROW_HEIGHT, |ui, index| {
+        song_row(app, ui, &found.hits[index], playing.as_deref());
+    });
+    let more = found.total.saturating_sub(found.hits.len());
+    if more > 0 {
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.add_space(LIBRARY_ITEM_PADDING);
+            theme::subtle(
+                ui,
+                &palette,
+                // Translators: {count} is how many more songs matched than are shown.
+                &gettext(locale, "And {count} more. Type more to narrow it down.")
+                    .replace("{count}", &more.to_string()),
+            );
+        });
+    }
+    ui.add_space(8.0);
+}
+
+/// What a song's second line says about where it lives: the first two
+/// places by name, and how many more.
+fn song_places_line(locale: Locale, hit: &crate::song_index::Hit) -> String {
+    let names: Vec<String> = hit
+        .places
+        .iter()
+        .map(|place| song_place_name(locale, place))
+        .collect();
+    let mut line = names.iter().take(2).cloned().collect::<Vec<_>>().join(", ");
+    if names.len() > 2 {
+        line.push_str(&format!(" +{}", names.len() - 2));
+    }
+    line
+}
+
+fn song_place_name(locale: Locale, place: &crate::song_index::Place) -> String {
+    use crate::song_index::Place;
+    match place {
+        Place::Playlist { name, .. } | Place::Album { name, .. } => name.clone(),
+        Place::LikedSongs => gettext(locale, "Liked Songs").into_owned(),
+        Place::Local { .. } => gettext(locale, "Local songs").into_owned(),
+    }
+}
+
+/// Opens where a found song lives and picks its row there.
+fn show_song_in(app: &mut App, hit: &crate::song_index::Hit, place: &crate::song_index::Place) {
+    use crate::song_index::Place;
+    let page = match place {
+        Place::Playlist { id, .. } => Page::Playlist(id.clone()),
+        Place::LikedSongs => Page::LikedSongs,
+        Place::Album { id, .. } => Page::Album(id.clone()),
+        Place::Local { .. } => Page::Local,
+    };
+    // The page scrolls to the song and picks it once its rows are in, as
+    // "Show where this song lives" does.
+    if !hit.song.uri.is_empty() && page != Page::Local {
+        app.reveal_song = Some(hit.song.uri.clone());
+    }
+    app.actions.push(Action::Open(page));
+}
+
+/// Plays a found song where it lives, so the songs after it play next.
+fn play_song_in(app: &mut App, hit: &crate::song_index::Hit, place: &crate::song_index::Place) {
+    use crate::song_index::Place;
+    let uri = hit.song.uri.clone();
+    let context = match place {
+        Place::Local { path } => {
+            app.actions.push(Action::PlayLocalFiles {
+                paths: vec![path.clone()],
+                index: 0,
+                shuffle: None,
+            });
+            return;
+        }
+        Place::Playlist { id, .. } => Some(format!("spotify:playlist:{id}")),
+        Place::Album { id, .. } => Some(format!("spotify:album:{id}")),
+        Place::LikedSongs => app
+            .user_id()
+            .map(|user| format!("spotify:user:{user}:collection")),
+    };
+    match context {
+        Some(context) => app.actions.push(Action::PlayContext {
+            uri: context,
+            offset_uri: Some(uri),
+            offset_index: None,
+        }),
+        None => app.actions.push(Action::PlayUris {
+            uris: vec![uri],
+            index: 0,
+        }),
+    }
+}
+
+/// One song in the library filter's results. A click opens the playlist it
+/// lives in with its row picked, a double click plays it there, and a
+/// right click offers every place it lives and the usual song menu.
+fn song_row(app: &mut App, ui: &mut egui::Ui, hit: &crate::song_index::Hit, playing: Option<&str>) {
+    let palette = app.palette;
+    let locale = app.locale;
+    let local = hit.local_path().is_some();
+    let (_, rect) = ui.allocate_space(vec2(ui.available_width(), SONG_ROW_HEIGHT));
+    let id = ui
+        .id()
+        .with(("library-song", &hit.song.uri, hit.local_path()));
+    let response = ui.interact(rect, id, Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &hit.song.name)
+    });
+    let is_playing = !hit.song.uri.is_empty() && playing == Some(hit.song.uri.as_str());
+    if ui.is_rect_visible(rect) {
+        if response.hovered() {
+            ui.painter().rect_filled(
+                rect,
+                CornerRadius::same(6),
+                palette.surface_hover.gamma_multiply(0.6),
+            );
+        }
+        let icon = if local { Icon::Laptop } else { Icon::Music };
+        let icon_center = pos2(rect.left() + LIBRARY_ITEM_PADDING + 10.0, rect.center().y);
+        icon.image(palette.secondary, 18.0)
+            .paint_at(ui, Rect::from_center_size(icon_center, Vec2::splat(18.0)));
+        let text_left = rect.left() + LIBRARY_ITEM_PADDING + 30.0;
+        let text_right = rect.right() - LIBRARY_ITEM_PADDING;
+        let painter = ui.painter().with_clip_rect(Rect::from_min_max(
+            pos2(text_left, rect.top()),
+            pos2(text_right, rect.bottom()),
+        ));
+        crate::bidi::paint_line(
+            &painter,
+            text_left,
+            text_right,
+            rect.center().y - 9.0,
+            &hit.song.name,
+            theme::medium(14.0),
+            if is_playing { palette.accent } else { palette.text },
+        );
+        let artists = hit.song.artist_line();
+        let places = song_places_line(locale, hit);
+        let detail = match (artists.is_empty(), places.is_empty()) {
+            (false, false) => format!("{artists} • {places}"),
+            (true, false) => places,
+            (false, true) => artists,
+            (true, true) => String::new(),
+        };
+        crate::bidi::paint_line(
+            &painter,
+            text_left,
+            text_right,
+            rect.center().y + 10.0,
+            &detail,
+            theme::regular(theme::SMALL_TEXT),
+            palette.secondary,
+        );
+    }
+    theme::focus_ring(ui, &response);
+    let first = hit.places.first().cloned();
+    if response.clicked()
+        && let Some(place) = &first
+    {
+        show_song_in(app, hit, place);
+    }
+    if response.double_clicked()
+        && let Some(place) = &first
+    {
+        play_song_in(app, hit, place);
+    }
+    egui::Popup::context_menu(&response)
+        .frame(super::widgets::menu_frame(&palette))
+        .show(|ui| {
+            super::widgets::fit_menu(ui, 300.0);
+            if let Some(place) = &first
+                && super::widgets::menu_item(
+                    ui,
+                    &palette,
+                    Some(Icon::Play),
+                    &gettext(locale, "Play"),
+                )
+            {
+                play_song_in(app, hit, place);
+            }
+            for place in hit.places.iter().take(12) {
+                // Translators: {place} is a playlist, an album, Liked Songs or Local songs.
+                let label = gettext(locale, "Show in {place}")
+                    .replace("{place}", &song_place_name(locale, place));
+                if super::widgets::menu_item(ui, &palette, None, &label) {
+                    show_song_in(app, hit, place);
+                }
+            }
+            if !local && !hit.song.uri.is_empty() {
+                super::widgets::menu_separator(ui, &palette);
+                let item = crate::api::models::PlayableItem::Track(hit.song.to_track());
+                super::widgets::item_menu(ui, app, &item, None, None);
+            }
+        });
+    if !hit.places.is_empty() {
+        let names: Vec<String> = hit
+            .places
+            .iter()
+            .map(|place| song_place_name(locale, place))
+            .collect();
+        response.on_hover_text(
+            // Translators: {places} lists where a song is, comma separated.
+            gettext(
+                locale,
+                "In {places}. Click to show it there, double-click to play it.",
+            )
+            .replace("{places}", &names.join(", ")),
+        );
+    }
 }
 
 const EXPANDED_ART_GAP: f32 = 10.0;

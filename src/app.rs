@@ -1577,6 +1577,9 @@ impl App {
             if !cached.is_empty() {
                 app.library.membership = cached;
             }
+            // The songs of every playlist, by name, so "Search your
+            // library" finds songs from the first frame.
+            app.library.songs = crate::song_index::SongIndex::load(&app.song_index_path());
         }
         // What was played here is on disk and needs nothing from the
         // network, so the tab has rows before Spotify has answered.
@@ -5064,6 +5067,13 @@ impl App {
         self.dirs.cache.join("membership.json")
     }
 
+    /// Where the library search's song index is kept between runs. Like
+    /// the membership index it is a cache of Spotify's own answers, and can
+    /// be deleted at any time; the walk reads the playlists again.
+    fn song_index_path(&self) -> std::path::PathBuf {
+        self.dirs.cache.join("song_index.json")
+    }
+
     /// Where one playlist's rows are cached, or `None` when the account is
     /// not known yet. The membership walk reads this before asking Spotify
     /// for anything, so a playlist the reader has already opened costs no
@@ -5653,14 +5663,29 @@ impl App {
         if self.library.playlists_next.is_some() || self.library.playlists_asked.is_some() {
             return;
         }
-        // Playlists the user made. A followed playlist belongs to someone
-        // else, and walking every one of those would be far larger.
-        let Some(next) = playlists
+        // Playlists the user made come first: their songs light the
+        // membership icons, and the Web API may be asked for them when the
+        // streaming session cannot answer.
+        let owned = playlists
             .iter()
             .filter(|playlist| self.owns_playlist(playlist))
-            .find(|playlist| !self.library.membership.has(&playlist.id))
-        else {
-            return;
+            .find(|playlist| !self.library.membership.has(&playlist.id));
+        // Then every playlist in the library, followed ones too, whose
+        // songs the library search does not have yet or which changed since
+        // they were read. Those are read over the streaming session only,
+        // so the search never spends the Web API's quota.
+        let for_search = || {
+            playlists.iter().find(|playlist| {
+                self.library.songs.needs_walk(playlist)
+                    && !self.library.songs_failed.contains(&playlist.id)
+            })
+        };
+        let (next, session_only) = match owned {
+            Some(playlist) => (playlist, false),
+            None => match for_search() {
+                Some(playlist) => (playlist, true),
+                None => return,
+            },
         };
         self.library.membership_asked = Some(next.id.clone());
         self.backend.api(ApiRequest::MembershipPlaylist {
@@ -5668,6 +5693,7 @@ impl App {
             // Without a known account there is no cache to read, and the
             // walk falls back to asking Spotify as it always did.
             cache: self.playlist_cache_path(&next.id).unwrap_or_default(),
+            session_only,
         });
     }
 
@@ -7521,6 +7547,14 @@ impl App {
                         std::fs::write(self.dirs.cache.join("last_user.json"), bytes).ok();
                     }
                     self.optimistic_user = Some(user.clone());
+                    // The song index is filed under the account, so another
+                    // account's songs are never offered. One emptied by a
+                    // sign-out is read back from disk for the same account.
+                    if self.library.songs.walked() == 0 && !self.offline {
+                        self.library.songs =
+                            crate::song_index::SongIndex::load(&self.song_index_path());
+                    }
+                    self.library.songs.adopt_account(&user.id);
                     self.user = Some(user);
                     // Now that the account is known, its library answers
                     // can be read off disk instead of asked for again.
@@ -7974,10 +8008,32 @@ impl App {
                 if self.library.membership_asked.as_deref() == Some(playlist.id.as_str()) {
                     self.library.membership_asked = None;
                     match result {
-                        Ok(uris) => {
-                            self.library.membership.add(&playlist, uris);
-                            if !self.offline {
-                                self.library.membership.save(&self.membership_path());
+                        Ok(songs) => {
+                            if self.owns_playlist(&playlist) {
+                                // A playlist read again because it changed
+                                // replaces what the last read found.
+                                if self.library.membership.has(&playlist.id) {
+                                    self.library.membership.remove(&playlist.id);
+                                }
+                                let uris: Vec<String> =
+                                    songs.iter().map(|song| song.uri.clone()).collect();
+                                self.library.membership.add(&playlist, uris);
+                                if !self.offline {
+                                    self.library.membership.save(&self.membership_path());
+                                }
+                            }
+                            // Songs that came without their names cannot be
+                            // searched for; the playlist is tried again
+                            // next run rather than recorded as empty.
+                            if songs.is_empty()
+                                || songs.iter().any(crate::song_index::Song::has_details)
+                            {
+                                self.library.songs.record(&playlist, &songs);
+                                if !self.offline {
+                                    self.library.songs.save(&self.song_index_path());
+                                }
+                            } else {
+                                self.library.songs_failed.insert(playlist.id.clone());
                             }
                         }
                         // Spotify is throttling us. Leave this playlist
@@ -7992,6 +8048,7 @@ impl App {
                         }
                         Err(error) => {
                             log::debug!("could not walk {}: {error}", playlist.id);
+                            self.library.songs_failed.insert(playlist.id.clone());
                         }
                     }
                 }
@@ -8048,6 +8105,15 @@ impl App {
                     // The list is complete only now, so this is the first
                     // moment the walk can have the budget to itself.
                     if self.library.playlists_next.is_none() {
+                        // The whole list is in: the search forgets playlists
+                        // that left the library and follows renames, and
+                        // the walk reads again any whose snapshot moved on.
+                        if let Some(list) = self.library.playlists.get()
+                            && self.library.songs.follow_list(list)
+                            && !self.offline
+                        {
+                            self.library.songs.save(&self.song_index_path());
+                        }
                         self.walk_next_playlist();
                     }
                 }
@@ -11837,6 +11903,14 @@ impl App {
         else {
             return;
         };
+        let songs: Vec<crate::song_index::Song> = uris
+            .iter()
+            .map(|uri| crate::song_index::Song {
+                uri: uri.clone(),
+                ..Default::default()
+            })
+            .collect();
+        self.library.songs.add_songs(playlist_id, &songs);
         self.library.membership.add_song(&playlist, uris);
         self.library.membership.save(&self.membership_path());
     }
@@ -12692,6 +12766,7 @@ impl App {
                 }
                 self.library.membership.remove_songs(&playlist_id, &uris);
                 self.library.membership.save(&self.membership_path());
+                self.library.songs.remove_songs(&playlist_id, &uris);
                 self.playlist_busy = true;
                 self.backend.api(ApiRequest::RemoveFromPlaylist {
                     playlist_id,
@@ -20000,6 +20075,59 @@ mod tests {
         app.library.membership_paused_until = None;
         app.walk_next_playlist();
         assert_eq!(app.library.membership_asked.as_deref(), Some("mine"));
+    }
+
+    /// A playlist the user follows is read for "Search your library": its
+    /// songs can be found by name, but it lights no membership icons, which
+    /// stay for the user's own playlists. A later snapshot reads it again.
+    #[test]
+    fn a_followed_playlist_is_read_for_the_library_search_only() {
+        let mut app = headless_app();
+        app.backend.set_offline(true);
+        app.user = Some(crate::api::models::User {
+            id: "chan".into(),
+            ..Default::default()
+        });
+        let followed = Playlist {
+            id: "theirs".into(),
+            name: "Their Mix".into(),
+            uri: "spotify:playlist:theirs".into(),
+            snapshot_id: Some("s1".into()),
+            owner: crate::api::models::Owner {
+                id: Some("someone".into()),
+                ..Default::default()
+            },
+            ..Playlist::default()
+        };
+        app.library.membership_asked = Some("theirs".into());
+        app.handle_api(ApiResponse::MembershipPlaylist {
+            playlist: followed.clone(),
+            result: Ok(vec![crate::song_index::Song {
+                uri: "spotify:track:1".into(),
+                name: "Halo".into(),
+                artists: vec![("b".into(), "Beyoncé".into())],
+                ..Default::default()
+            }]),
+        });
+        assert!(!app.library.membership.has("theirs"));
+        let found = crate::song_index::search(
+            &app.library.songs,
+            &crate::song_index::Sources {
+                liked: &[],
+                albums: &[],
+                local: &[],
+            },
+            "beyonce",
+        );
+        assert_eq!(found.total, 1);
+        let places: Vec<&str> = found.hits[0].playlists().map(|(_, name)| name).collect();
+        assert_eq!(places, ["Their Mix"]);
+        assert!(!app.library.songs.needs_walk(&followed));
+        let changed = Playlist {
+            snapshot_id: Some("s2".into()),
+            ..followed
+        };
+        assert!(app.library.songs.needs_walk(&changed));
     }
 
     /// Toggling shuffle for local playback rechecks the queue, reveals the

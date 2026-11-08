@@ -179,6 +179,11 @@ pub enum ApiRequest {
         /// reads that first, because a playlist the reader has already
         /// opened costs no request at all to learn its songs from.
         cache: std::path::PathBuf,
+        /// Read only from the cache and the streaming session, never the
+        /// Web API. Set for playlists the user follows rather than owns,
+        /// which are walked only for the library search and are not worth
+        /// any of the Web API's quota.
+        session_only: bool,
     },
     /// Read one of the user's playlists as it is in their own country, to
     /// list the songs in it that can no longer be played.
@@ -524,9 +529,13 @@ pub enum ApiResponse {
     },
     /// One playlist's songs, gathered so the membership index can record
     /// which of them it holds.
+    ///
+    /// Each song carries its name, artists and album when the read gave
+    /// them, for the library search; a song read without them has only its
+    /// URI.
     MembershipPlaylist {
         playlist: Playlist,
-        result: ApiResult<Vec<String>>,
+        result: ApiResult<Vec<crate::song_index::Song>>,
     },
     /// The unplayable songs found in one playlist.
     UnavailableScan {
@@ -4443,25 +4452,20 @@ fn observe_playlists(api: &ApiGateway, response: &ApiResponse) {
 async fn walk_playlist(
     client: &ApiClient,
     playlist: &crate::api::models::Playlist,
-) -> Result<Vec<String>, ApiError> {
+) -> Result<Vec<crate::song_index::Song>, ApiError> {
     const PER_PAGE: u32 = 50;
     let total = playlist.track_total();
-    let mut uris: Vec<String> = Vec::new();
+    let mut songs = Vec::new();
     let mut offset = 0;
     loop {
         let page = client
             .playlist_items(&playlist.id, offset, PER_PAGE)
             .await?;
         let taken = page.items.len() as u32;
-        uris.extend(
-            page.items
-                .iter()
-                .filter_map(crate::api::models::PlaylistItem::playable)
-                .map(|playable| playable.uri().to_owned()),
-        );
+        songs.extend(crate::song_index::Song::from_rows(&page.items));
         offset += taken;
         if taken < PER_PAGE || offset >= total {
-            return Ok(uris);
+            return Ok(songs);
         }
     }
 }
@@ -5212,7 +5216,11 @@ async fn handle(
                 result,
             }
         }
-        ApiRequest::MembershipPlaylist { playlist, cache } => {
+        ApiRequest::MembershipPlaylist {
+            playlist,
+            cache,
+            session_only,
+        } => {
             // The rows are very often already on disk: the reader has
             // opened this playlist, or at least some of it, and every page
             // they opened was cached. A complete cache answers the whole
@@ -5222,29 +5230,35 @@ async fn handle(
             // from the top.
             let cached = read_playlist_cache(cache.clone()).await.ok();
             if let Some((cached, _)) = &cached {
-                let uris: Vec<String> = cached
+                let songs = crate::song_index::Song::from_rows(&cached.items);
+                let rows = cached
                     .items
                     .iter()
                     .filter_map(crate::api::models::PlaylistItem::playable)
-                    .map(|playable| playable.uri().to_owned())
-                    .collect();
+                    .count();
                 // A cache holding nothing is no help, and one that is only
                 // a prefix still has to be completed before the playlist
                 // can be called walked.
                 let complete = cached.next_offset.is_none()
-                    && cached
-                        .total
-                        .is_none_or(|total| total as usize == uris.len());
-                if complete {
+                    && cached.total.is_none_or(|total| total as usize == rows);
+                // A read for the library search is often a playlist read
+                // again because its snapshot moved on; a cache from before
+                // that change would only record the old songs as new.
+                let current = !session_only
+                    || playlist
+                        .snapshot_id
+                        .as_deref()
+                        .is_none_or(|snapshot| snapshot == cached.snapshot);
+                if complete && current {
                     log::debug!(
                         "membership for {} read from the playlist cache ({} songs), no request sent",
                         playlist.id,
-                        uris.len()
+                        songs.len()
                     );
                     return (
                         ApiResponse::MembershipPlaylist {
                             playlist,
-                            result: Ok(uris),
+                            result: Ok(songs),
                         },
                         None,
                     );
@@ -5252,18 +5266,59 @@ async fn handle(
             }
             // The streaming session answers this without touching any
             // app's quota, so it goes first; the Web API is the fallback.
+            //
+            // The rows are read with their songs' details, for the library
+            // search. That is one more session request per hundred rows, so
+            // a long playlist gets longer to answer. If the details cannot
+            // be had, the bare URIs still serve the membership icons.
             if let Some(engine) = engine.filter(|engine| {
                 same_account(&engine.session().username(), api.account().as_ref())
-            }) && let Ok(Ok(uris)) = tokio::time::timeout(
-                SESSION_READ_TIMEOUT * 2,
-                session_reads::uris(engine.session(), &playlist.id),
-            )
-            .await
-            {
+            }) {
+                let pages = u64::from(playlist.track_total() / 100 + 1);
+                let budget = SESSION_READ_TIMEOUT * 2 + Duration::from_secs(5 * pages);
+                if let Ok(Ok(rows)) =
+                    tokio::time::timeout(budget, session_reads::songs(engine.session(), &playlist.id))
+                        .await
+                {
+                    return (
+                        ApiResponse::MembershipPlaylist {
+                            playlist,
+                            result: Ok(crate::song_index::Song::from_rows(&rows)),
+                        },
+                        None,
+                    );
+                }
+                if let Ok(Ok(uris)) = tokio::time::timeout(
+                    SESSION_READ_TIMEOUT * 2,
+                    session_reads::uris(engine.session(), &playlist.id),
+                )
+                .await
+                {
+                    let songs = uris
+                        .into_iter()
+                        .map(|uri| crate::song_index::Song {
+                            uri,
+                            ..Default::default()
+                        })
+                        .collect();
+                    return (
+                        ApiResponse::MembershipPlaylist {
+                            playlist,
+                            result: Ok(songs),
+                        },
+                        None,
+                    );
+                }
+            }
+            // A followed playlist is read for the search alone, which is
+            // not worth the Web API's quota.
+            if session_only {
                 return (
                     ApiResponse::MembershipPlaylist {
                         playlist,
-                        result: Ok(uris),
+                        result: Err(ApiError::Network(
+                            "the streaming session could not read this playlist".into(),
+                        )),
                     },
                     None,
                 );

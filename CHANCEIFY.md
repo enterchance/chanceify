@@ -1105,6 +1105,34 @@ Tests: `one_to_one_is_the_identity`,
 `every_preset_names_a_curve_and_a_speed`,
 `a_speed_scene_is_a_rate_and_a_curve_together`.
 
+### 28. "Search your library" finds songs, and says which playlists hold them
+
+The library filter still narrows playlists, albums and artists by name, and
+now also lists **songs** under a SONGS heading: every song in every playlist
+in the library (followed ones too), Liked Songs, the first page of each saved
+album, and local files. Matching is by name, artist or album, ignoring case
+and accents, every typed word must appear, and a name match ranks first. Each
+row says where the song lives. A click opens that playlist with the row
+picked (through `reveal_song`, as "show where this song lives" does), a
+double click plays it there, and a right click offers "Show in" for every
+place plus the usual song menu. At most 200 rows are shown, with a count of
+the rest.
+
+**The index rides on the membership walk.** `src/song_index.rs` keeps each
+song's name, artists and album per playlist, saved as `song_index.json` in
+the cache directory and filed under the account. `ApiResponse::MembershipPlaylist`
+now carries those details: from the playlist cache when it is complete, else
+from the streaming session (`session_reads::songs`, rows with metadata), else
+bare URIs. After the owned playlists the walk goes on to every playlist the
+search lacks or whose snapshot has moved on since it was read, with
+`session_only` set so those reads never touch the Web API. When the whole
+playlist list arrives, playlists that left the library are forgotten and
+renames followed. A playlist the session cannot read is skipped for the rest
+of the run.
+
+Tests: the `song_index` unit tests and
+`a_followed_playlist_is_read_for_the_library_search_only`.
+
 ## Known gaps
 
 - **No track prefetching.** Songs are fetched when you press play, so a first

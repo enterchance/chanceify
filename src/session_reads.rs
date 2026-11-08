@@ -621,6 +621,25 @@ pub async fn uris(session: &Session, id: &str) -> Result<Vec<String>, Failure> {
     }
 }
 
+/// Every row of a playlist with its song's name, artists and album, paged
+/// over the session. The library search keeps these, and the session has
+/// no per-app quota to spend, so a whole library can be read this way.
+pub async fn songs(session: &Session, id: &str) -> Result<Vec<PlaylistItem>, Failure> {
+    const PAGE: u32 = 100;
+    let mut found = Vec::new();
+    let mut offset = 0;
+    loop {
+        let page = rows_page(session, id, offset, PAGE, true).await?;
+        let taken = page.items.len() as u32;
+        let total = page.total;
+        found.extend(page.items);
+        offset = offset.saturating_add(taken);
+        if taken == 0 || offset >= total {
+            return Ok(found);
+        }
+    }
+}
+
 async fn rows_page(
     session: &Session,
     id: &str,
