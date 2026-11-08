@@ -39,8 +39,11 @@ waiting for local playback to reconnect keeps the song chosen at the click.
 
 Sorted and filtered views omit unavailable songs and local files from their
 playback requests. The displayed rows keep their positions, and selecting a
-repeated song starts that occurrence. A filtered playlist or Liked Songs view
-plays its matching songs in displayed order, including duplicates. An empty or entirely
+repeated song starts that occurrence. Another playlist that also holds the
+playing song shows it as an ordinary row, since the song is not playing from
+there. A filtered playlist or Liked Songs view
+plays its matching songs in displayed order, including duplicates. With
+shuffle on, the header's Play starts such a view at a random row. An empty or entirely
 unplayable view disables Play instead of starting the unfiltered context.
 
 Since 0.9.0, starting another song on this computer keeps the
@@ -116,7 +119,11 @@ not consume a queue row or restore an older queue saved on this computer.
    promptly without waiting for the song to finish.
 
 9. **Closing the app keeps the queue.** Spotifast saves it locally. When you
-   resume the last song, it restores your queued songs and playlist position.
+   resume the last song, it restores your queued songs and playlist position,
+   and the playlist carries on after that song, even when it was paused or
+   playing from a sorted view when you closed the app. A song the playlist no
+   longer holds, such as a recommendation that followed its end, plays on its
+   own at its saved position, followed by your queued songs.
 
 10. **Old answers from Spotify are ignored.** Queue responses can be a few
     seconds late. Spotifast ignores stale responses and asks again. Your
