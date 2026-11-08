@@ -185,8 +185,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         }
         central(app, ui);
         no_lyrics_marker(app, ctx);
-        keep_room_for_panels(app, ctx);
     }
+    keep_room_for_panels(app, ctx);
     devices::popup(app, ctx);
     dialogs::show(app, ctx);
     views_panel::show(app, ctx);
@@ -262,14 +262,20 @@ pub(crate) const SIDEBAR_MIN_WIDTH: f32 = 210.0;
 /// so even at its narrowest the page beside the panels keeps the room its
 /// top bar needs (#624), and lower it again once they close. Window managers
 /// that tile ignore the minimum; the panels still give way there.
+///
+/// Full-screen lyrics draw no sidebar or side lyrics, so they ask for no
+/// room for them; only a queue kept beside the lyrics still counts. A screen
+/// narrower than the panels' minimum, such as a portrait monitor, then holds
+/// the full-screen window without a minimum wider than itself.
 fn keep_room_for_panels(app: &App, ctx: &Context) {
     if crate::window::fixed_size() {
         return;
     }
+    let normal = app.lyrics_fullscreen.is_none();
     let width = main_min_width(
         topbar::least_width(ctx),
-        app.settings.sidebar_visible,
-        app.show_queue_panel || app.show_lyrics_panel,
+        normal && app.settings.sidebar_visible,
+        app.show_queue_panel || (normal && app.show_lyrics_panel),
     )
     .round();
     let id = Id::new("main-min-width");
