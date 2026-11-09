@@ -398,7 +398,10 @@ fn connect_view(
         .as_ref()
         .map(|track| track.uri.clone())
         .filter(|uri| !uri.is_empty());
-    view.context_uri = Some(state.context_uri.clone()).filter(|uri| !uri.is_empty());
+    // A list played as songs is named "spotify:web-api" or the like: no
+    // list to go back to, so none is passed on.
+    view.context_uri = Some(state.context_uri.clone())
+        .filter(|uri| !uri.is_empty() && crate::link::is_replayable_context(uri));
     view.playing = state.is_playing && !state.is_paused;
     view.duration_ms = u32::try_from(state.duration.max(0)).unwrap_or(u32::MAX);
     let mut position = state.position_as_of_timestamp.max(0);

@@ -127,6 +127,19 @@ const KINDS: [&str; 7] = [
 /// Personalized playlists report their context with the owner embedded,
 /// `spotify:user:NAME:playlist:ID`, while the app's models hold the plain
 /// `spotify:playlist:ID`; strict comparisons need the one shape.
+/// Whether `uri` names a list Spotify can play again: a playlist, album,
+/// artist, show, the Liked Songs collection or a station. A list of songs
+/// played as songs comes back named "spotify:web-api" or the like, and
+/// asking to play that again plays nothing.
+pub fn is_replayable_context(uri: &str) -> bool {
+    let uri = canonical_context_uri(uri);
+    ["spotify:playlist:", "spotify:album:", "spotify:artist:", "spotify:show:", "spotify:station:"]
+        .iter()
+        .any(|kind| uri.starts_with(kind))
+        || (uri.starts_with("spotify:user:") && uri.ends_with(":collection"))
+        || uri.starts_with("spotify:collection")
+}
+
 pub fn canonical_context_uri(uri: &str) -> String {
     if let Some(rest) = uri.strip_prefix("spotify:user:") {
         const PLAYLIST: &str = ":playlist:";

@@ -1524,7 +1524,10 @@ impl App {
             user_names: HashMap::new(),
             user_names_revision: 0,
             recent_contexts: session.recent_contexts.clone(),
-            resume_context: session.last_context.clone(),
+            resume_context: session
+                .last_context
+                .clone()
+                .filter(|uri| crate::link::is_replayable_context(uri)),
             resume_load: None,
             resume_track: session.last_track.clone(),
             resume_position_ms: session.last_position_ms,
@@ -4265,7 +4268,9 @@ impl App {
         if now.local {
             self.last_now_playing_sequence = self.local.track_sequence;
         }
-        self.resume_context = self.playing_context_uri();
+        self.resume_context = self
+            .playing_context_uri()
+            .filter(|uri| crate::link::is_replayable_context(uri));
         self.resume_track = Some(now.uri.clone());
         self.resume_position_ms = 0;
         if now.local
@@ -6496,7 +6501,7 @@ impl App {
             .map_or_else(|| "-".to_owned(), |track| format!("{} ({})", track.title, track.uri));
         let intent = self.intent_track.as_ref().map_or_else(
             || "none".to_owned(),
-            |intent| format!("{} {}s ago", intent.uri, intent.at.elapsed().as_secs()),
+            |intent| intent.uri.clone(),
         );
         let key = format!(
             "{source}: {shown} | this computer: {:?} {local_track} | asked for: {intent} | play held: {} | on {:?}",
@@ -9960,7 +9965,23 @@ impl App {
     /// With `shuffle_first`, shuffle is turned on before playback starts,
     /// in one ordered exchange: two independent requests race, and shuffle
     /// sometimes lost.
-    fn play_request(&mut self, request: PlayRequest, shuffle_first: bool) {
+    fn play_request(&mut self, mut request: PlayRequest, shuffle_first: bool) {
+        // A list Spotify cannot play again (songs played as songs come back
+        // named "spotify:web-api") is played as the song asked for, which
+        // starts something instead of nothing.
+        if request
+            .context_uri
+            .as_deref()
+            .is_some_and(|uri| !crate::link::is_replayable_context(uri))
+        {
+            request.context_uri = None;
+            if request.uris.is_empty()
+                && let Some(uri) = request.offset_uri.clone()
+            {
+                request.uris = vec![uri];
+                request.offset_position = None;
+            }
+        }
         crate::crash::queue_note(&format!(
             "play asked for: list {}, {} songs, starting at {}, on {:?}",
             request.context_uri.as_deref().unwrap_or("none"),
@@ -15821,6 +15842,7 @@ impl App {
             let same_song = self.resume_track.as_deref() == Some(now.uri.as_str());
             self.resume_context = self
                 .playing_context_uri()
+                .filter(|uri| crate::link::is_replayable_context(uri))
                 .or_else(|| self.resume_context.clone().filter(|_| same_song));
             self.resume_track = Some(now.uri.clone());
             self.resume_position_ms = now.position_ms;
