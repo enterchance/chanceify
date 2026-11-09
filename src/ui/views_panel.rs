@@ -460,6 +460,13 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                     if cover_click.clicked() {
                         open_song(app);
                     }
+                    // The cover answers the song's own right-click menu too.
+                    if let Some(song) = &song {
+                        let context = app.editable_context_playlist();
+                        cover_click.context_menu(|ui| {
+                            super::widgets::item_menu(ui, app, song, context.as_ref(), None)
+                        });
+                    }
                 }
                 let y = if stacked {
                     cover.bottom() - inset - block
@@ -498,7 +505,10 @@ pub fn floating_controls(app: &mut App, ctx: &Context) {
                     }
                 }
                 if let Some(song) = &song {
-                    title_click.context_menu(|ui| super::widgets::item_menu(ui, app, song, None, None));
+                    let context = app.editable_context_playlist();
+                    title_click.context_menu(|ui| {
+                        super::widgets::item_menu(ui, app, song, context.as_ref(), None)
+                    });
                 }
                 let artist_click = ui
                     .interact(artist_area, Id::new("pop-out-card-artist"), egui::Sense::click())

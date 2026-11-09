@@ -15170,11 +15170,38 @@ impl App {
     /// uses this so removal matches a row's URI-based entry; moves need
     /// a row index and stay in the playlist view.
     pub fn editable_context_playlist(&self) -> Option<RowContext> {
-        let uri = self.playing_context_uri()?;
+        if let Some(context) = self
+            .playing_context_uri()
+            .and_then(|uri| self.editable_playlist_context(&uri))
+        {
+            return Some(context);
+        }
+        // Spotify does not always name the playlist a song plays from: a
+        // filtered or sorted list plays as plain songs, and a playlist
+        // started on another device can report none. Then the playlist the
+        // song was started from, or the one open now, is taken, as long as
+        // the song playing is known to be in it.
+        let playing = self.now_playing_item()?;
+        let playing = std::slice::from_ref(&playing);
+        let started_from = self.assumed_context.as_ref().map(|assumed| assumed.uri.clone());
+        let open = match self.page() {
+            Page::Playlist(id) => Some(format!("spotify:playlist:{id}")),
+            _ => None,
+        };
+        [started_from, open].into_iter().flatten().find_map(|uri| {
+            let context = self.editable_playlist_context(&uri)?;
+            let id = util::uri_id(&uri)?;
+            self.playlist_has_all(id, playing).then_some(context)
+        })
+    }
+
+    /// A row context for removing songs from `uri`, when it is a playlist
+    /// the user may edit.
+    fn editable_playlist_context(&self, uri: &str) -> Option<RowContext> {
         if !uri.starts_with("spotify:playlist:") {
             return None;
         }
-        let id = util::uri_id(&uri)?.to_string();
+        let id = util::uri_id(uri)?.to_string();
         let playlist = self
             .library_entry(&id)
             .or_else(|| self.playlist_pages.get(&id)?.playlist.get())?;
@@ -15182,7 +15209,7 @@ impl App {
             return None;
         }
         Some(RowContext::Context {
-            uri,
+            uri: uri.to_owned(),
             editable_playlist: Some((id, playlist.snapshot_id.clone())),
         })
     }
