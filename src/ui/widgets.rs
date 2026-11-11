@@ -65,17 +65,43 @@ fn membership_metrics(scale: f32) -> (f32, f32) {
 /// The playlists to show on this row: the song's, less the playlist the row
 /// is already inside. One place, so the space reserved for the icons and the
 /// icons drawn can never disagree.
-fn membership_shown<'a>(
-    app: &'a App,
-    row: &TrackRow<'_>,
-) -> Vec<&'a crate::membership::Membership> {
+/// Stands in for a playlist id in the icons: Liked Songs is a playlist to the
+/// listener, so a liked song shows its tile like any other.
+const LIKED_ICON_ID: &str = "\u{0}liked";
+
+/// Whether the row sits on the Liked Songs page, where the tile would say
+/// nothing.
+fn on_liked_page(context: &RowContext) -> bool {
+    match context {
+        RowContext::Context { uri, .. } | RowContext::View { context_uri: uri, .. } => {
+            uri.ends_with(":collection")
+        }
+        _ => false,
+    }
+}
+
+fn membership_shown(app: &App, row: &TrackRow<'_>) -> Vec<(String, String, Option<String>, char)> {
     let own = own_playlist(row.context);
-    app.library
+    let uri = row.item.uri();
+    let mut shown: Vec<(String, String, Option<String>, char)> = app
+        .library
         .membership
-        .get(row.item.uri())
+        .get(uri)
         .iter()
         .filter(|membership| Some(membership.id.as_str()) != own)
-        .collect()
+        .map(|membership| {
+            (
+                membership.id.clone(),
+                membership.name.clone(),
+                membership.image.clone(),
+                membership.initial(),
+            )
+        })
+        .collect();
+    if app.is_saved(uri) == Some(true) && !on_liked_page(row.context) {
+        shown.push((LIKED_ICON_ID.to_owned(), "Liked Songs".to_owned(), None, '\u{2665}'));
+    }
+    shown
 }
 
 /// How wide the icons on this row need to be, at the current size.
@@ -191,17 +217,7 @@ fn membership_icons(ui: &Ui, app: &mut App, rect: Rect, right: f32, row: &TrackR
     }
     // Cloned out of the index before drawing: the loop pushes actions, and
     // those need `app` mutably while the membership list borrows it.
-    let shown: Vec<(String, String, Option<String>, char)> = membership_shown(app, row)
-        .into_iter()
-        .map(|membership| {
-            (
-                membership.id.clone(),
-                membership.name.clone(),
-                membership.image.clone(),
-                membership.initial(),
-            )
-        })
-        .collect();
+    let shown = membership_shown(app, row);
     if shown.is_empty() {
         return;
     }
@@ -285,7 +301,9 @@ fn paint_membership_icon(
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), &name)
     });
-    if image.is_some() {
+    if id == LIKED_ICON_ID {
+        super::sidebar::liked_cover(ui, icon, height * 0.18);
+    } else if image.is_some() {
         super::widgets::paint_cover(
             ui,
             &app.palette,
@@ -310,7 +328,8 @@ fn paint_membership_icon(
         );
     }
     if response.clicked() {
-        app.actions.push(Action::Open(Page::Playlist(id)));
+        let page = if id == LIKED_ICON_ID { Page::LikedSongs } else { Page::Playlist(id) };
+        app.actions.push(Action::Open(page));
     }
     // Right-click steps the size for every row at once. It lives here
     // rather than in Settings because the only useful judge of an icon's
@@ -328,10 +347,7 @@ fn membership_grid(ui: &Ui, app: &mut App, cell: Rect, row: &TrackRow<'_>, max_t
     if !row.item.is_track() {
         return;
     }
-    let shown: Vec<(String, String, Option<String>, char)> = membership_shown(app, row)
-        .into_iter()
-        .map(|membership| (membership.id.clone(), membership.name.clone(), membership.image.clone(), membership.initial()))
-        .collect();
+    let shown = membership_shown(app, row);
     let total = shown.len();
     if total == 0 {
         return;
