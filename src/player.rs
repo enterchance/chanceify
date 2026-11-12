@@ -361,6 +361,61 @@ async fn connect_transfer(session: &Session, from: &str, to: &str) -> Result<()>
         .map_err(|error| anyhow!("Spotify Connect refused the device change: {error}"))
 }
 
+/// One upcoming row as Connect's JSON spells it, keeping the id Spotify gave
+/// it so the device knows it for the same row.
+fn provided_track_json(track: &librespot_protocol::player::ProvidedTrack) -> serde_json::Value {
+    let mut row = serde_json::Map::new();
+    row.insert("uri".into(), track.uri.clone().into());
+    for (key, value) in [
+        ("uid", &track.uid),
+        ("provider", &track.provider),
+        ("album_uri", &track.album_uri),
+        ("artist_uri", &track.artist_uri),
+    ] {
+        if !value.is_empty() {
+            row.insert(key.into(), value.clone().into());
+        }
+    }
+    let metadata: serde_json::Map<String, serde_json::Value> = track
+        .metadata
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone().into()))
+        .collect();
+    row.insert("metadata".into(), metadata.into());
+    row.into()
+}
+
+/// The set_queue command that adds `uris` after the songs already queued
+/// and before the rest of the list, leaving every other row as it was.
+fn set_queue_command(
+    state: &librespot_protocol::player::PlayerState,
+    uris: &[String],
+) -> serde_json::Value {
+    let queued = state
+        .next_tracks
+        .iter()
+        .take_while(|track| track.provider == "queue")
+        .count();
+    let mut next: Vec<serde_json::Value> =
+        state.next_tracks.iter().map(provided_track_json).collect();
+    let added = uris.iter().map(|uri| {
+        serde_json::json!({
+            "uri": uri,
+            "metadata": { "is_queued": "true" },
+            "provider": "queue",
+        })
+    });
+    next.splice(queued..queued, added);
+    let prev: Vec<serde_json::Value> = state.prev_tracks.iter().map(provided_track_json).collect();
+    serde_json::json!({
+        "endpoint": "set_queue",
+        "next_tracks": next,
+        "prev_tracks": prev,
+        "queue_revision": state.queue_revision,
+        "logging_params": {},
+    })
+}
+
 /// The next engine's number; 0 is never given, so a default view matches none.
 static NEXT_ENGINE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -538,6 +593,9 @@ pub struct Engine {
     /// The last view Spotify Connect pushed, for sending commands to the
     /// device it names.
     connect: Arc<Mutex<Option<ConnectView>>>,
+    /// The playing device's full state as Connect last pushed it: its
+    /// queue, with the ids Spotify gave each row, and the queue's revision.
+    remote_player: Arc<Mutex<Option<librespot_protocol::player::PlayerState>>>,
     /// Told apart from the engines before it, whose views are ignored.
     engine_id: u64,
 }
@@ -632,6 +690,8 @@ impl Engine {
         // Spotify Connect pushes every change on the account to the
         // session; passing it on replaces asking the Web API what plays.
         let connect: Arc<Mutex<Option<ConnectView>>> = Arc::default();
+        let remote_player: Arc<Mutex<Option<librespot_protocol::player::PlayerState>>> =
+            Arc::default();
         let engine_id = NEXT_ENGINE_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         {
             let mut players = spirc.watch_player_state();
@@ -640,6 +700,7 @@ impl Engine {
             let watch_session = session.clone();
             let watch_flag = Arc::clone(&shutting_down);
             let watch_connect = Arc::clone(&connect);
+            let watch_remote = Arc::clone(&remote_player);
             let watch_done = Arc::clone(&spirc_done);
             tokio::spawn(async move {
                 let mut heartbeat = tokio::time::interval(CONNECT_HEARTBEAT);
@@ -667,6 +728,7 @@ impl Engine {
                         let cluster = clusters.borrow_and_update().clone();
                         let mut view = connect_view(player.as_ref(), &cluster);
                         view.engine_id = engine_id;
+                        *watch_remote.lock().unwrap_or_else(|p| p.into_inner()) = player;
                         view
                     };
                     *watch_connect.lock().unwrap_or_else(|p| p.into_inner()) = Some(view.clone());
@@ -689,6 +751,7 @@ impl Engine {
             audio,
             carrying: std::sync::atomic::AtomicBool::new(carrying),
             connect,
+            remote_player,
             engine_id,
         })
     }
@@ -827,6 +890,38 @@ impl Engine {
             .await
             .map(|_| ())
             .map_err(|error| anyhow!("Spotify Connect refused the command: {error}"))
+    }
+
+    /// Queues several songs on another device with one Connect command: the
+    /// device's whole upcoming list is sent back with the songs placed after
+    /// the ones already queued, the way Spotify's own apps reorder a queue.
+    /// One request however long the album, where adding them one by one
+    /// spent a request a song and ran into Spotify's limit.
+    ///
+    /// `Ok(false)` when the device's queue is not known yet, so the caller
+    /// can add the songs one at a time instead.
+    pub async fn queue_many_on(&self, target: &str, uris: &[String]) -> Result<bool> {
+        let command = {
+            let active = self
+                .connect
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .as_ref()
+                .and_then(|view| view.active_device.clone());
+            if active.as_deref() != Some(target) {
+                return Ok(false);
+            }
+            let state = self.remote_player.lock().unwrap_or_else(|p| p.into_inner());
+            let Some(state) = state.as_ref() else {
+                return Ok(false);
+            };
+            set_queue_command(state, uris)
+        };
+        crate::crash::queue_note(&format!(
+            "command to {target} over Spotify Connect: set the queue with {} songs added",
+            uris.len()
+        ));
+        self.command_device(target, command).await.map(|()| true)
     }
 
     /// Moves playback from the device playing to `to` (this computer

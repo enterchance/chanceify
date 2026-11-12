@@ -4928,6 +4928,28 @@ async fn over_connect(
             // Queued one after another, so they land in the order given. A
             // refusal partway reports what was queued rather than starting
             // again through the Web API, which would queue those twice.
+            // Several songs go as one command that rewrites the device's
+            // upcoming list: one request for a whole album.
+            if uris.len() > 1 {
+                match engine.queue_many_on(&target, uris).await {
+                    Ok(true) => {
+                        return Some(ApiResponse::QueueBatchAdded {
+                            request: *request,
+                            added: uris.len(),
+                            result: Ok(()),
+                        });
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        log::warn!("{error:#}");
+                        return Some(ApiResponse::QueueBatchAdded {
+                            request: *request,
+                            added: 0,
+                            result: Err(ApiError::Network(format!("{error:#}"))),
+                        });
+                    }
+                }
+            }
             let mut added = 0;
             crate::crash::queue_note(&format!(
                 "command to {target} over Spotify Connect: add {} songs to the queue",
