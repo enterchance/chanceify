@@ -39,6 +39,7 @@ pub mod library_cache;
 pub mod liked;
 pub mod local_library;
 pub mod limiter;
+pub mod system_volume;
 pub mod link;
 pub mod lyrics;
 #[cfg(target_os = "macos")]

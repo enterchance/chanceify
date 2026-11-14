@@ -1148,6 +1148,9 @@ pub struct Settings {
     /// What full volume measures in dB on the reader's headphones, which
     /// turns the output's level into an estimate of how loud it is.
     pub loudness_full: u8,
+    /// Where the volume sits while loudness is limited: 0 is 40 dB under
+    /// the limit, 100 is the limit itself.
+    pub loudness_level: u8,
     /// Where the controls panel sits while the album art is big, and in full-screen lyrics.
     pub float_hide_bar: bool,
     /// The pop-out controls live in a window of their own, off the app.
@@ -1660,6 +1663,7 @@ impl Default for Settings {
             volume_db: false,
             loudness_limit: None,
             loudness_full: 100,
+            loudness_level: 70,
             float_hide_bar: false,
             views_width: 316.0,
             views_height: 0.0,

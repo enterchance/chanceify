@@ -226,7 +226,7 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                             name: app.settings.device_name.clone(),
                             is_active: app.local.is_active(),
                             is_restricted: false,
-                            volume_percent: Some(crate::app::volume_to_percent(app.local.volume)),
+                            volume_percent: Some(app.local_volume_shown()),
                             supports_volume: Some(true),
                             kind: "computer".into(),
                         },

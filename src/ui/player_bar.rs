@@ -6584,6 +6584,7 @@ fn volume_label(app: &App, shown: u8) -> String {
     if app.settings.volume_db {
         match loudness_now(app) {
             Some(db) => format!("{db:.0} dB"),
+            None if crate::system_volume::db().is_none() => "muted".into(),
             None => "– dB".into(),
         }
     } else {
@@ -6616,15 +6617,25 @@ fn volume_menu(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette
             let on = app.settings.loudness_limit == Some(limit);
             let icon = if on { Some(Icon::Check) } else { None };
             if super::widgets::menu_item(ui, palette, icon, &format!("{limit} dB")) {
+                let was_off = app.settings.loudness_limit.is_none();
                 app.settings.loudness_limit = Some(limit);
                 app.mark_settings_dirty();
+                if was_off {
+                    // The volume now picks the level; the player goes to full.
+                    app.actions.push(Action::SetVolume(shown));
+                }
                 ui.close();
             }
         }
         let off = app.settings.loudness_limit.is_none();
         if super::widgets::menu_item(ui, palette, off.then_some(Icon::Check), "no limit") {
+            let was_on = app.settings.loudness_limit.is_some();
             app.settings.loudness_limit = None;
             app.mark_settings_dirty();
+            if was_on {
+                // Back to an ordinary volume, where the slider was.
+                app.actions.push(Action::SetVolume(shown));
+            }
             ui.close();
         }
         super::widgets::menu_separator(ui, palette);
@@ -6703,7 +6714,7 @@ pub(super) fn popout_presets(app: &mut App, ui: &mut egui::Ui, rect: Rect, prese
     let volume = now
         .as_ref()
         .map(|now| now.volume_percent)
-        .unwrap_or_else(|| crate::app::volume_to_percent(app.local.volume));
+        .unwrap_or_else(|| app.local_volume_shown());
     let shown = match app.volume_preview {
         Some(fraction) => (fraction * 100.0).round() as u8,
         None => volume,
@@ -6752,27 +6763,37 @@ pub(super) fn popout_presets(app: &mut App, ui: &mut egui::Ui, rect: Rect, prese
 /// The loudness limits offered in the volume's right-click menu.
 const LOUDNESS_LIMITS: [u8; 4] = [70, 75, 80, 85];
 
-/// How loud the music playing here is, in dB: the output's measured level
-/// plus what full volume measures on the reader's headphones. `None` while
-/// this computer is not playing.
+/// How loud the music playing here is, in dB: the output's measured level,
+/// plus what full volume measures on the reader's headphones, plus the
+/// Windows volume. `None` while this computer is not playing.
 fn loudness_now(app: &App) -> Option<f64> {
     let full = f64::from(app.settings.loudness_full);
-    crate::vis::loudness::level().map(|dbfs| (dbfs + full).max(0.0))
+    let system = crate::system_volume::db()?;
+    crate::vis::loudness::level().map(|dbfs| (dbfs + full + system).max(0.0))
 }
 
-/// Hands the loudness limit to the audio, and keeps the reading moving
-/// while it is on screen.
+/// Hands the loudness limit, and the level the volume holds the music at,
+/// to the audio, measured from the headphones: a lower Windows volume
+/// leaves more room before the limit. Keeps the reading moving while it
+/// is on screen.
 fn sync_loudness(app: &App, ctx: &egui::Context) {
     let full = f64::from(app.settings.loudness_full);
-    crate::vis::loudness::set_cap(
-        app.settings
-            .loudness_limit
-            .map(|limit| (f64::from(limit) - full).min(0.0)),
-    );
+    let system = crate::system_volume::db().unwrap_or(0.0);
+    let to_dbfs = |db: f64| (db - full - system).min(0.0);
+    let limit = app.settings.loudness_limit.map(f64::from);
+    crate::vis::loudness::set_cap(limit.map(to_dbfs));
+    let held = limit
+        .filter(|_| app.loudness_locked())
+        .map(|limit| limit - LOUDNESS_RANGE * (1.0 - f64::from(app.settings.loudness_level) / 100.0));
+    crate::vis::loudness::set_target(held.map(to_dbfs));
     if app.settings.volume_db {
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
     }
 }
+
+/// How far below the limit the bottom of the volume is, while it holds
+/// the music at a level.
+const LOUDNESS_RANGE: f64 = 40.0;
 
 fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, presets: &[u8]) {
     let palette = app.palette;
@@ -6780,7 +6801,7 @@ fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, presets: &
     ui.spacing_mut().item_spacing.x = 6.0;
     let volume = now
         .map(|now| now.volume_percent)
-        .unwrap_or_else(|| crate::app::volume_to_percent(app.local.volume));
+        .unwrap_or_else(|| app.local_volume_shown());
     let shown = match app.volume_preview {
         Some(fraction) => (fraction * 100.0).round() as u8,
         None => volume,
@@ -7079,7 +7100,7 @@ pub(super) fn volume_row(app: &mut App, ui: &mut egui::Ui, rect: Rect) {
     let volume = now
         .as_ref()
         .map(|now| now.volume_percent)
-        .unwrap_or_else(|| crate::app::volume_to_percent(app.local.volume));
+        .unwrap_or_else(|| app.local_volume_shown());
     let shown = match app.volume_preview {
         Some(fraction) => (fraction * 100.0).round() as u8,
         None => volume,

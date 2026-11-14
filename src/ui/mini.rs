@@ -646,7 +646,7 @@ pub(super) fn volume_row(app: &mut App, ui: &mut egui::Ui, width: f32, now: Opti
     let palette = app.palette;
     let volume = now
         .map(|now| now.volume_percent)
-        .unwrap_or_else(|| crate::app::volume_to_percent(app.local.volume));
+        .unwrap_or_else(|| app.local_volume_shown());
     let shown = match app.volume_preview {
         Some(fraction) => (fraction * 100.0).round() as u8,
         None => volume,

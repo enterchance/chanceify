@@ -205,6 +205,8 @@ pub mod loudness {
     static MEASURED: AtomicU64 = AtomicU64::new(0);
     /// The ceiling in decibels below full scale; above zero means none.
     static CAP: AtomicU64 = AtomicU64::new(0x4059_0000_0000_0000); // 100.0
+    /// The level the music is held at, the same way; above zero means none.
+    static TARGET: AtomicU64 = AtomicU64::new(0x4059_0000_0000_0000);
     static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 
     fn now_ms() -> u64 {
@@ -226,6 +228,17 @@ pub mod loudness {
         CAP.store(dbfs.unwrap_or(100.0).to_bits(), Ordering::Relaxed);
     }
 
+    pub(super) fn target() -> Option<f64> {
+        let target = f64::from_bits(TARGET.load(Ordering::Relaxed));
+        (target <= 0.0).then_some(target)
+    }
+
+    /// Sets the level the music is held at, as decibels below full scale,
+    /// or lets it follow the volume alone.
+    pub fn set_target(dbfs: Option<f64>) {
+        TARGET.store(dbfs.unwrap_or(100.0).to_bits(), Ordering::Relaxed);
+    }
+
     /// The level now, or `None` when nothing has played for a moment.
     pub fn level() -> Option<f64> {
         let measured = MEASURED.load(Ordering::Relaxed);
@@ -239,12 +252,19 @@ pub mod loudness {
 /// over, quickly, then lets it back up slowly so quiet parts do not pump.
 struct LoudnessCap {
     mean_square: f64,
+    /// The level over the last few seconds, which the held level follows
+    /// so quiet and loud parts of a song are not flattened.
+    slow_mean_square: f64,
     gain_db: f64,
 }
 
+/// The most a held level lifts quiet music, so a soft intro is not pulled
+/// up into noise; the limiter after this catches any peaks.
+const MAX_LIFT_DB: f64 = 12.0;
+
 impl LoudnessCap {
     fn new() -> Self {
-        Self { mean_square: 0.0, gain_db: 0.0 }
+        Self { mean_square: 0.0, slow_mean_square: 0.0, gain_db: 0.0 }
     }
 
     /// `scale` is what the samples are multiplied by after this stage, so
@@ -258,13 +278,18 @@ impl LoudnessCap {
         let square: f64 = samples.iter().map(|s| s * s).sum::<f64>() / samples.len() as f64
             * scale
             * scale;
-        let blend = 1.0 - (-seconds / 0.3).exp();
-        self.mean_square += (square - self.mean_square) * blend;
+        self.mean_square += (square - self.mean_square) * (1.0 - (-seconds / 0.3).exp());
+        self.slow_mean_square += (square - self.slow_mean_square) * (1.0 - (-seconds / 3.0).exp());
         let level = 10.0 * self.mean_square.max(1e-12).log10();
-        let wanted = match loudness::cap() {
-            Some(cap) => (cap - level).min(0.0),
-            None => 0.0,
+        let slow_level = 10.0 * self.slow_mean_square.max(1e-12).log10();
+        let mut wanted = match loudness::target() {
+            // Near silence is left alone rather than lifted.
+            Some(target) if slow_level > -60.0 => (target - slow_level).min(MAX_LIFT_DB),
+            _ => 0.0,
         };
+        if let Some(cap) = loudness::cap() {
+            wanted = wanted.min(cap - level);
+        }
         let time = if wanted < self.gain_db { 0.05 } else { 1.5 };
         let start = self.gain_db;
         self.gain_db += (wanted - self.gain_db) * (1.0 - (-seconds / time).exp());
@@ -406,11 +431,13 @@ impl Sink for Tapped {
                         *sample *= attenuation;
                     }
                 }
+                // Before the limiter, so a quiet song lifted to the held
+                // level cannot clip.
+                let heard = if self.applies_volume { 1.0 } else { attenuation };
+                self.loudness.process(&mut samples, heard);
                 if let Some(full_scale) = full_scale(attenuation, self.applies_volume) {
                     self.limiter.process(&mut samples, full_scale);
                 }
-                let heard = if self.applies_volume { 1.0 } else { attenuation };
-                self.loudness.process(&mut samples, heard);
                 AudioPacket::Samples(samples)
             }
             raw => raw,

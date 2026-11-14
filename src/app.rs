@@ -2254,7 +2254,7 @@ impl App {
                 loading: self.local.loading,
                 shuffle: self.shuffle_wanted,
                 repeat: self.local.repeat,
-                volume_percent: volume_to_percent(self.local.volume),
+                volume_percent: self.local_volume_shown(),
                 can_control: true,
                 can_set_volume: true,
                 is_episode: track.is_episode,
@@ -2387,7 +2387,7 @@ impl App {
             loading: false,
             shuffle: self.shuffle_wanted,
             repeat: self.local_repeat(),
-            volume_percent: volume_to_percent(self.local.volume),
+            volume_percent: self.local_volume_shown(),
             can_control: true,
             can_set_volume: true,
             is_episode: false,
@@ -10630,8 +10630,34 @@ impl App {
         self.now_playing().is_none_or(|now| now.can_set_volume)
     }
 
+    /// Whether the volume sets how loud the music is held, between 40 dB
+    /// under the loudness limit and the limit itself, rather than turning
+    /// the player up and down. Only for music this computer plays.
+    pub fn loudness_locked(&self) -> bool {
+        self.settings.loudness_limit.is_some()
+            && (self.deck_active() || matches!(self.target(), Target::Local))
+    }
+
+    /// The volume to show for this computer's player.
+    pub fn local_volume_shown(&self) -> u8 {
+        if self.loudness_locked() {
+            self.settings.loudness_level
+        } else {
+            volume_to_percent(self.local.volume)
+        }
+    }
+
     fn set_volume(&mut self, percent: u8, settle: bool) {
-        let percent = percent.min(100);
+        let mut percent = percent.min(100);
+        if self.loudness_locked() {
+            // The slider picks the level the music is held at; the player
+            // itself stays at full, and the audio turns it down to that.
+            if self.settings.loudness_level != percent {
+                self.settings.loudness_level = percent;
+                self.settings_dirty = true;
+            }
+            percent = 100;
+        }
         if self.deck_active() {
             // The song from a file takes the level at once; Spotify's own
             // player is kept at the same level for the next song.
