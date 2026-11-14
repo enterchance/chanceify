@@ -6552,25 +6552,25 @@ fn preset_menu(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette
     if index >= list.len() {
         return;
     }
-    ui.set_width(210.0);
-    theme::subtle(ui, palette, &format!("{}% BUTTON", list[index]));
-    if super::widgets::menu_item(ui, palette, None, &format!("Set to {shown}% (current)")) {
+    ui.set_width(220.0);
+    if super::widgets::menu_item(ui, palette, Some(Icon::Pencil), &format!("set to {shown}%")) {
         let mut next = list.to_vec();
         next[index] = shown;
         app.actions.push(Action::SetVolumePresets(next));
     }
-    if list.len() < 4 && super::widgets::menu_item(ui, palette, None, &gettext(app.locale, "Add button at current volume")) {
+    if list.len() < 4 && super::widgets::menu_item(ui, palette, Some(Icon::CirclePlus), "add volume button") {
         let mut next = list.to_vec();
         next.push(shown);
         app.actions.push(Action::SetVolumePresets(next));
     }
     // The last button cannot be removed: there is always one.
-    if list.len() > 1 && super::widgets::menu_item(ui, palette, None, &gettext(app.locale, "Remove button")) {
+    if list.len() > 1 && super::widgets::menu_item(ui, palette, Some(Icon::Trash), &format!("remove {}% button", list[index])) {
         let mut next = list.to_vec();
         next.remove(index);
         app.actions.push(Action::SetVolumePresets(next));
     }
-    if super::widgets::menu_item(ui, palette, None, "equalizer") {
+    super::widgets::menu_separator(ui, palette);
+    if super::widgets::menu_item(ui, palette, Some(Icon::Waves), "equalizer") {
         ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("eq-window-open"), true));
         ui.close();
     }
@@ -6599,45 +6599,69 @@ fn parse_volume(text: &str) -> Option<u8> {
 
 fn volume_menu(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette, shown: u8) {
     let list = app.settings.volume_presets_value();
-    ui.set_width(210.0);
+    ui.set_width(220.0);
     let unit = if app.settings.volume_db { "show percent" } else { "show decibels" };
-    if super::widgets::menu_item(ui, palette, None, unit) {
+    if super::widgets::menu_item(ui, palette, Some(Icon::AudioLines), unit) {
         app.settings.volume_db = !app.settings.volume_db;
         app.mark_settings_dirty();
         ui.close();
     }
-    theme::subtle(ui, palette, "limit loudness");
-    for limit in LOUDNESS_LIMITS {
-        let label = if app.settings.loudness_limit == Some(limit) {
-            format!("✓ {limit} dB")
-        } else {
-            format!("{limit} dB")
-        };
-        if super::widgets::menu_item(ui, palette, None, &label) {
-            app.settings.loudness_limit = Some(limit);
+    let limit_label = match app.settings.loudness_limit {
+        Some(limit) => format!("limit loudness: {limit} dB"),
+        None => "limit loudness".to_owned(),
+    };
+    super::widgets::menu_submenu(ui, palette, Some(Icon::Lock), &limit_label, |ui| {
+        ui.set_width(200.0);
+        for limit in LOUDNESS_LIMITS {
+            let on = app.settings.loudness_limit == Some(limit);
+            let icon = if on { Some(Icon::Check) } else { None };
+            if super::widgets::menu_item(ui, palette, icon, &format!("{limit} dB")) {
+                app.settings.loudness_limit = Some(limit);
+                app.mark_settings_dirty();
+                ui.close();
+            }
+        }
+        let off = app.settings.loudness_limit.is_none();
+        if super::widgets::menu_item(ui, palette, off.then_some(Icon::Check), "no limit") {
+            app.settings.loudness_limit = None;
             app.mark_settings_dirty();
             ui.close();
         }
-    }
-    let off = if app.settings.loudness_limit.is_none() { "✓ no limit" } else { "no limit" };
-    if super::widgets::menu_item(ui, palette, None, off) {
-        app.settings.loudness_limit = None;
-        app.mark_settings_dirty();
-        ui.close();
-    }
-    theme::subtle(ui, palette, "full volume measures");
-    let mut full = app.settings.loudness_full;
-    if ui.add(egui::Slider::new(&mut full, 85..=120).suffix(" dB")).changed() {
-        app.settings.loudness_full = full;
-        app.mark_settings_dirty();
-    }
-    theme::subtle(ui, palette, "volume buttons");
-    if list.len() < 4 && super::widgets::menu_item(ui, palette, None, &gettext(app.locale, "Add button at current volume")) {
+        super::widgets::menu_separator(ui, palette);
+        // How loud full volume is on these headphones, which the reading
+        // is measured from.
+        ui.horizontal(|ui| {
+            ui.add_space(10.0);
+            ui.label(
+                egui::RichText::new("full volume")
+                    .color(palette.secondary)
+                    .size(12.5),
+            );
+            let mut full = app.settings.loudness_full;
+            ui.spacing_mut().slider_width = 70.0;
+            if ui
+                .add(egui::Slider::new(&mut full, 85..=120).suffix(" dB").show_value(true))
+                .changed()
+            {
+                app.settings.loudness_full = full;
+                app.mark_settings_dirty();
+            }
+        });
+    });
+    super::widgets::menu_separator(ui, palette);
+    if list.len() < 4
+        && super::widgets::menu_item(
+            ui,
+            palette,
+            Some(Icon::CirclePlus),
+            "add volume button",
+        )
+    {
         let mut next = list.clone();
         next.push(shown);
         app.actions.push(Action::SetVolumePresets(next));
     }
-    if super::widgets::menu_item(ui, palette, None, "equalizer") {
+    if super::widgets::menu_item(ui, palette, Some(Icon::Waves), "equalizer") {
         ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("eq-window-open"), true));
         ui.close();
     }
