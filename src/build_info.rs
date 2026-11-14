@@ -33,9 +33,9 @@ pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-/// The version shown to the person in About. Held where it is until the
-/// maintainer asks for another; the crate version keeps counting builds.
-pub const DISPLAY_VERSION: &str = "0.9.9";
+/// The version shown to the person in About: the crate version, which
+/// goes up with every build.
+pub const DISPLAY_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Whether this build came from a working tree with uncommitted changes.
 pub fn is_dirty() -> bool {
