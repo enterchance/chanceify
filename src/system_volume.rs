@@ -60,9 +60,14 @@ fn read() -> windows::core::Result<(f32, bool)> {
         let devices: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
         let device = devices.GetDefaultAudioEndpoint(eRender, eConsole)?;
         let volume: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None)?;
-        let db = volume.GetMasterVolumeLevel()?;
+        // The slider's position, not the dB the device reports: many
+        // headsets report a narrow dB range that barely moves while the
+        // sound changes a lot. A cubic taper, the usual shape of a volume
+        // knob, follows what is heard much more closely.
+        let scalar = volume.GetMasterVolumeLevelScalar()?;
+        let db = (60.0 * f64::from(scalar).max(1e-6).log10()).max(-96.0);
         let muted = volume.GetMute()?.as_bool();
-        Ok((db, muted))
+        Ok((db as f32, muted))
     }
 }
 

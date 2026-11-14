@@ -6578,18 +6578,33 @@ fn preset_menu(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette
 
 /// The menu on the volume's speaker and percentage: add a volume button, or
 /// open the equalizer. (Right-clicking the bar itself jumps to that spot.)
-/// What the volume box reads: percent, or how loud the music playing here
-/// is in dB while its loudness is locked.
-fn volume_label(app: &App, shown: u8) -> String {
-    if app.loudness_locked() {
-        match loudness_now(app) {
-            Some(db) => format!("{db:.0} dB"),
-            None if crate::system_volume::db().is_none() => "muted".into(),
-            None => "– dB".into(),
-        }
-    } else {
-        format!("{shown}%")
+/// What the volume box reads: the volume in percent.
+fn volume_label(_app: &App, shown: u8) -> String {
+    format!("{shown}%")
+}
+
+/// How loud the music is, in dB, as a small line under the volume number
+/// while loudness is locked; nothing otherwise.
+fn loudness_caption(app: &App, ui: &egui::Ui, under: Rect) {
+    if !app.loudness_locked() {
+        return;
     }
+    let text = match loudness_now(app) {
+        Some(db) => format!("{db:.0} dB"),
+        None if crate::system_volume::db().is_none() => "muted".into(),
+        None => "– dB".into(),
+    };
+    let k = app.settings.controls_scale_value().clamp(0.8, 1.6);
+    ui.painter()
+        .clone()
+        .with_clip_rect(ui.ctx().content_rect())
+        .text(
+            pos2(under.right() - 4.0, under.bottom() - 1.0),
+            egui::Align2::RIGHT_TOP,
+            text,
+            theme::regular(10.5 * k),
+            app.palette.secondary,
+        );
 }
 
 /// A typed volume, in percent.
@@ -6820,7 +6835,7 @@ fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, presets: &
             ui,
             egui::Id::new("volume-field"),
             volume_label(app, shown),
-            if app.loudness_locked() { 56.0 } else { 46.0 },
+            46.0,
             palette.secondary,
             false,
         ) && let Some(percent) = parse_volume(&text)
@@ -6829,6 +6844,7 @@ fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, presets: &
             app.actions.push(Action::SetVolume(percent));
         }
     });
+    loudness_caption(app, ui, controls.response.rect);
     if adjustable && let Some(next) = wheel_volume(ui, controls.response.rect, shown) {
         app.volume_preview = None;
         app.actions.push(Action::SetVolume(next));
@@ -7088,7 +7104,7 @@ pub(super) fn volume_row(app: &mut App, ui: &mut egui::Ui, rect: Rect) {
         Icon::Volume2
     };
     theme::paint_icon(ui, icon, icon_box, 16.0 * k, palette.secondary);
-    let text_w = if app.loudness_locked() { 50.0 } else { 40.0 } * k;
+    let text_w = 40.0 * k;
     let track = Rect::from_min_max(
         pos2(icon_box.right() + 8.0, rect.top()),
         pos2(rect.right() - text_w - 6.0, rect.bottom()),
