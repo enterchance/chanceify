@@ -1145,11 +1145,13 @@ pub struct Settings {
     pub volume_db: bool,
     /// The loudest the music may play, in dB, estimated; `None` is no limit.
     pub loudness_limit: Option<u8>,
-    /// What full volume measures in dB on the reader's headphones, which
-    /// turns the output's level into an estimate of how loud it is.
-    pub loudness_full: u8,
-    /// Where the volume sits while loudness is limited: 0 is 40 dB under
-    /// the limit, 100 is the limit itself.
+    /// How loud full-scale sound is on the reader's headphones with Windows
+    /// at full volume, in dB: what turns the output's level into an
+    /// estimate of how loud it is. Set high by default so a guess errs on
+    /// the quiet side; the reader can match it to a sound meter.
+    pub loudness_full_db: u8,
+    /// Where the volume sits while loudness is locked: the music plays at
+    /// this share of the locked level, so 50 at 80 dB is 40 dB.
     pub loudness_level: u8,
     /// Where the controls panel sits while the album art is big, and in full-screen lyrics.
     pub float_hide_bar: bool,
@@ -1662,7 +1664,7 @@ impl Default for Settings {
             float_card_side: None,
             volume_db: false,
             loudness_limit: None,
-            loudness_full: 100,
+            loudness_full_db: 115,
             loudness_level: 70,
             float_hide_bar: false,
             views_width: 316.0,

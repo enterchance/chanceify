@@ -6579,9 +6579,9 @@ fn preset_menu(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette
 /// The menu on the volume's speaker and percentage: add a volume button, or
 /// open the equalizer. (Right-clicking the bar itself jumps to that spot.)
 /// What the volume box reads: percent, or how loud the music playing here
-/// is in dB when the reader chose decibels.
+/// is in dB while its loudness is locked.
 fn volume_label(app: &App, shown: u8) -> String {
-    if app.settings.volume_db {
+    if app.loudness_locked() {
         match loudness_now(app) {
             Some(db) => format!("{db:.0} dB"),
             None if crate::system_volume::db().is_none() => "muted".into(),
@@ -6601,15 +6601,9 @@ fn parse_volume(text: &str) -> Option<u8> {
 fn volume_menu(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette, shown: u8) {
     let list = app.settings.volume_presets_value();
     ui.set_width(220.0);
-    let unit = if app.settings.volume_db { "show percent" } else { "show decibels" };
-    if super::widgets::menu_item(ui, palette, Some(Icon::AudioLines), unit) {
-        app.settings.volume_db = !app.settings.volume_db;
-        app.mark_settings_dirty();
-        ui.close();
-    }
     let limit_label = match app.settings.loudness_limit {
-        Some(limit) => format!("limit loudness: {limit} dB"),
-        None => "limit loudness".to_owned(),
+        Some(limit) => format!("lock loudness: {limit} dB"),
+        None => "lock loudness".to_owned(),
     };
     super::widgets::menu_submenu(ui, palette, Some(Icon::Lock), &limit_label, |ui| {
         ui.set_width(200.0);
@@ -6639,25 +6633,29 @@ fn volume_menu(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette
             ui.close();
         }
         super::widgets::menu_separator(ui, palette);
-        // How loud full volume is on these headphones, which the reading
-        // is measured from.
-        ui.horizontal(|ui| {
-            ui.add_space(10.0);
-            ui.label(
-                egui::RichText::new("full volume")
-                    .color(palette.secondary)
-                    .size(12.5),
-            );
-            let mut full = app.settings.loudness_full;
-            ui.spacing_mut().slider_width = 70.0;
-            if ui
-                .add(egui::Slider::new(&mut full, 85..=120).suffix(" dB").show_value(true))
-                .changed()
-            {
-                app.settings.loudness_full = full;
-                app.mark_settings_dirty();
-            }
-        });
+        // The reading is an estimate: a sound meter (a phone app held to
+        // the headphone) says what it really is, and typing that here
+        // moves every reading and limit to match.
+        if let Some(reading) = loudness_now(app) {
+            ui.horizontal(|ui| {
+                ui.add_space(10.0);
+                ui.label(
+                    egui::RichText::new("meter reads")
+                        .color(palette.secondary)
+                        .size(12.5),
+                );
+                let mut actual = reading.round() as i32;
+                if ui
+                    .add(egui::DragValue::new(&mut actual).range(20..=130).suffix(" dB"))
+                    .changed()
+                {
+                    let shift = actual - reading.round() as i32;
+                    let full = (i32::from(app.settings.loudness_full_db) + shift).clamp(80, 140);
+                    app.settings.loudness_full_db = full as u8;
+                    app.mark_settings_dirty();
+                }
+            });
+        }
     });
     super::widgets::menu_separator(ui, palette);
     if list.len() < 4
@@ -6767,7 +6765,7 @@ const LOUDNESS_LIMITS: [u8; 4] = [70, 75, 80, 85];
 /// plus what full volume measures on the reader's headphones, plus the
 /// Windows volume. `None` while this computer is not playing.
 fn loudness_now(app: &App) -> Option<f64> {
-    let full = f64::from(app.settings.loudness_full);
+    let full = f64::from(app.settings.loudness_full_db);
     let system = crate::system_volume::db()?;
     crate::vis::loudness::level().map(|dbfs| (dbfs + full + system).max(0.0))
 }
@@ -6777,23 +6775,20 @@ fn loudness_now(app: &App) -> Option<f64> {
 /// leaves more room before the limit. Keeps the reading moving while it
 /// is on screen.
 fn sync_loudness(app: &App, ctx: &egui::Context) {
-    let full = f64::from(app.settings.loudness_full);
+    let full = f64::from(app.settings.loudness_full_db);
     let system = crate::system_volume::db().unwrap_or(0.0);
     let to_dbfs = |db: f64| (db - full - system).min(0.0);
     let limit = app.settings.loudness_limit.map(f64::from);
     crate::vis::loudness::set_cap(limit.map(to_dbfs));
     let held = limit
         .filter(|_| app.loudness_locked())
-        .map(|limit| limit - LOUDNESS_RANGE * (1.0 - f64::from(app.settings.loudness_level) / 100.0));
+        .map(|limit| limit * f64::from(app.settings.loudness_level) / 100.0);
     crate::vis::loudness::set_target(held.map(to_dbfs));
-    if app.settings.volume_db {
+    if limit.is_some() {
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
     }
 }
 
-/// How far below the limit the bottom of the volume is, while it holds
-/// the music at a level.
-const LOUDNESS_RANGE: f64 = 40.0;
 
 fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, presets: &[u8]) {
     let palette = app.palette;
@@ -6849,7 +6844,7 @@ fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, presets: &
             ui,
             egui::Id::new("volume-field"),
             volume_label(app, shown),
-            if app.settings.volume_db { 56.0 } else { 46.0 },
+            if app.loudness_locked() { 56.0 } else { 46.0 },
             palette.secondary,
             false,
         ) && let Some(percent) = parse_volume(&text)
@@ -7117,7 +7112,7 @@ pub(super) fn volume_row(app: &mut App, ui: &mut egui::Ui, rect: Rect) {
         Icon::Volume2
     };
     theme::paint_icon(ui, icon, icon_box, 16.0 * k, palette.secondary);
-    let text_w = if app.settings.volume_db { 50.0 } else { 40.0 } * k;
+    let text_w = if app.loudness_locked() { 50.0 } else { 40.0 } * k;
     let track = Rect::from_min_max(
         pos2(icon_box.right() + 8.0, rect.top()),
         pos2(rect.right() - text_w - 6.0, rect.bottom()),

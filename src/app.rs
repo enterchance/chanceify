@@ -10630,9 +10630,9 @@ impl App {
         self.now_playing().is_none_or(|now| now.can_set_volume)
     }
 
-    /// Whether the volume sets how loud the music is held, between 40 dB
-    /// under the loudness limit and the limit itself, rather than turning
-    /// the player up and down. Only for music this computer plays.
+    /// Whether the volume sets how loud the music is held, as a share of
+    /// the locked loudness (50% of 80 dB plays at 40 dB), rather than
+    /// turning the player up and down. Only for music this computer plays.
     pub fn loudness_locked(&self) -> bool {
         self.settings.loudness_limit.is_some()
             && (self.deck_active() || matches!(self.target(), Target::Local))
