@@ -6632,30 +6632,6 @@ fn volume_menu(app: &mut App, ui: &mut egui::Ui, palette: &crate::theme::Palette
             }
             ui.close();
         }
-        super::widgets::menu_separator(ui, palette);
-        // The reading is an estimate: a sound meter (a phone app held to
-        // the headphone) says what it really is, and typing that here
-        // moves every reading and limit to match.
-        if let Some(reading) = loudness_now(app) {
-            ui.horizontal(|ui| {
-                ui.add_space(10.0);
-                ui.label(
-                    egui::RichText::new("meter reads")
-                        .color(palette.secondary)
-                        .size(12.5),
-                );
-                let mut actual = reading.round() as i32;
-                if ui
-                    .add(egui::DragValue::new(&mut actual).range(20..=130).suffix(" dB"))
-                    .changed()
-                {
-                    let shift = actual - reading.round() as i32;
-                    let full = (i32::from(app.settings.loudness_full_db) + shift).clamp(80, 140);
-                    app.settings.loudness_full_db = full as u8;
-                    app.mark_settings_dirty();
-                }
-            });
-        }
     });
     super::widgets::menu_separator(ui, palette);
     if list.len() < 4
@@ -6759,7 +6735,7 @@ pub(super) fn popout_presets(app: &mut App, ui: &mut egui::Ui, rect: Rect, prese
 }
 
 /// The loudness limits offered in the volume's right-click menu.
-const LOUDNESS_LIMITS: [u8; 4] = [70, 75, 80, 85];
+const LOUDNESS_LIMITS: [u8; 5] = [60, 65, 70, 75, 80];
 
 /// How loud the music playing here is, in dB: the output's measured level,
 /// plus what full volume measures on the reader's headphones, plus the
