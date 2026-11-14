@@ -3628,6 +3628,20 @@ impl App {
                 self.local_device_id = Some(device_id.clone());
                 self.local_ready = true;
                 self.load_hidden_songs();
+                // Popular songs that failed before the session was up are
+                // read again now, over the session.
+                let failed: Vec<String> = self
+                    .artist_pages
+                    .iter()
+                    .filter(|(_, page)| matches!(page.top_tracks, Loadable::Failed(_)))
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                for id in failed {
+                    if let Some(page) = self.artist_pages.get_mut(&id) {
+                        page.top_tracks = Loadable::Loading;
+                    }
+                    self.backend.api(ApiRequest::ArtistTopTracks { id });
+                }
                 if let Some(request) = self.queued_play.take() {
                     self.play_request(request, false);
                 }
@@ -7484,6 +7498,23 @@ impl App {
         }
     }
 
+    /// An endpoint denial is not an empty recommendation response. Keep any
+    /// recommendations already shown; without a usable result, omit the shelf.
+    /// Home's next refresh asks again.
+    pub(crate) fn receive_recommendations(&mut self, result: crate::backend::ApiResult<Vec<Track>>) {
+        if result
+            .as_ref()
+            .is_err_and(|error| matches!(error.status(), Some(403 | 404)))
+            && self.home.recommendations.get().is_none_or(Vec::is_empty)
+        {
+            self.home.recommendations = Loadable::Loaded(Vec::new());
+        } else if self.home.recommendations.get().is_some_and(Vec::is_empty) {
+            self.home.recommendations = Loadable::from_result(result);
+        } else {
+            self.home.recommendations.refresh(result);
+        }
+    }
+
     fn handle_api(&mut self, response: ApiResponse) {
         // A read Spotify turned away for its rate limit keeps what is on
         // screen and is asked for again on its own, so it has no error to
@@ -7949,7 +7980,7 @@ impl App {
                     _ => false,
                 };
                 if !shorter {
-                    self.home.recommendations.refresh(result);
+                    self.receive_recommendations(result);
                 }
             }
             ApiResponse::Discover {

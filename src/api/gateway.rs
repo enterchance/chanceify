@@ -97,6 +97,8 @@ pub enum Operation {
     PlaylistMutation(PlaylistAccess),
     /// An artist's related artists, which Development Mode does not serve.
     RelatedArtists,
+    /// An artist's popular songs, which the session reads for free.
+    ArtistTopTracks,
     UnsupportedDevelopmentMode,
 }
 
@@ -106,7 +108,7 @@ pub enum Operation {
 /// personal app keeps its own playlists, which it reads quickly and with
 /// every field.
 fn session_serves(operation: Operation, personal_ready: bool) -> bool {
-    if operation == Operation::RelatedArtists {
+    if matches!(operation, Operation::RelatedArtists | Operation::ArtistTopTracks) {
         return true;
     }
     matches!(
@@ -132,6 +134,7 @@ fn plan(operation: Operation, personal_ready: bool) -> ApiSource {
         | PlaylistLibrary
         | PlaylistSearch
         | RelatedArtists
+        | ArtistTopTracks
         | UnsupportedDevelopmentMode => ApiSource::Shared,
         PlaylistMetadata(PlaylistAccess::External | PlaylistAccess::Unknown)
         | PlaylistItems(PlaylistAccess::External | PlaylistAccess::Unknown)

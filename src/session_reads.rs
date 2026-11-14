@@ -7,7 +7,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use base64::Engine as _;
 use librespot_core::{FileId, Session, SpotifyUri, error::ErrorKind, spotify_id::SpotifyId};
-use librespot_metadata::artist::Artist as SessionArtist;
+use librespot_metadata::artist::{Artist as SessionArtist, CountryTopTracks};
 use librespot_metadata::image::Images;
 use librespot_metadata::playlist::attribute::PlaylistAttributes;
 use librespot_metadata::playlist::item::PlaylistItem as SessionRow;
@@ -109,6 +109,43 @@ fn related_artist_headers(body: &serde_json::Value) -> Result<Vec<Artist>, Failu
         )));
     }
     Ok(found)
+}
+
+/// An artist's popular songs in the playback account's country, in
+/// Spotify's own order, read over the session instead of the Web API.
+pub async fn artist_top_tracks(session: &Session, id: &str) -> Result<Vec<Track>, Failure> {
+    use librespot_metadata::Metadata as _;
+    let uri = SpotifyUri::Artist {
+        id: SpotifyId::from_base62(id)?,
+    };
+    let artist = SessionArtist::get(session, &uri).await?;
+    let uris = artist_top_track_uris(&artist.top_tracks, &session.country()).ok_or_else(|| {
+        Failure::Retry(anyhow::anyhow!("artist metadata has no popular songs for this country"))
+    })?;
+    let found = metadata(session, uris.iter()).await?;
+    let tracks: Vec<Track> = uris
+        .iter()
+        .map(|uri| uri.to_uri())
+        .filter_map(|uri| match found.get(&uri) {
+            Some(PlayableItem::Track(track)) => Some(track.clone()),
+            _ => None,
+        })
+        .collect();
+    if tracks.is_empty() && !uris.is_empty() {
+        return Err(Failure::Retry(anyhow::anyhow!(
+            "no popular song details came from the session"
+        )));
+    }
+    Ok(tracks)
+}
+
+/// The country's ranking, or the worldwide one, first ten songs.
+fn artist_top_track_uris(top_tracks: &CountryTopTracks, country: &str) -> Option<Vec<SpotifyUri>> {
+    top_tracks
+        .iter()
+        .find(|top| top.country == country)
+        .or_else(|| top_tracks.iter().find(|top| top.country == "ZZ"))
+        .map(|top| top.tracks.iter().take(10).cloned().collect())
 }
 
 /// Why the session could not answer a read.

@@ -4367,7 +4367,7 @@ fn operation_for(api: &ApiGateway, request: &ApiRequest) -> Operation {
             Operation::PlaylistMutation(api.playlist_access(playlist_id))
         }
         ApiRequest::Recommendations { .. } => Operation::CatalogSearch,
-        ApiRequest::ArtistTopTracks { .. } => Operation::UnsupportedDevelopmentMode,
+        ApiRequest::ArtistTopTracks { .. } => Operation::ArtistTopTracks,
         ApiRequest::RelatedArtists { .. } => Operation::RelatedArtists,
         ApiRequest::Artist { .. }
         | ApiRequest::ArtistAlbums { .. }
@@ -5945,6 +5945,9 @@ async fn over_session(
             SessionRead::RelatedArtists { id } => SessionAnswer::RelatedArtists(settle(
                 session_reads::related_artists(session, web?, id).await,
             )?),
+            SessionRead::ArtistTop { id } => SessionAnswer::ArtistTop(settle(
+                session_reads::artist_top_tracks(session, id).await,
+            )?),
             SessionRead::Header { id } => {
                 SessionAnswer::Header(settle(session_reads::playlist(session, id).await)?)
             }
@@ -5971,6 +5974,7 @@ async fn over_session(
 #[derive(Debug, PartialEq)]
 enum SessionRead<'a> {
     RelatedArtists { id: &'a str },
+    ArtistTop { id: &'a str },
     Header { id: &'a str },
     Rows { id: &'a str, offset: u32 },
     Sample { id: &'a str, offset: u32 },
@@ -5979,6 +5983,7 @@ enum SessionRead<'a> {
 fn session_read(request: &ApiRequest) -> Option<SessionRead<'_>> {
     Some(match request {
         ApiRequest::RelatedArtists { id } => SessionRead::RelatedArtists { id },
+        ApiRequest::ArtistTopTracks { id } => SessionRead::ArtistTop { id },
         ApiRequest::Playlist { id, .. } => SessionRead::Header { id },
         ApiRequest::PlaylistItems { id, offset, .. } => SessionRead::Rows {
             id,
@@ -5996,6 +6001,7 @@ fn session_read(request: &ApiRequest) -> Option<SessionRead<'_>> {
 /// of its rows.
 enum SessionAnswer {
     RelatedArtists(ApiResult<Vec<Artist>>),
+    ArtistTop(ApiResult<Vec<Track>>),
     Header(ApiResult<Playlist>),
     Rows(ApiResult<Page<PlaylistItem>>),
 }
@@ -6006,6 +6012,12 @@ fn session_response(request: &ApiRequest, answer: SessionAnswer) -> Option<ApiRe
     Some(match (request, answer) {
         (ApiRequest::RelatedArtists { id }, SessionAnswer::RelatedArtists(result)) => {
             ApiResponse::RelatedArtists {
+                id: id.clone(),
+                result,
+            }
+        }
+        (ApiRequest::ArtistTopTracks { id }, SessionAnswer::ArtistTop(result)) => {
+            ApiResponse::ArtistTopTracks {
                 id: id.clone(),
                 result,
             }
