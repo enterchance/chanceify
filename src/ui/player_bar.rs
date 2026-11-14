@@ -6719,6 +6719,75 @@ pub(super) fn popout_presets(app: &mut App, ui: &mut egui::Ui, rect: Rect, prese
     eq_window(app, ui.ctx());
 }
 
+/// The loudness ceilings offered on the readout's right-click.
+const LOUDNESS_LIMITS: [u8; 4] = [70, 75, 80, 85];
+
+/// How loud the music is, in dB, as a small line under the volume: the
+/// output's level plus what full volume measures on the reader's
+/// headphones. Right-click it for a ceiling the music is held under.
+/// Shows nothing while this computer is not playing.
+fn loudness_readout(app: &mut App, ui: &mut egui::Ui, volume: Rect) {
+    let palette = app.palette;
+    let full = f64::from(app.settings.loudness_full);
+    crate::vis::loudness::set_cap(
+        app.settings
+            .loudness_limit
+            .map(|limit| (f64::from(limit) - full).min(0.0)),
+    );
+    let level = crate::vis::loudness::level().map(|dbfs| (dbfs + full).max(0.0));
+    let text = match (level, app.settings.loudness_limit) {
+        (Some(db), Some(limit)) => format!("{db:.0} dB · max {limit}"),
+        (Some(db), None) => format!("{db:.0} dB"),
+        (None, Some(limit)) => format!("max {limit} dB"),
+        (None, None) => String::new(),
+    };
+    if text.is_empty() {
+        return;
+    }
+    let k = app.settings.controls_scale_value().clamp(0.8, 1.6);
+    let font = theme::regular(10.5 * k);
+    let galley = ui.painter().layout_no_wrap(text, font, palette.secondary);
+    let at = pos2(volume.center().x - galley.size().x / 2.0, volume.bottom() + 1.0);
+    let rect = Rect::from_min_size(at, galley.size());
+    let painter = ui.painter().clone().with_clip_rect(ui.ctx().content_rect());
+    painter.galley(at, galley, palette.secondary);
+    // Keeps the reading current while the music plays.
+    if level.is_some() {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+    }
+    let response = ui.interact(rect.expand(3.0), egui::Id::new("loudness-readout"), Sense::click());
+    egui::Popup::context_menu(&response)
+        .frame(super::widgets::menu_frame(&palette))
+        .show(|ui| {
+            ui.set_width(190.0);
+            theme::subtle(ui, &palette, "limit loudness");
+            for limit in LOUDNESS_LIMITS {
+                let on = app.settings.loudness_limit == Some(limit);
+                let label = if on { format!("✓ {limit} dB") } else { format!("{limit} dB") };
+                if super::widgets::menu_item(ui, &palette, None, &label) {
+                    app.settings.loudness_limit = Some(limit);
+                    app.mark_settings_dirty();
+                    ui.close();
+                }
+            }
+            if app.settings.loudness_limit.is_some() && super::widgets::menu_item(ui, &palette, None, "no limit") {
+                app.settings.loudness_limit = None;
+                app.mark_settings_dirty();
+                ui.close();
+            }
+            theme::subtle(ui, &palette, "full volume measures");
+            let mut full = app.settings.loudness_full;
+            if ui
+                .add(egui::Slider::new(&mut full, 85..=120).suffix(" dB"))
+                .changed()
+            {
+                app.settings.loudness_full = full;
+                app.mark_settings_dirty();
+            }
+        });
+    response.on_hover_text("Estimated loudness. Right-click to limit it.");
+}
+
 fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, presets: &[u8]) {
     let palette = app.palette;
     ui.spacing_mut().item_spacing.x = 6.0;
@@ -6781,6 +6850,7 @@ fn extras(app: &mut App, ui: &mut egui::Ui, now: Option<&NowPlaying>, presets: &
             app.actions.push(Action::SetVolume(percent));
         }
     });
+    loudness_readout(app, ui, controls.response.rect);
     if adjustable && let Some(next) = wheel_volume(ui, controls.response.rect, shown) {
         app.volume_preview = None;
         app.actions.push(Action::SetVolume(next));

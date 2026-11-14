@@ -192,6 +192,95 @@ impl AudioTap {
     }
 }
 
+/// How loud the music leaves this computer, and the ceiling the reader put
+/// on it, shared between the audio thread and the window as plain numbers.
+pub mod loudness {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Instant;
+
+    /// The output's level, RMS in decibels below full scale, after the
+    /// volume and the ceiling.
+    static LEVEL: AtomicU64 = AtomicU64::new(0);
+    /// When the level was last measured, in milliseconds since `START`.
+    static MEASURED: AtomicU64 = AtomicU64::new(0);
+    /// The ceiling in decibels below full scale; above zero means none.
+    static CAP: AtomicU64 = AtomicU64::new(0x4059_0000_0000_0000); // 100.0
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+    fn now_ms() -> u64 {
+        START.get_or_init(Instant::now).elapsed().as_millis() as u64 + 1
+    }
+
+    pub(super) fn report(level_dbfs: f64) {
+        LEVEL.store(level_dbfs.to_bits(), Ordering::Relaxed);
+        MEASURED.store(now_ms(), Ordering::Relaxed);
+    }
+
+    pub(super) fn cap() -> Option<f64> {
+        let cap = f64::from_bits(CAP.load(Ordering::Relaxed));
+        (cap <= 0.0).then_some(cap)
+    }
+
+    /// Sets the ceiling, as decibels below full scale, or lifts it.
+    pub fn set_cap(dbfs: Option<f64>) {
+        CAP.store(dbfs.unwrap_or(100.0).to_bits(), Ordering::Relaxed);
+    }
+
+    /// The level now, or `None` when nothing has played for a moment.
+    pub fn level() -> Option<f64> {
+        let measured = MEASURED.load(Ordering::Relaxed);
+        (measured != 0 && now_ms().saturating_sub(measured) < 600)
+            .then(|| f64::from_bits(LEVEL.load(Ordering::Relaxed)))
+    }
+}
+
+/// Holds the output under the reader's loudness ceiling: measures the
+/// level over about a third of a second and turns it down when it goes
+/// over, quickly, then lets it back up slowly so quiet parts do not pump.
+struct LoudnessCap {
+    mean_square: f64,
+    gain_db: f64,
+}
+
+impl LoudnessCap {
+    fn new() -> Self {
+        Self { mean_square: 0.0, gain_db: 0.0 }
+    }
+
+    /// `scale` is what the samples are multiplied by after this stage, so
+    /// the level measured is the level heard.
+    fn process(&mut self, samples: &mut [f64], scale: f64) {
+        let frames = samples.len() / NUM_CHANNELS as usize;
+        if frames == 0 {
+            return;
+        }
+        let seconds = frames as f64 / f64::from(SAMPLE_RATE);
+        let square: f64 = samples.iter().map(|s| s * s).sum::<f64>() / samples.len() as f64
+            * scale
+            * scale;
+        let blend = 1.0 - (-seconds / 0.3).exp();
+        self.mean_square += (square - self.mean_square) * blend;
+        let level = 10.0 * self.mean_square.max(1e-12).log10();
+        let wanted = match loudness::cap() {
+            Some(cap) => (cap - level).min(0.0),
+            None => 0.0,
+        };
+        let time = if wanted < self.gain_db { 0.05 } else { 1.5 };
+        let start = self.gain_db;
+        self.gain_db += (wanted - self.gain_db) * (1.0 - (-seconds / time).exp());
+        if start.abs() > 0.01 || self.gain_db.abs() > 0.01 {
+            let step = (self.gain_db - start) / frames as f64;
+            for (frame, chunk) in samples.chunks_mut(NUM_CHANNELS as usize).enumerate() {
+                let gain = 10f64.powf((start + step * frame as f64) / 20.0);
+                for sample in chunk {
+                    *sample *= gain;
+                }
+            }
+        }
+        loudness::report(level + self.gain_db);
+    }
+}
+
 /// Runs the equalizer and taps the signal before passing it to the real sink.
 pub struct Tapped {
     inner: Box<dyn Sink>,
@@ -211,6 +300,8 @@ pub struct Tapped {
     applies_volume: bool,
     /// Final limiter, placed here because this stage knows the output volume.
     limiter: crate::limiter::Limiter,
+    /// Keeps the output under the reader's loudness ceiling.
+    loudness: LoudnessCap,
     /// Track normalization factor. The tap removes it so visualizers show the
     /// source dynamics, as Winamp's analyser did.
     normalisation: Arc<std::sync::atomic::AtomicU64>,
@@ -237,6 +328,7 @@ impl Tapped {
             volume,
             applies_volume,
             limiter: crate::limiter::Limiter::new(f64::from(SAMPLE_RATE)),
+            loudness: LoudnessCap::new(),
             normalisation,
         }
     }
@@ -317,6 +409,8 @@ impl Sink for Tapped {
                 if let Some(full_scale) = full_scale(attenuation, self.applies_volume) {
                     self.limiter.process(&mut samples, full_scale);
                 }
+                let heard = if self.applies_volume { 1.0 } else { attenuation };
+                self.loudness.process(&mut samples, heard);
                 AudioPacket::Samples(samples)
             }
             raw => raw,

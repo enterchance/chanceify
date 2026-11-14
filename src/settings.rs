@@ -1143,6 +1143,11 @@ pub struct Settings {
     pub float_card_side: Option<f32>,
     /// The volume is labelled in decibels instead of percent.
     pub volume_db: bool,
+    /// The loudest the music may play, in dB, estimated; `None` is no limit.
+    pub loudness_limit: Option<u8>,
+    /// What full volume measures in dB on the reader's headphones, which
+    /// turns the output's level into an estimate of how loud it is.
+    pub loudness_full: u8,
     /// Where the controls panel sits while the album art is big, and in full-screen lyrics.
     pub float_hide_bar: bool,
     /// The pop-out controls live in a window of their own, off the app.
@@ -1653,6 +1658,8 @@ impl Default for Settings {
             float_controls: None,
             float_card_side: None,
             volume_db: false,
+            loudness_limit: None,
+            loudness_full: 100,
             float_hide_bar: false,
             views_width: 316.0,
             views_height: 0.0,
