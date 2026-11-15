@@ -4653,24 +4653,60 @@ pub fn card(
 /// under `id`, an up/down wheel turn moves it left/right while it has room
 /// that way, and the page scrolls as usual once it reaches an end. Call
 /// before showing the row, and [`note_sideways`] after.
+///
+/// A wheel gesture belongs to whatever it started on: a page scroll that
+/// carries the pointer onto a row keeps scrolling the page, so scrolling
+/// up or down past a row never gets caught by it. A pause in the wheel
+/// ends the gesture.
 pub(crate) fn wheel_sideways(ui: &Ui, id: egui::Id) {
+    /// How long the wheel may rest before the next turn starts afresh.
+    const GESTURE_GAP: f64 = 0.35;
+    let owner_id = egui::Id::new("wheel-gesture-owner");
+    let (delta, now) = ui.input(|input| (input.smooth_scroll_delta, input.time));
+    if delta.y == 0.0 || delta.x != 0.0 {
+        return;
+    }
+    // (who has the gesture, the frame it was last looked at, when the wheel
+    // last moved, whether the gesture began that frame). Several rows call
+    // this each frame; any of them may claim a gesture that just began.
+    let (owner, frame, last, fresh) = ui
+        .ctx()
+        .data(|data| data.get_temp::<(Option<egui::Id>, u64, f64, bool)>(owner_id))
+        .unwrap_or((None, 0, f64::NEG_INFINITY, false));
+    let this_frame = ui.ctx().cumulative_pass_nr();
+    let fresh = if frame == this_frame { fresh } else { now - last >= GESTURE_GAP };
+    let mut owner = if frame == this_frame || !fresh { owner } else { None };
+    if fresh && owner.is_none() {
+        // A new gesture belongs to the row under the pointer, if that row
+        // can move the way the wheel turned; otherwise to the page.
+        let claims = ui
+            .ctx()
+            .data(|data| data.get_temp::<(Rect, f32, f32)>(id))
+            .is_some_and(|(rect, offset, max)| {
+                max > 0.5
+                    && ui.rect_contains_pointer(rect)
+                    && if delta.y < 0.0 { offset < max - 0.5 } else { offset > 0.5 }
+            });
+        if claims {
+            owner = Some(id);
+        }
+    }
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(owner_id, (owner, this_frame, now, fresh)));
+    if owner != Some(id) {
+        return;
+    }
     let Some((rect, offset, max)) = ui.ctx().data(|data| data.get_temp::<(Rect, f32, f32)>(id)) else {
         return;
     };
-    if max <= 0.5 || !ui.rect_contains_pointer(rect) {
+    if !ui.rect_contains_pointer(rect) {
         return;
     }
-    ui.ctx().input_mut(|input| {
-        let delta = input.smooth_scroll_delta;
-        if delta.y == 0.0 || delta.x != 0.0 {
-            return;
-        }
-        // Wheel down (negative) moves the row on to the right.
-        let room = if delta.y < 0.0 { offset < max - 0.5 } else { offset > 0.5 };
-        if room {
-            input.smooth_scroll_delta = vec2(delta.y, 0.0);
-        }
-    });
+    // Wheel down (negative) moves the row on to the right.
+    let room = if delta.y < 0.0 { offset < max - 0.5 } else { offset > 0.5 };
+    if room {
+        ui.ctx().input_mut(|input| input.smooth_scroll_delta = vec2(delta.y, 0.0));
+    }
 }
 
 /// Remembers where a sideways row is and how far it can scroll, for
