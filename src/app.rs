@@ -13730,7 +13730,7 @@ impl App {
             }
             Action::CheckNewReleases(scope) => {
                 if scope.is_some() {
-                    self.settings.home.tab = 0;
+                    self.settings.home.tab = 3;
                     self.mark_settings_dirty();
                     self.actions.push(Action::Open(Page::Home));
                 }

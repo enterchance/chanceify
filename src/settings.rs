@@ -388,7 +388,7 @@ impl Default for HomeShelfSettings {
 pub struct HomeSettings {
     pub made_for_you: HomeShelfSettings,
     pub recommendations: HomeShelfSettings,
-    /// Which tab of Home is open: 0 For you, 1 Your music and stats.
+    /// Which tab of Home is open: 0 For you, 1 Music stats, 2 Friends, 3 New releases.
     pub tab: u8,
     /// The period of the stats tab, for top artists and songs alike: 0 last
     /// 30 days, 1 last 7 days, 2 all time. Older files kept one per list;

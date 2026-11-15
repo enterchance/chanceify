@@ -21,33 +21,35 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     theme::text(ui, greeting.as_ref(), theme::bold(theme::TITLE_TEXT), palette.text);
     theme::text(ui, crate::util::welcome_line(), theme::regular(theme::BODY_TEXT), palette.secondary);
     ui.add_space(10.0);
-    let tab = app.settings.home.tab.min(2);
+    // The saved numbers stay as they were (0 For you, 1 Music stats,
+    // 2 Friends); New releases joined later as 3.
+    let tab = app.settings.home.tab.min(3);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        for (index, label) in ["For you", "Music stats", "Friends"].into_iter().enumerate() {
-            if theme::pill_button(ui, &palette, &gettext(app.locale, label), tab as usize == index)
+        for (index, label) in [(0, "For you"), (3, "New releases"), (1, "Music stats"), (2, "Friends")] {
+            if theme::pill_button(ui, &palette, &gettext(app.locale, label), tab == index)
                 .clicked()
-                && tab as usize != index
+                && tab != index
             {
-                app.settings.home.tab = index as u8;
+                app.settings.home.tab = index;
                 app.mark_settings_dirty();
             }
         }
     });
     ui.add_space(14.0);
-    if tab == 0 {
-        if app.settings.home.made_for_you.visible {
-            made_for_you(app, ui);
+    match tab {
+        0 => {
+            if app.settings.home.made_for_you.visible {
+                made_for_you(app, ui);
+            }
+            if app.settings.home.recommendations.visible {
+                recommendations(app, ui);
+            }
+            podcasts(app, ui);
         }
-        new_releases(app, ui);
-        podcasts(app, ui);
-        if app.settings.home.recommendations.visible {
-            recommendations(app, ui);
-        }
-    } else if tab == 1 {
-        stats_section(app, ui);
-    } else {
-        super::queue::friends_contents(app, ui);
+        3 => new_releases(app, ui),
+        1 => stats_section(app, ui),
+        _ => super::queue::friends_contents(app, ui),
     }
 }
 
@@ -147,7 +149,7 @@ fn new_releases(app: &mut App, ui: &mut egui::Ui) {
     }
     ui.add_space(4.0);
     // The newest first, as far back as the check goes (about three months),
-    // or under each artist's name. It scrolls inside its own box.
+    // or under each artist's name.
     let mut shown: Vec<&Release> = releases.iter().collect();
     shown.sort_by(|a, b| b.date.cmp(&a.date));
     let groups = if app.settings.home.releases_by_artist {
@@ -156,11 +158,9 @@ fn new_releases(app: &mut App, ui: &mut egui::Ui) {
         vec![(String::new(), shown)]
     };
     let grid = app.settings.home.releases_grid;
-    egui::ScrollArea::vertical()
-        .id_salt("new-releases-list")
-        .max_height(if grid { 560.0 } else { 440.0 })
-        .auto_shrink([false, true])
-        .show(ui, |ui| {
+    // On a tab of its own, so the page itself scrolls through the list:
+    // no box inside the page to catch the wheel.
+    ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
             let mut index = 0;
             if grid && app.settings.home.releases_by_artist {
@@ -999,10 +999,10 @@ fn made_for_you(app: &mut App, ui: &mut egui::Ui) {
     if playlists.is_empty() && !loading && !failed {
         return;
     }
-    widgets::wheel_shelf(
+    // Every playlist at once, wrapping onto more rows: nothing to scroll.
+    widgets::grid_shelf(
         ui,
         &palette,
-        "made-for-you",
         &gettext(app.locale, "Made for you"),
         |ui| {
             if playlists.is_empty() && loading {
