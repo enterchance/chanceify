@@ -2226,12 +2226,49 @@ fn song_results(app: &mut App, ui: &mut egui::Ui, found: &crate::song_index::Res
     ui.add_space(8.0);
 }
 
-/// What a song's second line says about where it lives: the first two
-/// places by name, and how many more.
+/// The playlists, and Liked Songs, a found song is in, as icons: id, name,
+/// cover and the letter shown when there is no cover.
+fn song_place_icons(app: &App, hit: &crate::song_index::Hit) -> Vec<(String, String, Option<String>, char)> {
+    use crate::song_index::Place;
+    let memberships = app.library.membership.get(&hit.song.uri);
+    hit.places
+        .iter()
+        .filter_map(|place| match place {
+            Place::LikedSongs => Some((
+                super::widgets::LIKED_ICON_ID.to_owned(),
+                gettext(app.locale, "Liked Songs").into_owned(),
+                None,
+                '\u{2665}',
+            )),
+            Place::Playlist { id, name } => {
+                let known = memberships.iter().find(|membership| &membership.id == id);
+                let image = known.and_then(|membership| membership.image.clone()).or_else(|| {
+                    app.library.playlists.get().and_then(|list| {
+                        list.iter()
+                            .find(|playlist| &playlist.id == id)
+                            .and_then(|playlist| pick_image(&playlist.images, 64).map(str::to_owned))
+                    })
+                });
+                let initial = name
+                    .chars()
+                    .find(|character| character.is_alphanumeric())
+                    .and_then(|character| character.to_uppercase().next())
+                    .unwrap_or('?');
+                Some((id.clone(), name.clone(), image, initial))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// What a song's second line says about where it lives besides its
+/// playlists, which show as icons: its albums and this computer, by name.
 fn song_places_line(locale: Locale, hit: &crate::song_index::Hit) -> String {
+    use crate::song_index::Place;
     let names: Vec<String> = hit
         .places
         .iter()
+        .filter(|place| !matches!(place, Place::Playlist { .. } | Place::LikedSongs))
         .map(|place| song_place_name(locale, place))
         .collect();
     let mut line = names.iter().take(2).cloned().collect::<Vec<_>>().join(", ");
@@ -2342,6 +2379,8 @@ fn song_row(app: &mut App, ui: &mut egui::Ui, hit: &crate::song_index::Hit, play
             theme::medium(14.0),
             if is_playing { palette.accent } else { palette.text },
         );
+        // Playlists and Liked Songs show as their little covers after the
+        // artists; albums and this computer's files stay as words.
         let artists = hit.song.artist_line();
         let places = song_places_line(locale, hit);
         let detail = match (artists.is_empty(), places.is_empty()) {
@@ -2350,7 +2389,7 @@ fn song_row(app: &mut App, ui: &mut egui::Ui, hit: &crate::song_index::Hit, play
             (false, true) => artists,
             (true, true) => String::new(),
         };
-        crate::bidi::paint_line(
+        let line = crate::bidi::paint_line(
             &painter,
             text_left,
             text_right,
@@ -2359,6 +2398,20 @@ fn song_row(app: &mut App, ui: &mut egui::Ui, hit: &crate::song_index::Hit, play
             theme::regular(theme::SMALL_TEXT),
             palette.secondary,
         );
+        let icons = song_place_icons(app, hit);
+        if !icons.is_empty() {
+            let start = if detail.is_empty() { text_left } else { line.right() + 6.0 };
+            super::widgets::place_icons(
+                ui,
+                app,
+                ("library-song-places", &hit.song.uri, hit.local_path()),
+                start,
+                rect.center().y + 10.0,
+                text_right,
+                14.0,
+                icons,
+            );
+        }
     }
     theme::focus_ring(ui, &response);
     let first = hit.places.first().cloned();

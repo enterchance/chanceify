@@ -67,7 +67,7 @@ fn membership_metrics(scale: f32) -> (f32, f32) {
 /// icons drawn can never disagree.
 /// Stands in for a playlist id in the icons: Liked Songs is a playlist to the
 /// listener, so a liked song shows its tile like any other.
-const LIKED_ICON_ID: &str = "\u{0}liked";
+pub(crate) const LIKED_ICON_ID: &str = "\u{0}liked";
 
 /// Whether the row sits on the Liked Songs page, where the tile would say
 /// nothing.
@@ -276,6 +276,43 @@ fn membership_icons(ui: &Ui, app: &mut App, rect: Rect, right: f32, row: &TrackR
         );
         let response = ui.interact(chip, ui.id().with("membership-more"), Sense::hover());
         response.on_hover_text(format!("{} more playlists", total - drawn));
+    }
+}
+
+/// A row of playlist icons running rightwards from `left`, as many as fit
+/// before `right`, then a "+n" for the rest. For lines outside the song
+/// tables, such as the library search's results. `salt` keeps one line's
+/// icons apart from another's.
+pub(crate) fn place_icons(
+    ui: &Ui,
+    app: &mut App,
+    salt: impl std::hash::Hash,
+    left: f32,
+    center_y: f32,
+    right: f32,
+    height: f32,
+    places: Vec<(String, String, Option<String>, char)>,
+) {
+    let gap = (height * 0.25).round();
+    let art = app.backend.art().clone();
+    let total = places.len();
+    let fits = (((right - left) + gap) / (height + gap)).floor().max(0.0) as usize;
+    let drawn = if total > fits { fits.saturating_sub(1) } else { total };
+    let mut cursor = left;
+    let ui = &ui.new_child(egui::UiBuilder::new().id_salt(salt));
+    for (id, name, image, initial) in places.into_iter().take(drawn) {
+        let icon = Rect::from_min_size(pos2(cursor, center_y - height / 2.0), Vec2::splat(height));
+        paint_membership_icon(ui, app, icon, height, id, name, image, initial, &art);
+        cursor += height + gap;
+    }
+    if total > drawn && fits > 0 {
+        ui.painter().text(
+            pos2(cursor, center_y),
+            egui::Align2::LEFT_CENTER,
+            format!("+{}", total - drawn),
+            theme::semibold(height * 0.8),
+            app.palette.secondary,
+        );
     }
 }
 
