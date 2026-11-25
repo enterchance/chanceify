@@ -836,6 +836,33 @@ impl ApiClient {
         Ok(())
     }
 
+    /// Turns shuffle on, then starts `request`. Shuffle applies to what is
+    /// playing now, and a context that forbids it, as autoplay's does, gets
+    /// a 403 "Restriction violated" until something replaces it: then the
+    /// start goes first, and shuffle follows on the new one.
+    pub async fn shuffle_play(&self, device_id: Option<&str>, request: &PlayRequest) -> Result<()> {
+        match self.set_shuffle(true, device_id).await {
+            Err(ApiError::Status {
+                status: 403,
+                message,
+            }) if message
+                .to_ascii_lowercase()
+                .contains("restriction violated") =>
+            {
+                self.play(device_id, Some(request)).await?;
+                // Playing is what was asked; an unshuffled start beats none.
+                if let Err(error) = self.set_shuffle(true, device_id).await {
+                    log::warn!("Shuffle after starting failed: {error}");
+                }
+                Ok(())
+            }
+            shuffled => {
+                shuffled?;
+                self.play(device_id, Some(request)).await
+            }
+        }
+    }
+
     pub async fn set_shuffle(&self, state: bool, device_id: Option<&str>) -> Result<()> {
         let mut query = Self::device_query(device_id);
         query.push(("state", state.to_string()));

@@ -1290,15 +1290,22 @@ impl App {
             devices_loading: false,
             devices_fetched_at: None,
             selected_device: None,
-            queue: if session.last_track.is_some() && !session.last_queue_rows.is_empty() {
-                // The queue as it was at close, shown until something
-                // plays; then the live queue takes over.
-                Loadable::Loaded(Queue {
-                    currently_playing: None,
-                    queue: session.last_queue_rows.clone(),
-                })
-            } else {
-                Loadable::NotLoaded
+            queue: match &session.last_track {
+                Some(current) if !session.last_queue_rows.is_empty() => {
+                    // The queue as it was at close, shown until something
+                    // plays; then the live queue takes over. One saved by
+                    // an earlier version may still hold Spotify's padding.
+                    let mut rows = session.last_queue_rows.clone();
+                    if RepeatMode::from_api(&session.repeat) == RepeatMode::Off {
+                        let queued = Self::end_of_queued_rows(&rows, &session.last_added_queue);
+                        Self::drop_wraparound(&mut rows, queued, current);
+                    }
+                    Loadable::Loaded(Queue {
+                        currently_playing: None,
+                        queue: rows,
+                    })
+                }
+                _ => Loadable::NotLoaded,
             },
             queue_fetched_at: None,
             queue_seq: 0,
@@ -6768,26 +6775,36 @@ impl App {
             self.play_request(PlayRequest::tracks(uris).starting_at_index(index), false);
             return;
         }
-        let mut skips = index + 1;
-        let mut consumed: Vec<String> = Vec::new();
-        if let Loadable::Loaded(queue) = &mut self.queue {
-            // The click names a song; if the rows shifted under the
-            // pointer, the song wins over the row number.
-            let position = match queue.queue.get(index) {
-                Some(item) if item.uri() == uri => Some(index),
-                _ => queue.queue.iter().position(|item| item.uri() == uri),
-            };
-            let Some(position) = position else {
-                self.refresh_queue(true);
-                return;
-            };
-            skips = position + 1;
-            let mut items: Vec<_> = queue.queue.drain(..=position).collect();
-            let chosen = items.pop().expect("the chosen row was just drained");
-            consumed = items.iter().map(|item| item.uri().to_string()).collect();
-            consumed.push(chosen.uri().to_string());
-            queue.currently_playing = Some(chosen);
+        let local = matches!(self.target(), Target::Local);
+        let current = self.current_track_uri();
+        let Loadable::Loaded(queue) = &mut self.queue else {
+            self.refresh_queue(true);
+            return;
+        };
+        // The engine drops rows by their place in its own queue, so the
+        // shown rows must start at the song it is playing. A restored or
+        // stale queue does not: fetch the live one instead of guessing.
+        if local && current.as_deref() != queue.currently_playing.as_ref().map(PlayableItem::uri) {
+            self.refresh_queue(true);
+            return;
         }
+        // The click names a song; if the rows shifted under the pointer,
+        // the song wins over the row number.
+        let position = match queue.queue.get(index) {
+            Some(item) if item.uri() == uri => Some(index),
+            _ => queue.queue.iter().position(|item| item.uri() == uri),
+        };
+        let Some(position) = position else {
+            self.refresh_queue(true);
+            return;
+        };
+        let skips = position + 1;
+        let mut items: Vec<_> = queue.queue.drain(..=position).collect();
+        let chosen = items.pop().expect("the chosen row was just drained");
+        let skipped: Vec<String> = items.iter().map(|item| item.uri().to_string()).collect();
+        let mut consumed = skipped.clone();
+        consumed.push(chosen.uri().to_string());
+        queue.currently_playing = Some(chosen);
         for gone in &consumed {
             if let Some(at) = self.manual_queue.iter().position(|queued| queued == gone) {
                 self.remove_manual_queue_row(at);
@@ -6799,9 +6816,15 @@ impl App {
         self.optimistic_playing = Some((true, Instant::now()));
         match self.target() {
             Target::Local => {
-                for _ in 0..skips {
-                    self.backend.player(PlayerCommand::Next);
+                // Every Next loads and starts the next song, so a skip per
+                // row played each song in between. The engine drops the
+                // rows above the chosen one from its own queue instead, and
+                // one skip starts the chosen song.
+                for uri in skipped {
+                    self.backend
+                        .player(PlayerCommand::RemoveNextTrack { index: 0, uri });
                 }
+                self.backend.player(PlayerCommand::Next);
             }
             Target::Remote(device_id) => {
                 // With nothing to act on, one call earns the "pick
@@ -6820,15 +6843,21 @@ impl App {
     /// How many leading rows of Next up are songs the user queued here,
     /// so the view can give them their own section.
     pub fn queued_rows_len(&self) -> usize {
-        // Before resume, use the saved manual queue to split restored rows.
-        let manual = if self.manual_queue.is_empty() && self.resume_only() {
+        match &self.queue {
+            Loadable::Loaded(queue) => {
+                Self::end_of_queued_rows(&queue.queue, self.queued_by_hand())
+            }
+            _ => 0,
+        }
+    }
+
+    /// The songs the user queued here. Before resume, the saved manual
+    /// queue, which splits the restored rows.
+    fn queued_by_hand(&self) -> &[String] {
+        if self.manual_queue.is_empty() && self.resume_only() {
             &self.resume_queue
         } else {
             &self.manual_queue
-        };
-        match &self.queue {
-            Loadable::Loaded(queue) => Self::end_of_queued_rows(&queue.queue, manual),
-            _ => 0,
         }
     }
 
@@ -7743,10 +7772,13 @@ impl App {
                     Err(error) => log::debug!("playback state unavailable: {error}"),
                 }
             }
-            ApiResponse::Queue { seq, result } => {
+            ApiResponse::Queue { seq, mut result } => {
                 if seq != self.queue_seq {
                     // A newer request supersedes this response.
                     return;
+                }
+                if let Ok(fetched) = &mut result {
+                    self.drop_queue_padding(fetched);
                 }
                 // Partial reads and read failures must preserve optimistic
                 // additions while Spotify is still accepting their writes.
@@ -10871,6 +10903,8 @@ impl App {
     }
 
     fn set_repeat(&mut self, mode: RepeatMode) {
+        // Next up leaves Spotify's padding out only with Repeat off.
+        self.queue_recheck_at = Some(Instant::now() + QUEUE_RECHECK);
         if self.deck_control(|deck| deck.set_repeat(mode)) {
             return;
         }
@@ -11493,6 +11527,40 @@ impl App {
     }
 
     /// Queue row built from cached details or a temporary label.
+    /// Spotify pads a short queue out to a fixed length by going round it
+    /// again, back to the playing song and on, whatever the Repeat mode.
+    /// With Repeat off playback stops where the list ends, so a song
+    /// started on its own was listed ten times under Next up though it
+    /// plays once. Those rows go; songs queued by hand always stay.
+    fn drop_queue_padding(&self, fetched: &mut Queue) {
+        let repeat = self.now_playing().map(|now| now.repeat);
+        if repeat.unwrap_or(self.repeat_wanted) != RepeatMode::Off {
+            return;
+        }
+        let Some(current) = &fetched.currently_playing else {
+            return;
+        };
+        let queued = Self::end_of_queued_rows(&fetched.queue, self.queued_by_hand());
+        Self::drop_wraparound(&mut fetched.queue, queued, current.uri());
+    }
+
+    /// Drops the rows after the first `queued` from where they come back
+    /// round to `current`, the playing song, and repeat what came before.
+    /// The playing song and the row after it must both come round: one
+    /// late copy of the playing song may be the list's own.
+    fn drop_wraparound(rows: &mut Vec<PlayableItem>, queued: usize, current: &str) {
+        let queued = queued.min(rows.len());
+        let order: Vec<&str> = std::iter::once(current)
+            .chain(rows[queued..].iter().map(PlayableItem::uri))
+            .collect();
+        // From a wrap on, the list lines up with its own start.
+        let lines_up = |at: usize| order[at..] == order[..order.len() - at];
+        let wrap = (1..order.len().saturating_sub(1)).find(|&at| lines_up(at));
+        if let Some(at) = wrap {
+            rows.truncate(queued + at - 1);
+        }
+    }
+
     fn optimistic_queue_item(&self, uri: &str, label: &str) -> PlayableItem {
         let cached = util::uri_id(uri)
             .and_then(|id| self.track_cache.get(id))

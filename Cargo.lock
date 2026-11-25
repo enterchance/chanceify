@@ -834,7 +834,7 @@ dependencies = [
 
 [[package]]
 name = "chanceify"
-version = "0.9.128"
+version = "0.9.129"
 dependencies = [
  "aes 0.8.4",
  "anyhow",
@@ -3337,7 +3337,7 @@ dependencies = [
 [[package]]
 name = "librespot-audio"
 version = "0.8.0"
-source = "git+https://github.com/crmne/librespot?rev=23fc42cff37848e51f0d8eaefad1a93941b71e59#23fc42cff37848e51f0d8eaefad1a93941b71e59"
+source = "git+https://github.com/crmne/librespot?rev=8ba22cd44168155b490e56aba80875771f27b75c#8ba22cd44168155b490e56aba80875771f27b75c"
 dependencies = [
  "aes 0.8.4",
  "bytes",
@@ -3356,7 +3356,7 @@ dependencies = [
 [[package]]
 name = "librespot-connect"
 version = "0.8.0"
-source = "git+https://github.com/crmne/librespot?rev=23fc42cff37848e51f0d8eaefad1a93941b71e59#23fc42cff37848e51f0d8eaefad1a93941b71e59"
+source = "git+https://github.com/crmne/librespot?rev=8ba22cd44168155b490e56aba80875771f27b75c#8ba22cd44168155b490e56aba80875771f27b75c"
 dependencies = [
  "futures-util",
  "librespot-core",
@@ -3375,7 +3375,7 @@ dependencies = [
 [[package]]
 name = "librespot-core"
 version = "0.8.0"
-source = "git+https://github.com/crmne/librespot?rev=23fc42cff37848e51f0d8eaefad1a93941b71e59#23fc42cff37848e51f0d8eaefad1a93941b71e59"
+source = "git+https://github.com/crmne/librespot?rev=8ba22cd44168155b490e56aba80875771f27b75c#8ba22cd44168155b490e56aba80875771f27b75c"
 dependencies = [
  "aes 0.8.4",
  "base64",
@@ -3432,7 +3432,7 @@ dependencies = [
 [[package]]
 name = "librespot-metadata"
 version = "0.8.0"
-source = "git+https://github.com/crmne/librespot?rev=23fc42cff37848e51f0d8eaefad1a93941b71e59#23fc42cff37848e51f0d8eaefad1a93941b71e59"
+source = "git+https://github.com/crmne/librespot?rev=8ba22cd44168155b490e56aba80875771f27b75c#8ba22cd44168155b490e56aba80875771f27b75c"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3449,7 +3449,7 @@ dependencies = [
 [[package]]
 name = "librespot-oauth"
 version = "0.8.0"
-source = "git+https://github.com/crmne/librespot?rev=23fc42cff37848e51f0d8eaefad1a93941b71e59#23fc42cff37848e51f0d8eaefad1a93941b71e59"
+source = "git+https://github.com/crmne/librespot?rev=8ba22cd44168155b490e56aba80875771f27b75c#8ba22cd44168155b490e56aba80875771f27b75c"
 dependencies = [
  "log",
  "oauth2",
@@ -3462,7 +3462,7 @@ dependencies = [
 [[package]]
 name = "librespot-playback"
 version = "0.8.0"
-source = "git+https://github.com/crmne/librespot?rev=23fc42cff37848e51f0d8eaefad1a93941b71e59#23fc42cff37848e51f0d8eaefad1a93941b71e59"
+source = "git+https://github.com/crmne/librespot?rev=8ba22cd44168155b490e56aba80875771f27b75c#8ba22cd44168155b490e56aba80875771f27b75c"
 dependencies = [
  "cpal",
  "form_urlencoded",
@@ -3487,7 +3487,7 @@ dependencies = [
 [[package]]
 name = "librespot-protocol"
 version = "0.8.0"
-source = "git+https://github.com/crmne/librespot?rev=23fc42cff37848e51f0d8eaefad1a93941b71e59#23fc42cff37848e51f0d8eaefad1a93941b71e59"
+source = "git+https://github.com/crmne/librespot?rev=8ba22cd44168155b490e56aba80875771f27b75c#8ba22cd44168155b490e56aba80875771f27b75c"
 dependencies = [
  "protobuf",
  "protobuf-codegen",
