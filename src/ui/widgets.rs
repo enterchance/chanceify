@@ -284,7 +284,7 @@ fn membership_icons(ui: &Ui, app: &mut App, rect: Rect, right: f32, row: &TrackR
 /// tables, such as the library search's results. `salt` keeps one line's
 /// icons apart from another's.
 pub(crate) fn place_icons(
-    ui: &Ui,
+    ui: &mut Ui,
     app: &mut App,
     salt: impl std::hash::Hash + std::fmt::Debug,
     left: f32,
