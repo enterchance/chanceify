@@ -299,7 +299,7 @@ pub(crate) fn place_icons(
     let fits = (((right - left) + gap) / (height + gap)).floor().max(0.0) as usize;
     let drawn = if total > fits { fits.saturating_sub(1) } else { total };
     let mut cursor = left;
-    let ui = &ui.new_child(egui::UiBuilder::new().id_salt(salt));
+    let ui = &ui.new_child(egui::UiBuilder::new().id_salt(egui::Id::new(salt)));
     for (id, name, image, initial) in places.into_iter().take(drawn) {
         let icon = Rect::from_min_size(pos2(cursor, center_y - height / 2.0), Vec2::splat(height));
         paint_membership_icon(ui, app, icon, height, id, name, image, initial, &art);
